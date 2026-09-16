@@ -39,7 +39,12 @@ export function replay(pkg: WorkflowPackage, input: ReplayFixture): ReplayResult
     const definition = actionRegistry[action.uses]!;
     const facts = currentFacts(workflow, observation, fixture.now);
     const memory = currentMemory(control, observation);
-    if (definition.requires && (!inputs.has('candidate') || inputs.get(definition.requires) !== inputs.get('candidate'))) return stop('blocked', `${actionId} requires a successful ${definition.requires} result in this action chain.`);
+    if (definition.requires) {
+      const analysis = definition.requires === 'review' || definition.requires === 'classification';
+      const expected = analysis ? `${observation.headSha}:${observation.baseSha}` : inputs.get('candidate');
+      if (!expected || inputs.get(definition.requires) !== expected) return stop('blocked', `${actionId} requires a successful ${definition.requires} result in this action chain.`);
+    }
+    if (action.uses === 'github.set_labels' && control.classification?.uncertain !== false) return stop('blocked', 'Uncertain classification cannot publish labels. Its evidence remains local.');
     const scheduling = controlDecision(workflow, action.uses, observation, control, fixture.now);
     if (scheduling) {
       if (scheduling.refreshAttempts !== undefined) control.refreshAttempts = scheduling.refreshAttempts;
@@ -111,8 +116,9 @@ export function replay(pkg: WorkflowPackage, input: ReplayFixture): ReplayResult
     if (!success) failureReason ??= stub.reason ?? `${actionId} failed.`;
     result.actions.push({ actionId, uses: action.uses, status: success ? 'success' : 'failure', reason: success ? 'Used the supplied successful result.' : failureReason! });
     if (success && definition.produces) {
-      const candidateSha = definition.produces === 'candidate' ? (stub.payload as { candidateSha: string }).candidateSha : inputs.get('candidate')!;
-      inputs.set(definition.produces, candidateSha);
+      const revision = definition.produces === 'review' || definition.produces === 'classification' ? `${observation.headSha}:${observation.baseSha}` :
+        definition.produces === 'candidate' ? (stub.payload as { candidateSha: string }).candidateSha : inputs.get('candidate')!;
+      inputs.set(definition.produces, revision);
     }
     const next = success ? action.onSuccess : action.onFailure;
     if (next === '$wait') return stop('waiting', failureReason ?? 'The action chain is waiting for an external signal.');

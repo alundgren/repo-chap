@@ -169,3 +169,17 @@ the first request may still finish. Read-only reconciliation can confirm a
 resolved thread after a crash. A later reopened concern stays visible beside
 its historical receipt. Failed resolution retains the tested repair, so another
 model call is not part of recovery. See [thread resolution](thread-resolution.md).
+
+## GitHub publication output
+
+Comment reviews lead with the reviewed commit, evidence coverage, and verdict.
+Missing evidence precedes the findings so an incomplete report cannot read as a
+clean review. Every finding keeps its explanation and immutable source links.
+An unmappable citation or oversized report blocks publication and keeps the
+complete local report, with a reason the operator can inspect.
+
+Classification publication preserves existing labels, including older categories
+and choices made by people. An empty classification is a visible no-op. Receipts
+distinguish remote acceptance from current-head status; an accepted stale review
+does not imply readiness for the new commit. These are GitHub text outputs and
+structured local records. There is no new desktop view or control.
