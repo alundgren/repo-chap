@@ -63,9 +63,15 @@ export class AuthoringTools {
   async apply(id: string, captured: DocumentToken): Promise<void> {
     const pending = this.pending.get(id);
     if (!pending || pending.source !== this.current()) throw new Error('This authoring request is no longer pending.');
-    pending.source.assertCurrent(captured);
-    pending.execution ??= pending.source.author(pending.operation, pending.signal);
-    pending.result = await pending.execution;
+    try {
+      pending.source.assertCurrent(captured);
+      pending.execution ??= pending.source.author(pending.operation, pending.signal);
+      pending.result = await pending.execution;
+    } catch (error) {
+      // A recorded mutation remains authoritative even if a later step throws.
+      pending.finish(pending.source.authoringReceipt(pending.operation.operationId) ?? this.rejected(pending.source, pending.operation, error instanceof Error ? error.message : 'Authoring failed.'));
+      throw error;
+    }
     // Mutation receipts are already recorded. Losing the display acknowledgment never reverses them.
     const result = pending.result;
     setTimeout(() => { if (this.pending.get(id) === pending) pending.finish(pending.source.authoringReceipt(result.receipt.operationId) ?? result); }, 1500);

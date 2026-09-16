@@ -121,3 +121,64 @@ test('capture rejects newer human fields with current context and validation/rep
   const forbidden = await tool.execute({ ...f.operation({ kind: 'validate' }), action: { kind: 'startLiveTrial' } }, { id: 'bad', signal: new AbortController().signal });
   assert.equal(forbidden.isError, true);
 });
+
+test('grouped undo restores an unreferenced human draft and its saved baseline', async t => {
+  const f = await setup(t), saved = text(f.source, markdownPath), originalWorkflow = text(f.source);
+  await f.source.edit(f.source.snapshot(), markdownPath, '# Unsaved human work\n');
+  const workflow = JSON.parse(originalWorkflow); workflow.actions.review.contextFiles = [];
+  await f.author({ kind: 'edit', changes: [{ path: workflowPath, text: JSON.stringify(workflow) }, { path: markdownPath, text: saved }] });
+  assert.equal(f.source.snapshot().files.some(file => file.path === markdownPath), false);
+  await f.source.undo(f.source.snapshot());
+  const restored = f.source.snapshot().files.find(file => file.path === markdownPath)!;
+  assert.equal(restored.text, '# Unsaved human work\n'); assert.equal(restored.dirty, true);
+  assert.equal(text(f.source), originalWorkflow); assert.equal(await readFile(join(f.root, markdownPath), 'utf8'), saved);
+  await f.source.undo(f.source.snapshot());
+  assert.equal(text(f.source, markdownPath), saved); assert.equal(f.source.dirty, false);
+});
+
+test('the 129th tool request settles with current context and leaves cancellation, retries and manual Save usable', { timeout: 30_000 }, async t => {
+  const f = await setup(t); let requestId = '';
+  for (let index = 0; index < 128; index++) await f.author({ kind: 'read', paths: [] });
+  const host = new AuthoringTools(() => f.source, id => { requestId = id; }), tool = host.tools(f.source)[0]!;
+  const operation = f.operation({ kind: 'edit', changes: [{ path: markdownPath, text: 'must not apply' }] });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const signal = new AbortController(), response = tool.execute(operation, { id: `over-limit-${attempt}`, signal: signal.signal });
+    let settled = false; void response.then(() => { settled = true; });
+    await assert.rejects(host.apply(requestId, f.source.snapshot()), /128 authoring receipts/);
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, true);
+    const result = await response, rejected = JSON.parse(result.text);
+    assert.equal(result.isError, true); assert.equal(rejected.receipt.status, 'rejected');
+    assert.match(rejected.receipt.message, /Save and reopen/); assert.equal(rejected.context.token.revision, f.source.revision);
+    host.reject(requestId, []); signal.abort();
+    await assert.rejects(host.apply(requestId, f.source.snapshot()), /no longer pending/);
+  }
+  assert.equal(f.source.snapshot().authoringReceipts.length, 128); assert.notEqual(text(f.source, markdownPath), 'must not apply');
+  const cancel = new AbortController(), waiting = tool.execute(f.operation({ kind: 'validate' }), { id: 'cancel-over-limit', signal: cancel.signal });
+  cancel.abort(); assert.equal(JSON.parse((await waiting).text).receipt.status, 'cancelled');
+  await f.source.edit(f.source.snapshot(), markdownPath, '# Manual recovery\n'); await f.source.save(f.source.snapshot());
+  assert.equal(await readFile(join(f.root, markdownPath), 'utf8'), '# Manual recovery\n');
+  assert.equal(f.source.authoringReceipt('operation-1')!.receipt.status, 'completed');
+});
+
+test('unexpected execution failures settle requests and preserve any already recorded mutation', async t => {
+  const f = await setup(t); let requestId = '';
+  const host = new AuthoringTools(() => f.source, id => { requestId = id; }), tool = host.tools(f.source)[0]!;
+  const operation = f.operation({ kind: 'validate' });
+  const failure = t.mock.method(f.source, 'author', async () => { throw new Error('Fictional execution failure'); });
+  const response = tool.execute(operation, { id: 'unexpected', signal: new AbortController().signal });
+  await assert.rejects(host.apply(requestId, f.source.snapshot()), /Fictional execution failure/);
+  const rejected = JSON.parse((await response).text); assert.equal(rejected.receipt.status, 'rejected');
+  assert.equal(rejected.context.token.revision, f.source.revision); failure.mock.restore();
+  const retry = tool.execute(operation, { id: 'retry', signal: new AbortController().signal });
+  await host.apply(requestId, f.source.snapshot()); host.confirm(requestId);
+  assert.equal(JSON.parse((await retry).text).receipt.status, 'completed');
+  const author = f.source.author.bind(f.source);
+  t.mock.method(f.source, 'author', async (value: unknown, signal?: AbortSignal) => { await author(value, signal); throw new Error('Fictional failure after receipt'); });
+  const edit = f.operation({ kind: 'edit', changes: [{ path: markdownPath, text: '# Recorded before failure\n' }] });
+  const changed = tool.execute(edit, { id: 'after-receipt', signal: new AbortController().signal });
+  await assert.rejects(host.apply(requestId, f.source.snapshot()), /failure after receipt/);
+  const result = await changed;
+  assert.equal(result.isError, false); assert.equal(JSON.parse(result.text).receipt.status, 'applied');
+  assert.equal(text(f.source, markdownPath), '# Recorded before failure\n'); assert.equal(f.source.snapshot().undoCount, 1);
+  await f.source.undo(f.source.snapshot()); assert.notEqual(text(f.source, markdownPath), '# Recorded before failure\n');
+});

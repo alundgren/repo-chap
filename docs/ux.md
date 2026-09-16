@@ -182,7 +182,8 @@ narrow windows, paths and answers wrap, and the page needs no horizontal scroll.
 Discuss now permits typed source, Markdown and fixture edits and actual offline
 fixture tests. Save all remains explicit. A compact status above the task views
 names files changed by authoring operations, including after cancellation or
-provider failure. The expandable Authoring operations list retains host receipts
+provider failure. It separately reports current unsaved drafts and whether Undo
+is available. The expandable Authoring operations list retains host receipts
 and distinguishes unconfirmed display from a rejected or applied mutation.
 Assistant prose remains plain text and cannot run an operation.
 

@@ -74,7 +74,7 @@ function render(replaceSource = false): void {
   element<HTMLButtonElement>('undo').disabled = prompting || !state.undoCount;
   const applied = state.authoringReceipts.filter(receipt => receipt.status === 'applied');
   element('authoring-summary').hidden = !applied.length;
-  element('authoring-summary').textContent = `${applied.length} authoring operation(s) applied in this session: ${[...new Set(applied.flatMap(receipt => receipt.changedPaths))].join(', ')}. Current drafts and Undo remain available after cancellation or provider failure. See Authoring operations for receipts.`;
+  element('authoring-summary').textContent = `${applied.length} authoring operation(s) applied in this session: ${[...new Set(applied.flatMap(receipt => receipt.changedPaths))].join(', ')}. ${dirty() ? 'Unsaved drafts are present.' : 'All changes are saved.'} ${state.undoCount ? `Undo can reverse ${state.undoCount} draft operation(s).` : 'No draft operations are available to undo.'} See Authoring operations for historical receipts.`;
   element('authoring-activity').replaceChildren(...state.authoringReceipts.toReversed().map(receipt => {
     const item = document.createElement('p');
     item.textContent = `${receipt.kind}: ${receipt.message} ${receipt.changedPaths.join(', ')}${receipt.display === 'unconfirmed' ? ' · Display unconfirmed' : ''} · Revision ${receipt.after.revision}`;

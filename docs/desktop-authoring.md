@@ -85,12 +85,17 @@ IDs still return their receipts, and manual source editing and saving remain
 available. Save does not remove receipt IDs. Closing the workflow ends this
 in-memory receipt history.
 
-Undo keeps up to 32 recent draft groups within 8 MiB, removing the oldest groups
-when necessary. A single group above that bound rejects before editing. Save,
+Undo keeps up to 32 recent draft groups within 8 MiB, including prior buffers and
+their saved baselines. It can restore unsaved Markdown even when an operation
+removes its last workflow reference. It removes the oldest groups when necessary.
+A single group above that bound rejects before editing. Save,
 reload, discard and reset clear undo history so undo cannot recreate an obsolete
 disk baseline or silently remove a saved fixture. They preserve operation
 receipts. This is session recovery, not crash recovery or a filesystem transaction.
 Save still reports partial disk writes and preserves remaining drafts.
+The authoring summary distinguishes historical receipts from current unsaved
+drafts and available Undo groups. Operation failures return their current context
+and settle the pending tool request, including at the receipt limit.
 
 Offline validation and replay import only shared workflow and pure Slack preview
 code. They dispatch no model, network or effect adapter. An active conversation

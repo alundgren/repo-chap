@@ -191,3 +191,60 @@ test('actual Electron keeps unconfirmed display receipts and never repeats an un
   await page.locator('#undo').click(); assert.equal((await f.snapshot()).files.some(file => file.path === 'manual-test.json'), false);
   assert.deepEqual(f.errors, []); assert.deepEqual(f.requests, []);
 });
+
+test('actual Electron Undo restores human Markdown after a batch removes its final reference', { timeout: 90_000 }, async t => {
+  const f = await launch(t, 'orphan-undo', 'claude'), { page } = f;
+  const saved = f.pkg.files.find(file => file.path === markdownPath)!.text;
+  await page.locator('#source-tab').click(); await page.getByRole('button', { name: markdownPath, exact: true }).first().click();
+  await page.locator('#source').fill('# Unsaved human work\n');
+  await expect.poll(async () => (await f.snapshot()).files.find(file => file.path === markdownPath)!.text).toBe('# Unsaved human work\n');
+  const workflow = JSON.parse((await f.snapshot()).files.find(file => file.path === workflowPath)!.text); workflow.actions.review.contextFiles = [];
+  await page.locator('#conversation-tab').click();
+  await f.send('remove-last-reference', [{ action: { kind: 'edit', changes: [{ path: workflowPath, text: JSON.stringify(workflow) }, { path: markdownPath, text: saved }] } }]);
+  await expect.poll(async () => (await f.last()).status).toBe('completed');
+  assert.equal((await f.snapshot()).files.some(file => file.path === markdownPath), false);
+  await page.locator('#undo').focus(); await page.keyboard.press('Enter');
+  await page.locator('#source-tab').click(); await page.getByRole('button', { name: markdownPath, exact: true }).first().click();
+  await expect(page.locator('#source')).toHaveValue('# Unsaved human work\n');
+  assert.equal((await f.snapshot()).files.find(file => file.path === markdownPath)!.dirty, true);
+  assert.equal(await readFile(join(f.root, markdownPath), 'utf8'), saved);
+  await page.screenshot({ path: join(proof, 'recovery-01-restored-human-draft.png'), fullPage: true });
+  await page.locator('#save').click(); await expect(page.locator('#message')).toHaveText('Saved all changed files.');
+  await expect(page.locator('#undo')).toBeDisabled();
+  await expect(page.locator('#authoring-summary')).toContainText('All changes are saved. No draft operations are available to undo.');
+  assert.equal(await readFile(join(f.root, markdownPath), 'utf8'), '# Unsaved human work\n');
+  await page.screenshot({ path: join(proof, 'recovery-02-saved-receipt-history.png'), fullPage: true });
+  assert.deepEqual(f.errors, []); assert.deepEqual(f.requests, []);
+});
+
+test('actual Electron reports the receipt limit and keeps retry, Cancel and manual Save responsive', { timeout: 90_000 }, async t => {
+  const f = await launch(t, 'receipt-limit', 'codex'), { page } = f;
+  await page.evaluate(async () => {
+    const snapshot = (await window.repoChap.current()).snapshot!;
+    for (let index = 0; index < 128; index++) {
+      const result = await window.repoChap.author({ operationId: `prepare-limit-${index}`, expected: { sessionId: snapshot.sessionId, revision: snapshot.revision }, action: { kind: 'read', paths: [] } });
+      if (result.error) throw new Error(result.error);
+    }
+  });
+  const steps = [{ action: { kind: 'edit', changes: [{ path: markdownPath, text: 'must not apply' }] } }];
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await f.send('receipt-limit', steps);
+    await expect.poll(async () => (await f.results()).length, { timeout: 10000 }).toBe(attempt);
+    await expect.poll(async () => (await f.last()).status).toBe('completed');
+    assert.equal((await f.results()).at(-1).receipt.status, 'rejected');
+    assert.match((await f.results()).at(-1).receipt.message, /128 authoring receipts/);
+  }
+  await expect(page.locator('#message')).toContainText('Save and reopen the workflow');
+  await page.screenshot({ path: join(proof, 'recovery-03-receipt-limit.png'), fullPage: true });
+  await f.send('cancel-after-limit', [{ gate: join(f.workspace, 'never-continue'), action: { kind: 'validate' } }]);
+  await expect.poll(async () => (await f.calls()).some(call => call.waitingForStep === 0)).toBe(true);
+  await page.locator('#conversation-cancel').focus(); await page.keyboard.press('Enter');
+  await expect.poll(async () => (await f.last()).status).toBe('cancelled');
+  await page.locator('#source-tab').click(); await page.getByRole('button', { name: markdownPath, exact: true }).first().click();
+  await page.locator('#source').fill('# Manual Save after the receipt limit\n');
+  await page.locator('#save').click(); await expect(page.locator('#message')).toHaveText('Saved all changed files.');
+  assert.equal(await readFile(join(f.root, markdownPath), 'utf8'), '# Manual Save after the receipt limit\n');
+  assert.equal((await f.snapshot()).authoringReceipts.length, 128);
+  await page.screenshot({ path: join(proof, 'recovery-04-manual-save-after-limit.png'), fullPage: true });
+  assert.deepEqual(f.errors, []); assert.deepEqual(f.requests, []);
+});

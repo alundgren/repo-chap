@@ -38,7 +38,7 @@ export class DocumentSession {
   private savedTexts: Record<string, string> = Object.create(null);
   private inputs: Record<SimulationInputKind, (SimulationInput & { loadedText: string }) | null> = { fixture: null, packets: null };
   private simulation: SimulationRecord | null = null;
-  private undoGroups: { path: string; text: string | null }[][] = [];
+  private undoGroups: { path: string; source: BufferSource | null }[][] = [];
   private receipts = new Map<string, AuthoringResponse>();
   readonly repositoryRoot: string;
   readonly workflowPath: string;
@@ -269,7 +269,7 @@ export class DocumentSession {
   }
 
   private remember(paths: string[]): void {
-    const group = paths.map(path => ({ path, text: this.files.get(path)?.text ?? null }));
+    const group = paths.map(path => ({ path, source: structuredClone(this.files.get(path) ?? null) }));
     if (Buffer.byteLength(JSON.stringify(group)) > limits.packageBytes) throw new Error('This undo group exceeds 8 MiB. Edit fewer files together.');
     this.undoGroups.push(group);
     while (this.undoGroups.length > 32 || this.undoGroups.length > 1 && Buffer.byteLength(JSON.stringify(this.undoGroups)) > limits.packageBytes) this.undoGroups.shift();
@@ -296,10 +296,10 @@ export class DocumentSession {
     this.assertCurrent(token);
     const group = this.undoGroups.pop();
     if (!group) throw new Error('There is no draft operation to undo.');
-    for (const { path, text } of group) {
+    for (const { path, source } of group) {
       const file = this.files.get(path);
-      if (text === null) { if (file?.created) this.files.delete(path); }
-      else if (file) { file.text = text; file.dirty = !!file.created || text !== file.saved?.text; }
+      if (source === null) { if (file?.created) this.files.delete(path); }
+      else this.files.set(path, source);
     }
     this.revision++;
     await this.refreshReferences();
