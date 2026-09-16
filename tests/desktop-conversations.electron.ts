@@ -148,6 +148,7 @@ test('actual Electron discusses current drafts and actual simulation evidence th
   assert.ok(claude.some(call => call.message?.type === 'user' && call.message.message.content.includes('"provider":"codex"')));
   assert.ok(claude.every(call => !call.args?.includes('--resume')));
   assert.notEqual((await f.chat()).conversation!.session!.id, firstSession);
+  await page.locator('.conversation-turn details').last().locator('summary').click();
   await page.screenshot({ path: join(proof, 'conversation-02-provider-handoff.png'), fullPage: true });
   await f.send('claude', 'plain', 'Keep the same Claude session.'); await f.completed();
   assert.ok((await f.calls('claude')).some(call => call.args?.includes('--resume')));
@@ -158,6 +159,14 @@ test('actual Electron discusses current drafts and actual simulation evidence th
     await page.locator('#conversation-input').getByRole('radio', { name: /Waiting/ }).check();
     await page.locator('#conversation-input').getByRole('button', { name: 'Send reply' }).click(); await f.completed();
   }
+  await page.locator('.conversation-context summary').click();
+  for (const [name, width, height] of [['laptop', 1024, 768], ['narrow', 390, 844]] as const) {
+    await f.electron.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]!.setBounds(bounds), { width, height });
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1));
+    await page.screenshot({ path: join(proof, `conversation-05-${name}.png`), fullPage: true });
+  }
+  await f.electron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ width: 1200, height: 850 }));
   await page.evaluate(() => { const sample = { count: 0, maxGap: 0, previous: performance.now(), timer: 0 }; sample.timer = window.setInterval(() => { const now = performance.now(); sample.count++; sample.maxGap = Math.max(sample.maxGap, now - sample.previous); sample.previous = now; }, 5); (window as any).conversationHeartbeat = sample; });
   await f.send('claude', 'burst', 'Show a burst of streamed text.'); await f.completed();
   const heartbeat = await page.evaluate(() => { const sample = (window as any).conversationHeartbeat; clearInterval(sample.timer); return { count: sample.count, maxGap: sample.maxGap }; });
@@ -175,13 +184,6 @@ test('actual Electron discusses current drafts and actual simulation evidence th
   await expect(page.locator('#conversation-question')).toHaveValue('Keep this question after context rejection.');
   await page.screenshot({ path: join(proof, 'conversation-04-context-limit.png'), fullPage: true });
   await page.locator('#source-tab').click(); await page.locator('#source').fill(draft); await page.locator('#conversation-tab').click();
-  await page.locator('.conversation-context summary').click();
-  for (const [name, width, height] of [['laptop', 1024, 768], ['narrow', 390, 844]] as const) {
-    await f.electron.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]!.setBounds(bounds), { width, height });
-    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width);
-    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1));
-    await page.screenshot({ path: join(proof, `conversation-05-${name}.png`), fullPage: true });
-  }
   assert.equal((await f.document()).files.find(file => file.path === reviewPath)!.text, draft);
   assert.notEqual(await readFile(join(f.root, reviewPath), 'utf8'), draft);
   assert.deepEqual(f.errors, []); assert.deepEqual(f.requests, []);
@@ -255,6 +257,21 @@ test('actual Electron preserves rejected drafts and keeps cancellation and repli
       await f.fresh();
     }
   }
+  await f.send('claude', 'input', 'Reply while invalid workflow source remains visible.');
+  await expect(page.locator('#conversation-input')).toBeVisible(); await page.locator('#source-tab').click();
+  await page.locator('#conversation-input').getByRole('radio', { name: /Waiting/ }).focus(); await page.keyboard.press('Space');
+  await page.locator('#conversation-input').getByRole('button', { name: 'Send reply' }).focus(); await page.keyboard.press('Enter'); await f.completed();
+  await expect(page.locator('#source')).toHaveValue('{ unfinished source');
+  await page.locator('#conversation-tab').click(); await rm(join(f.workspace, 'claude.pid'), { force: true });
+  await f.send('claude', 'hang', 'Cancel while invalid workflow source remains visible.');
+  await expect.poll(() => f.pid('claude')).not.toBe(0); const sourceChild = await f.pid('claude');
+  await page.locator('#source-tab').click(); await page.locator('#conversation-cancel').focus(); await page.keyboard.press('Enter');
+  await expect.poll(async () => (await f.last())?.status).toBe('cancelled'); await f.gone(sourceChild);
+  await expect(page.locator('#source')).toHaveValue('{ unfinished source');
+  assert.equal((await f.document()).files.find(file => file.path === workflowPath)!.text, '{ unfinished source');
+  assert.equal(await readFile(join(f.root, workflowPath), 'utf8'), original);
+  await page.screenshot({ path: join(proof, 'conversation-13-cancel-with-invalid-source.png'), fullPage: true });
+  await f.fresh();
   await page.locator('#source-tab').click(); await page.locator('#source').fill(original); await page.locator('#conversation-tab').click();
   await f.choose('codex'); await f.send('codex', 'input', 'Reply while the inspector holds incomplete text.');
   await expect(page.locator('#conversation-input')).toBeVisible(); await page.locator('#process-tab').click(); await page.locator('#action-select').selectOption('wait_review');
