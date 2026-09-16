@@ -10,6 +10,7 @@
     "package": "node package.mjs"
   },
   "devDependencies": {
+    "@repo-chap/slack": "workspace:*",
     "@repo-chap/workflow": "workspace:*",
     "electron": "44.4.1",
     "@electron/packager": "20.3.0"

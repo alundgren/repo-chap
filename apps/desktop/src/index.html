@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <a class="skip" href="#source">Skip to source</a>
+  <a class="skip" href="#workspace">Skip to editor</a>
   <header class="app-header">
     <span class="brand">Repo Chap</span>
     <span class="secondary">Local workflow editor</span>
@@ -24,21 +24,31 @@
       <p>Open a repository and choose its workflow JSON. Edit the source and its referenced Markdown together, then save when validation passes.</p>
       <p class="secondary">Files stay on this computer. Opening and editing makes no provider calls.</p>
     </section>
-    <section id="workspace" hidden aria-label="Workflow editor">
+    <section id="workspace" hidden aria-label="Workflow editor" tabindex="-1">
       <div class="workspace-heading">
         <div><p class="eyebrow">Workflow source</p><h1 id="workflow-name"></h1></div>
         <p id="repository-path" class="path secondary"></p>
       </div>
       <p id="read-only" class="notice" hidden></p>
       <div class="editor-bar">
+        <div class="controls" role="group" aria-label="Editor view"><button id="process-tab" aria-pressed="false">Process</button><button id="source-tab" aria-pressed="true">Source</button><button id="simulation-tab" aria-pressed="false">Simulate</button></div>
         <p id="dirty-state" role="status" aria-live="polite">All changes saved</p>
         <div class="controls">
           <button id="reload">Reload file</button>
           <button id="discard" class="danger">Discard changes</button>
+          <button id="reset" class="danger">Reset workflow</button>
+          <button id="export">Export JSON</button>
           <button id="save" class="primary">Save all</button>
         </div>
       </div>
-      <div class="editor-layout">
+      <section id="process-view" hidden aria-label="Ordered process">
+        <p id="process-unavailable" class="notice" hidden>Repair the source or reset the workflow to use visual editing.</p>
+        <div id="process-content" class="process-layout">
+          <div><h2>First matching rule wins</h2><p class="secondary">Move a rule to change its priority. IDs stay the same.</p><ol id="rules" class="rules"></ol><p id="otherwise"></p></div>
+          <aside class="inspector" aria-label="Action inspector"><label for="action-select">Inspect action</label><select id="action-select"></select><div id="action-fields"></div></aside>
+        </div>
+      </section>
+      <div id="source-view" class="editor-layout">
         <nav class="files" aria-label="Workflow files"><h2>Files</h2><div id="file-list"></div><p class="secondary file-help">Explicit references only. Switching files keeps your drafts.</p></nav>
         <div class="source-pane">
           <div class="file-heading"><label id="source-label" for="source">Source</label><span id="file-state" class="secondary"></span></div>
@@ -48,6 +58,19 @@
           <p id="source-help" class="secondary">Plain source. Save all writes the exact text of each changed file.</p>
         </div>
       </div>
+      <section id="simulation-view" hidden aria-label="Offline simulation">
+        <h2>Simulate a saved observation</h2>
+        <p class="secondary">Load fictional or explicitly captured private JSON. Simulation uses action stubs and fake time. No code, model or remote effect runs.</p>
+        <div class="controls simulation-controls"><button id="load-fixture">Load fixture</button><button id="load-packets">Load decision packets</button><button id="simulate" class="primary">Run simulation</button></div>
+        <p id="fixture-name" class="secondary"></p><p id="packets-name" class="secondary"></p>
+        <div class="controls clock-controls"><label for="fake-clock">Fake time, UTC</label><input id="fake-clock" type="text" placeholder="2026-05-01T12:00:00Z" spellcheck="false"><button id="set-clock">Set time</button><button id="reset-fixture">Reset fixture</button></div>
+        <p class="secondary">Time edits are temporary. Reset fixture restores the loaded input. Save all writes only workflow source files.</p>
+        <details><summary>Inspect fixture and action stubs</summary><pre id="fixture-preview"></pre></details>
+        <details><summary>Inspect complete decision packet input</summary><pre id="packets-preview"></pre></details>
+        <p id="simulation-blocked" class="notice" hidden>Fix the workflow validation errors in Source, or reset the workflow, before running simulation or exporting JSON.</p>
+        <div id="simulation-result" aria-live="polite"></div>
+      </section>
+      <details class="changes"><summary id="changes-title">Changes against saved source</summary><p id="changes-note" class="secondary"></p><ul id="semantic-changes"></ul></details>
       <section class="validation" aria-label="Validation">
         <div class="validation-heading"><h2 id="validation-title">Validation</h2><span id="revision" class="secondary"></span></div>
         <ul id="diagnostics"></ul>
@@ -56,7 +79,7 @@
     </section>
     <p id="message" role="status" aria-live="polite"></p>
   </main>
-  <footer><span>Local files</span><span id="footer-detail">JSON and Markdown</span></footer>
+  <footer><span>Local files · Offline simulation</span><span id="footer-detail">JSON and Markdown</span></footer>
   <dialog id="confirmation" aria-labelledby="confirm-title" aria-describedby="confirm-detail">
     <h2 id="confirm-title"></h2><p id="confirm-detail"></p><div id="confirm-actions" class="controls"></div>
   </dialog>

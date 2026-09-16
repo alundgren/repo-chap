@@ -87,6 +87,21 @@ importers:
         specifier: workspace:*
         version: link:../../packages/workflow
 
+  apps/desktop:
+    devDependencies:
+      '@electron/packager':
+        specifier: 20.3.0
+        version: 20.3.0
+      '@repo-chap/slack':
+        specifier: workspace:*
+        version: link:../../packages/slack
+      '@repo-chap/workflow':
+        specifier: workspace:*
+        version: link:../../packages/workflow
+      electron:
+        specifier: 44.4.1
+        version: 44.4.1
+
   packages/execution:
     dependencies:
       '@repo-chap/github':
@@ -137,18 +152,6 @@ importers:
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:../workflow
-
-  apps/desktop:
-    devDependencies:
-      '@electron/packager':
-        specifier: 20.3.0
-        version: 20.3.0
-      '@repo-chap/workflow':
-        specifier: workspace:*
-        version: link:../../packages/workflow
-      electron:
-        specifier: 44.4.1
-        version: 44.4.1
 
   packages/workflow:
     dependencies:

@@ -3,9 +3,13 @@ import { access, open, realpath, rename, rm, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   actionRegistry, buildPackage, limits, loadWorkflow, parseJson, readFixtureText,
-  referencePath, WorkflowError,
+  referencePath, WorkflowError, parseFixture, replay, digest,
 } from '@repo-chap/workflow';
-import type { DocumentSnapshot, DocumentToken, EditorDiagnostic, SourceDocument } from './protocol.js';
+import { previewReplayHandoffs } from '@repo-chap/slack';
+import type { DecisionPacket } from '@repo-chap/slack';
+import type { WorkflowPackage } from '@repo-chap/workflow';
+import { editWorkflow, semanticChanges } from './authoring.ts';
+import type { DocumentSnapshot, DocumentToken, EditorDiagnostic, SimulationInput, SimulationInputKind, SimulationRecord, SourceDocument, VisualEdit } from './protocol.js';
 
 interface DiskSource { target: string; text: string; mode: number }
 interface BufferSource extends SourceDocument { saved: DiskSource | null }
@@ -29,6 +33,9 @@ export class DocumentSession {
   revision = 0;
   private files = new Map<string, BufferSource>();
   private readOnlyReason: string | null = null;
+  private savedTexts: Record<string, string> = Object.create(null);
+  private inputs: Record<SimulationInputKind, (SimulationInput & { loadedText: string }) | null> = { fixture: null, packets: null };
+  private simulation: SimulationRecord | null = null;
   readonly repositoryRoot: string;
   readonly workflowPath: string;
 
@@ -83,6 +90,7 @@ export class DocumentSession {
       const saved = await this.capture(path);
       if ([...this.files.values()].reduce((sum, file) => sum + Buffer.byteLength(file.text), Buffer.byteLength(saved.text)) > limits.packageBytes) throw new Error('Source files exceed 8 MiB.');
       this.files.set(path, { path, text: saved.text, saved, dirty: false, external: false, error: null });
+      this.savedTexts[path] = saved.text;
     } catch (error) {
       this.files.set(path, { path, text: '', saved: null, dirty: false, external: false, error: `Cannot read ${path}. ${message(error)}` });
     }
@@ -140,7 +148,8 @@ export class DocumentSession {
     for (const [path, file] of this.files) if (file.saved) texts[path] = file.text;
     let diagnostics: EditorDiagnostic[] = [];
     let packageDigest: string | null = null;
-    try { packageDigest = buildPackage(this.workflowPath, texts).digest; }
+    let workflow: DocumentSnapshot['workflow'] = null;
+    try { const pkg = buildPackage(this.workflowPath, texts); packageDigest = pkg.digest; workflow = pkg.workflow; }
     catch (error) {
       const items = error instanceof WorkflowError ? error.diagnostics : [{ code: 'validation', path: this.workflowPath, message: message(error) }];
       diagnostics = items.map(item => ({ ...item, file: this.diagnosticFile(item.path) }));
@@ -149,11 +158,94 @@ export class DocumentSession {
     for (const file of this.files.values()) if (file.error && needed.has(file.path)) {
       if (!diagnostics.some(item => item.file === file.path)) diagnostics.push({ code: 'file_read', path: file.path, file: file.path, message: file.error });
     }
+    let changes: DocumentSnapshot['semanticChanges'] = [], semanticError: string | null = null;
+    try { changes = semanticChanges(this.workflowPath, this.savedTexts, texts); }
+    catch { semanticError = 'Repair the JSON source to compare execution changes against saved files.'; }
+    const simulationInputs = Object.fromEntries(Object.entries(this.inputs).map(([kind, input]) => [kind, input ? { name: input.name, text: input.text, changed: input.changed } : null])) as DocumentSnapshot['simulationInputs'];
     return {
       sessionId: this.sessionId, revision: this.revision, repositoryRoot: this.repositoryRoot,
       workflowPath: this.workflowPath, readOnlyReason: this.readOnlyReason, diagnostics, packageDigest,
       files: [...this.files.values()].map(({ saved: _saved, ...file }) => ({ ...file })),
+      workflow, semanticChanges: changes, semanticError, simulationInputs, simulation: structuredClone(this.simulation),
+      simulationCurrent: !!this.simulation && this.simulation.packageDigest === packageDigest &&
+        this.simulation.fixtureDigest === this.inputDigest('fixture') && this.simulation.packetsDigest === this.inputDigest('packets'),
     };
+  }
+
+  private package(token: DocumentToken): WorkflowPackage {
+    this.assertCurrent(token);
+    if (this.readOnlyReason) throw new Error(this.readOnlyReason);
+    const snapshot = this.snapshot();
+    if (!snapshot.packageDigest || snapshot.diagnostics.length) throw new Error('Fix the workflow validation errors before simulation or export. Your drafts are still here.');
+    return buildPackage(this.workflowPath, Object.fromEntries([...this.files].filter(([, file]) => file.saved).map(([path, file]) => [path, file.text])));
+  }
+
+  async visualEdit(token: DocumentToken, edit: VisualEdit): Promise<void> {
+    this.assertCurrent(token);
+    await this.edit(token, this.workflowPath, editWorkflow(this.files.get(this.workflowPath)!.text, this.workflowPath, edit));
+  }
+
+  async reset(token: DocumentToken): Promise<void> {
+    this.assertCurrent(token);
+    for (const file of this.files.values()) if (file.saved) { file.text = file.saved.text; file.dirty = false; }
+    this.revision++;
+    await this.refreshReferences();
+  }
+
+  private inputKind(kind: SimulationInputKind): void {
+    if (kind !== 'fixture' && kind !== 'packets') throw new Error('Choose fixture or packet input.');
+  }
+
+  private inputDigest(kind: SimulationInputKind): string | null {
+    const input = this.inputs[kind];
+    return input ? digest(input.text) : null;
+  }
+
+  setSimulationInput(token: DocumentToken, kind: SimulationInputKind, text: string, name?: string): void {
+    this.assertCurrent(token);
+    this.inputKind(kind);
+    if (typeof text !== 'string' || Buffer.byteLength(text) > limits.fileBytes) throw new Error('Simulation input must fit within 1 MiB.');
+    const previous = this.inputs[kind];
+    if (name === undefined && !previous) throw new Error('Load a local simulation input first.');
+    const loadedText = name === undefined ? previous!.loadedText : text;
+    this.inputs[kind] = { name: name ?? previous!.name, text, loadedText, changed: text !== loadedText };
+    this.revision++;
+  }
+
+  resetSimulationInput(token: DocumentToken, kind: SimulationInputKind): void {
+    this.assertCurrent(token);
+    this.inputKind(kind);
+    const input = this.inputs[kind];
+    if (input) this.setSimulationInput(token, kind, input.loadedText);
+  }
+
+  setClock(token: DocumentToken, now: string): void {
+    this.assertCurrent(token);
+    const input = this.inputs.fixture;
+    if (!input) throw new Error('Load a fixture before changing fake time.');
+    const fixture = parseFixture(parseJson(input.text, input.name));
+    const next = { ...fixture, now };
+    parseFixture(next);
+    this.setSimulationInput(token, 'fixture', `${JSON.stringify(next, null, 2)}\n`);
+  }
+
+  simulate(token: DocumentToken): void {
+    const pkg = this.package(token);
+    const input = this.inputs.fixture;
+    if (!input) throw new Error('Load a fictional or privately captured fixture first.');
+    const fixture = parseFixture(parseJson(input.text, input.name));
+    const result = replay(pkg, fixture);
+    let handoffs: SimulationRecord['handoffs'] = [], previewError: string | null = null;
+    try {
+      const packets = this.inputs.packets ? parseJson(this.inputs.packets.text, this.inputs.packets.name) : [];
+      handoffs = previewReplayHandoffs(result, (Array.isArray(packets) ? packets : [packets]) as DecisionPacket[], pkg.workflow.slack);
+    } catch (error) { previewError = message(error); }
+    this.simulation = { token: { sessionId: this.sessionId, revision: this.revision }, packageDigest: pkg.digest, fixtureDigest: this.inputDigest('fixture')!, packetsDigest: this.inputDigest('packets'), result, handoffs, previewError };
+  }
+
+  exportText(token: DocumentToken): string {
+    this.package(token);
+    return this.files.get(this.workflowPath)!.text;
   }
 
   async edit(token: DocumentToken, path: string, text: string): Promise<void> {
@@ -185,6 +277,7 @@ export class DocumentSession {
     if (!file) throw new Error('Choose a listed file.');
     const saved = await this.capture(path);
     Object.assign(file, { saved, text: saved.text, dirty: false, external: false, error: null });
+    this.savedTexts[path] = saved.text;
     this.revision++;
     await this.refreshReferences();
     if (path === this.workflowPath) this.setReadOnly();
@@ -228,6 +321,7 @@ export class DocumentSession {
         }
         await rename(temporary, file.saved!.target);
         file.saved = { ...file.saved!, text: file.text };
+        this.savedTexts[file.path] = file.text;
         file.dirty = false;
         savedCount++;
       }

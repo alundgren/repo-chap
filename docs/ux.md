@@ -68,8 +68,54 @@ editing resumes. Schema errors select their referenced source file, including
 references with JSON Pointer fragments.
 
 The app displays plain source for JSON and Markdown. It does not render Markdown
-HTML or follow links. Simulation, ordered visual editing, chat and live trials
-will add their own task views when those features ship.
+HTML or follow links. Chat and live trials will add their own task views when
+those features ship.
+
+## Desktop process editing and simulation
+
+Process, Source and Simulate are separate task views over the same captured
+document. Source remains the initial view when opening a file. Process uses an
+ordered list with keyboard-accessible up/down controls because array priority
+determines execution. The presentation's action inspector sits beside it on a
+laptop and below it on narrow windows. This replaces the concept's action grid
+with actual rules and their conditions. A bounded list keeps the inspector in
+reach, and reorder restores focus to the moved rule's control.
+
+The inspector edits success/failure continuations, existing prompt references,
+context paths and the timing settings used by reviewer/debounce waits. Native
+select controls keep long action IDs usable with the keyboard without a custom
+combobox. Visual edits preserve IDs and unknown values while formatting workflow
+JSON with two spaces. Shared validation reports invalid references and action
+paths. Source remains available to repair them; Reset workflow restores every
+source draft to its last loaded or saved text after confirmation.
+
+Changes against saved source compare execution fields, ordered rule IDs and
+referenced text. Layout and JSON formatting are excluded. Export JSON explicitly
+writes a workflow-only copy and names that referenced files were not copied.
+It cannot overwrite an open source file. Save all remains the way to update
+source files. Invalid source disables both simulation and export.
+
+Simulate loads an explicitly chosen local fixture and optional complete decision
+packet JSON. Fake time can change temporarily and Reset fixture restores the
+loaded input. The input JSON, including ordered action stubs, is inspectable.
+These inputs are not saved by Save all and are not added to the repository.
+General fixture authoring remains a later task.
+
+The result leads with its stop reason and wake time, then shows selected and
+rejected earlier rules, unknown conditions, proposed effects and consumed fixture
+counters. A tested document revision and package digest identify the result.
+Changed execution content or fixture/packet bytes mark it stale. Saving or
+formatting the same execution content leaves it current; layout does not affect
+execution. A stale result stays visible beside its warning for comparison.
+
+Slack content follows the shared renderer's resolved route and bounded sections.
+The current captured workflow supplies Slack configuration; an explicit packet
+supplies author, findings and repository context. Missing or ambiguous packet
+context shows an error beside the trace. Missing member mappings show the shared
+default-channel fallback. Long content keeps omission notices and an expandable
+complete packet. Evidence URLs display as selectable text because the offline
+window does not navigate to remote sites. Preview wording states that nothing
+was sent. Warm-paper roles and local Plex fonts match the source editor.
 
 ## Offline CLI
 
