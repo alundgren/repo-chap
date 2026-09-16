@@ -2,7 +2,7 @@ import { mkdtemp, open, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { prepareCaptureDirectory, readCapture } from '@repo-chap/github';
 import { canonicalJson, digest, evaluate, parseJson, type ControlState, type WorkflowPackage } from '@repo-chap/workflow';
-import { collectSources, runCodex, type Outcome, type ProviderProfile, type ProviderResult, type SessionIdentity } from '@repo-chap/providers';
+import { collectSources, runProvider, type Outcome, type ProviderProfile, type ProviderResult, type SessionIdentity } from '@repo-chap/providers';
 
 export interface AnalysisRecord {
   schemaVersion: 1; status: 'running' | Outcome; decision: 'incomplete' | 'concerns' | 'analysis_acceptable';
@@ -79,7 +79,7 @@ export async function analyzeCommand(pkg: WorkflowPackage, profile: ProviderProf
           const [actionId, action] = matches[0]!;
           if (remainingAttempts < 1) { record.status = 'blocked'; record.diagnostic = 'The workflow agent-attempt limit was reached before analysis completed.'; break; }
           const session: SessionIdentity | undefined = prior[actionId]?.session;
-          const result = await runCodex({ package: pkg, profile: { ...profile, maxAttempts: Math.min(profile.maxAttempts, remainingAttempts) }, actionId, mode: 'read',
+          const result = await runProvider({ package: pkg, profile: { ...profile, maxAttempts: Math.min(profile.maxAttempts, remainingAttempts) }, actionId, mode: 'read',
             workingDirectory: inputs, artifactDirectory: directory, sources: source, evidence: inspection.evidence,
             evidenceDigest: inspection.evidenceDigest, fixtureDigest: record.fixtureDigest, missingEvidence: record.missingEvidence, signal: controller.signal, session });
           remainingAttempts -= result.attempts.length;

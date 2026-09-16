@@ -12,7 +12,7 @@
     "docs:browser": "node docs/pr-workflows/check-presentation.mjs",
     "browser:install": "playwright install chromium webkit",
     "build": "pnpm --filter @repo-chap/workflow build && pnpm --filter @repo-chap/github build && pnpm --filter @repo-chap/providers build && pnpm --filter repo-chap build",
-    "typecheck": "pnpm build && tsc --noEmit",
+    "typecheck": "pnpm build && tsc --noEmit --allowImportingTsExtensions",
     "test": "pnpm build && node --test --test-reporter=dot tests/*.test.ts",
     "check": "pnpm typecheck && pnpm test"
   },
