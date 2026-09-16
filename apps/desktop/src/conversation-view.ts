@@ -1,5 +1,5 @@
 import type { ConversationInputAnswer } from '@repo-chap/providers';
-import type { ConversationBridge, ConversationContextSelection, ConversationHistoryEntry, ConversationResult, ConversationSnapshot } from './conversation-protocol.js';
+import type { ConversationBridge, ConversationContextSelection, ConversationHistoryEntry, ConversationProvider, ConversationResult, ConversationSnapshot } from './conversation-protocol.js';
 import type { DocumentSnapshot, EditorResult } from './protocol.js';
 
 const element = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -27,19 +27,22 @@ export function conversationView(bridge: ConversationBridge, perform: (operation
     if (snapshot && current && current.status !== 'closed' && snapshot.documentSessionId === current.documentSessionId && snapshot.revision < current.revision) return;
     current = snapshot; renderConversation();
   }
-  function receive(result: ConversationResult): boolean {
-    const key = JSON.stringify(result.profiles);
+  function updateProfiles(profiles: ConversationProvider[]): void {
+    const key = JSON.stringify(profiles);
     if (key !== profilesKey) {
       const previous = profile.value;
       profile.replaceChildren(node('option', 'Choose a provider profile'));
       profile.options[0]!.value = '';
-      for (const item of result.profiles) {
+      for (const item of profiles) {
         const option = node('option', `${item.name} · ${providerName(item.provider)} · ${item.model}${item.effort ? ` · ${item.effort}` : ''}`);
         option.value = item.name; profile.append(option);
       }
-      profile.value = result.profiles.some(item => item.name === previous) ? previous : '';
+      profile.value = profiles.some(item => item.name === previous) ? previous : '';
       profilesKey = key;
     }
+  }
+  function receive(result: ConversationResult): boolean {
+    updateProfiles(result.profiles);
     accept(result.conversation);
     if (result.error) showError(result.error);
     renderControls();
@@ -88,6 +91,7 @@ export function conversationView(bridge: ConversationBridge, perform: (operation
     void bridge.cancel(id, activeTurnId).then(receive).catch(() => showError('Cancellation could not be confirmed. Try Cancel again.'));
   };
   bridge.onChange(accept);
+  bridge.onProfilesChange(profiles => { updateProfiles(profiles); renderControls(); });
 
   function renderControls(): void {
     const running = !!current?.activeTurnId;

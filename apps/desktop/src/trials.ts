@@ -12,6 +12,7 @@ import { publicProfile } from './trial-protocol.ts';
 import type { TrialProposal, TrialRecord, TrialSelection, TrialSnapshot } from './trial-protocol.js';
 
 export const trialLimits = { retained: 10, recordBytes: 16 * 1024 * 1024, deadlineMs: 600_000 } as const;
+export function trialProfileDigest(profile: ProviderProfile): string { return digest(canonicalJson(profile)); }
 interface TrialOptions {
   directory: string;
   getDocument(): DocumentSnapshot;
@@ -85,8 +86,8 @@ export class TrialController {
     if (document.sessionId !== current.sessionId || document.revision !== current.revision) throw new Error('The workflow changed. Prepare the trial for the current draft.');
     selection = selected(selection); validateProfile(profile);
     if (profile.name !== selection.profile) throw new Error('Choose a loaded provider profile.');
-    for (const record of this.records) if (canonicalJson(record.selection) !== canonicalJson(selection) || record.profileDigest !== digest(canonicalJson(profile))) record.invalidated = true;
-    this.proposal = { document: { sessionId: document.sessionId, revision: document.revision }, selection, provider: publicProfile(profile), preparedBy };
+    for (const record of this.records) if (canonicalJson(record.selection) !== canonicalJson(selection) || record.profileDigest !== trialProfileDigest(profile)) record.invalidated = true;
+    this.proposal = { document: { sessionId: document.sessionId, revision: document.revision }, selection, provider: publicProfile(profile), profileDigest: trialProfileDigest(profile), preparedBy };
     this.changed();
   }
 
@@ -99,7 +100,7 @@ export class TrialController {
     if (actions.some(matches => matches.length !== 1)) throw new Error('Live analysis requires exactly one classification action and one review action.');
     const id = randomUUID(), directory = join(this.options.directory, `trial-${id}`);
     const record: TrialRecord = { schemaVersion: 1, id, workflowIdentity: trialWorkflowIdentity(document), document: { sessionId: document.sessionId, revision: document.revision },
-      selection: selected(selection), provider: publicProfile(profile), profileDigest: digest(canonicalJson(profile)), draftDigest: trialDraftDigest(document), packageDigest: pkg.digest,
+      selection: selected(selection), provider: publicProfile(profile), profileDigest: trialProfileDigest(profile), draftDigest: trialDraftDigest(document), packageDigest: pkg.digest,
       startedAt: new Date().toISOString(), finishedAt: null, status: 'running', phase: 'capture', diagnostic: 'Reading current GitHub PR evidence.', invalidated: false, capture: null, inspection: null,
       remote: { status: 'unchecked', checkedAt: null, headSha: null, baseSha: null }, analysis: null, recordPath: join(directory, 'record.json') };
     this.proposal = null; this.records.unshift(record);
@@ -114,9 +115,10 @@ export class TrialController {
     this.active?.controller.abort('superseded'); this.changed();
   }
   profilesChanged(profiles: ProviderProfile[]): void {
+    if (this.proposal && !profiles.some(profile => profile.name === this.proposal!.selection.profile && trialProfileDigest(profile) === this.proposal!.profileDigest)) this.proposal = null;
     for (const record of this.records) {
       const profile = profiles.find(profile => profile.name === record.selection.profile);
-      if (!profile || digest(canonicalJson(profile)) !== record.profileDigest) { record.invalidated = true; if (this.active?.id === record.id) this.active.controller.abort('superseded'); }
+      if (!profile || trialProfileDigest(profile) !== record.profileDigest) { record.invalidated = true; if (this.active?.id === record.id) this.active.controller.abort('superseded'); }
     }
     this.changed();
   }

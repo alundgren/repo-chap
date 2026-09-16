@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { TrialBridge, TrialSnapshot } from './trial-protocol.js';
+import type { TrialBridge, TrialProfile, TrialSnapshot } from './trial-protocol.js';
 import type { EditorBridge } from './protocol.js';
-import type { ConversationBridge, ConversationSnapshot } from './conversation-protocol.js';
+import type { ConversationBridge, ConversationProvider, ConversationSnapshot } from './conversation-protocol.js';
 
 const bridge: EditorBridge = {
   current: () => ipcRenderer.invoke('editor:current'),
@@ -53,6 +53,7 @@ const conversation: ConversationBridge = {
     ipcRenderer.on('conversation:changed', listener);
     return () => ipcRenderer.removeListener('conversation:changed', listener);
   },
+  onProfilesChange: callback => { const listener = (_event: Electron.IpcRendererEvent, profiles: ConversationProvider[]): void => callback(profiles); ipcRenderer.on('conversation:profiles-changed', listener); return () => ipcRenderer.removeListener('conversation:profiles-changed', listener); },
 };
 contextBridge.exposeInMainWorld('repoChapConversation', conversation);
 
@@ -60,12 +61,13 @@ const trial: TrialBridge = {
   current: () => ipcRenderer.invoke('trial:current'),
   loadProfiles: () => ipcRenderer.invoke('trial:load-profiles'),
   chooseSource: id => ipcRenderer.invoke('trial:choose-source', id),
-  prepare: (token, selection) => ipcRenderer.invoke('trial:prepare', token, selection),
-  start: (token, selection) => ipcRenderer.invoke('trial:start', token, selection),
+  prepare: (token, selection, profileDigest) => ipcRenderer.invoke('trial:prepare', token, selection, profileDigest),
+  start: (token, selection, profileDigest) => ipcRenderer.invoke('trial:start', token, selection, profileDigest),
   invalidate: id => ipcRenderer.invoke('trial:invalidate', id),
   cancel: (id, trialId) => ipcRenderer.invoke('trial:cancel', id, trialId),
   refresh: (id, trialId) => ipcRenderer.invoke('trial:refresh', id, trialId),
   exportFixture: (id, trialId) => ipcRenderer.invoke('trial:export-fixture', id, trialId),
   onChange: callback => { const listener = (_event: Electron.IpcRendererEvent, snapshot: TrialSnapshot): void => callback(snapshot); ipcRenderer.on('trial:changed', listener); return () => ipcRenderer.removeListener('trial:changed', listener); },
+  onProfilesChange: callback => { const listener = (_event: Electron.IpcRendererEvent, profiles: TrialProfile[]): void => callback(profiles); ipcRenderer.on('trial:profiles-changed', listener); return () => ipcRenderer.removeListener('trial:profiles-changed', listener); },
 };
 contextBridge.exposeInMainWorld('repoChapTrial', trial);

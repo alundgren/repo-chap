@@ -212,3 +212,48 @@ for (const provider of ['codex', 'claude'] as const) test(`Electron ${provider} 
   assert.equal(await f.electron.evaluate(() => (globalThis as any).trialFixture.mutations), 0); assert.deepEqual(f.errors, []); assert.deepEqual(f.requests, []);
   await page.screenshot({ path: join(proof!, `trial-14-${provider}-preserved-evidence.png`), fullPage: true });
 });
+
+test('Electron binds Start to displayed settings across provider, model, effort and profile removal', { timeout: 120_000 }, async t => {
+  const f = await launch(t, 'trial-profile-binding'), { page } = f;
+  const settings = JSON.parse(await readFile(f.source.settings, 'utf8'));
+  const displayed = () => page.locator('#trial-profile option:checked').innerText();
+  const prepare = async () => { await page.locator('#trial-prepare').click(); await expect(page.locator('#trial-proposal')).toContainText('Prepared only'); return (await f.trial()).trial!.proposal!; };
+  const reload = async (view: 'conversation' | 'trial') => {
+    await writeFile(f.source.settings, JSON.stringify(settings), { mode: 0o600 });
+    await page.locator(`#${view}-tab`).click(); await f.pick(f.source.settings); await page.locator(`#${view}-load-profiles`).click();
+  };
+  const rejectOldStart = async (profileDigest: string) => {
+    const beforeReads = await f.electron.evaluate(() => (globalThis as any).trialFixture.queries.length), beforeCalls = [(await f.calls()).length, (await f.calls('claude')).length];
+    const result = await page.evaluate(async ({ sourceRepository, profileDigest }) => {
+      const state = (await window.repoChapTrial.current()).snapshot!;
+      return window.repoChapTrial.start({ sessionId: state.sessionId, revision: state.revision }, { repository: 'reef-labs/paperboat', pr: 42, profile: 'codex_trial', sourceRepository }, profileDigest);
+    }, { sourceRepository: f.source.repository, profileDigest });
+    assert.ok(result.error); assert.equal(await f.electron.evaluate(() => (globalThis as any).trialFixture.queries.length), beforeReads);
+    assert.deepEqual([(await f.calls()).length, (await f.calls('claude')).length], beforeCalls); assert.equal(result.trial!.activeId, null);
+    return result.error;
+  };
+  const initial = await prepare(); assert.match(await displayed(), /Codex/);
+  settings.profiles.codex_trial = { ...settings.profiles.claude_trial }; await reload('conversation');
+  await expect(page.locator('#conversation-profile option[value="codex_trial"]')).toContainText('Claude');
+  await page.locator('#trial-tab').click(); await expect(page.locator('#trial-profile option:checked')).toContainText('Claude');
+  await expect(page.locator('#trial-proposal')).toBeHidden(); assert.match(await rejectOldStart(initial.profileDigest), /Provider settings changed/);
+  assert.equal((await f.trial()).trial!.records.length, 0);
+  await page.screenshot({ path: join(proof!, 'trial-15-reloaded-provider.png'), fullPage: true });
+  await f.start(); await f.finished(); assert.equal((await f.last()).provider.provider, 'claude');
+  const beforeModel = await prepare(); settings.profiles.codex_trial.model = 'fictional-revised-model'; settings.profiles.codex_trial.effort = 'high'; await reload('conversation');
+  await page.locator('#trial-tab').click(); await expect(page.locator('#trial-profile option:checked')).toContainText('fictional-revised-model · high');
+  await expect(page.locator('#trial-proposal')).toBeHidden(); assert.match(await rejectOldStart(beforeModel.profileDigest), /Provider settings changed/);
+  assert.equal((await f.trial()).trial!.currentIds.length, 0);
+  await f.start(); await f.finished(); const changed = await f.last();
+  assert.equal(changed.provider.model, 'fictional-revised-model'); assert.equal(changed.provider.effort, 'high');
+  assert.equal(changed.profileDigest, (await f.trial()).profiles.find(profile => profile.name === 'codex_trial')!.digest);
+  const requests = (await f.calls('claude')).filter(args => args.includes('--print'));
+  assert.ok(requests.slice(-2).every(args => args[args.indexOf('--model') + 1] === 'fictional-revised-model' && args[args.indexOf('--effort') + 1] === 'high'));
+  await page.screenshot({ path: join(proof!, 'trial-16-matching-model-effort.png'), fullPage: true });
+  const removed = await prepare(); delete settings.profiles.codex_trial; await reload('trial');
+  await expect(page.locator('#trial-profile')).toHaveValue(''); await expect(page.locator('#trial-start')).toBeDisabled(); await expect(page.locator('#trial-proposal')).toBeHidden();
+  assert.match(await rejectOldStart(removed.profileDigest), /choose a named profile/);
+  await page.locator('#conversation-tab').click(); await expect(page.locator('#conversation-profile option[value="codex_trial"]')).toHaveCount(0);
+  await page.screenshot({ path: join(proof!, 'trial-17-removed-profile.png'), fullPage: true });
+  assert.equal(await f.electron.evaluate(() => (globalThis as any).trialFixture.mutations), 0); assert.deepEqual(f.errors, []); assert.deepEqual(f.requests, []);
+});

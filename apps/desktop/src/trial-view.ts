@@ -1,5 +1,5 @@
 import type { DocumentSnapshot, EditorResult } from './protocol.js';
-import type { TrialBridge, TrialRecord, TrialResult, TrialSelection, TrialSnapshot } from './trial-protocol.js';
+import type { TrialBridge, TrialProfile, TrialRecord, TrialResult, TrialSelection, TrialSnapshot } from './trial-protocol.js';
 
 const element = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text = '', className = ''): HTMLElementTagNameMap[K] => { const value = document.createElement(tag); value.textContent = text; value.className = className; return value; };
@@ -12,9 +12,11 @@ export function trialView(bridge: TrialBridge, perform: (operation: () => Promis
   const repository = element<HTMLInputElement>('trial-repository'), pr = element<HTMLInputElement>('trial-pr'), profile = element<HTMLSelectElement>('trial-profile');
   const error = (text = ''): void => { element('trial-error').textContent = text; element('trial-error').hidden = !text; };
   const selection = (): TrialSelection => ({ repository: repository.value.trim(), pr: Number(pr.value), profile: profile.value, sourceRepository });
+  const profileDigest = (): string => profile.selectedOptions[0]?.dataset.digest ?? '';
   function accept(snapshot: TrialSnapshot | null): void {
     if (snapshot && (snapshot.documentSessionId !== getDocument()?.sessionId || current && snapshot.revision < current.revision)) return;
     current = snapshot;
+    if (!snapshot?.proposal) proposalKey = '';
     if (snapshot?.proposal && JSON.stringify(snapshot.proposal) !== proposalKey) {
       proposalKey = JSON.stringify(snapshot.proposal);
       const proposal = snapshot.proposal;
@@ -23,14 +25,18 @@ export function trialView(bridge: TrialBridge, perform: (operation: () => Promis
     }
     renderState();
   }
-  function receive(result: TrialResult): boolean {
-    const key = JSON.stringify(result.profiles);
+  function updateProfiles(profiles: TrialProfile[]): void {
+    const key = JSON.stringify(profiles);
     if (key !== profilesKey) {
-      const previous = profile.value;
+      const previous = profile.value, previousDigest = profileDigest();
       profile.replaceChildren(node('option', 'Choose a provider profile')); profile.options[0]!.value = '';
-      for (const item of result.profiles) { const option = node('option', `${item.name} · ${item.provider === 'codex' ? 'Codex' : 'Claude'} · ${item.model}${item.effort ? ` · ${item.effort}` : ''}`); option.value = item.name; profile.append(option); }
-      profile.value = result.profiles.some(item => item.name === previous) ? previous : ''; profilesKey = key;
+      for (const item of profiles) { const option = node('option', `${item.name} · ${item.provider === 'codex' ? 'Codex' : 'Claude'} · ${item.model}${item.effort ? ` · ${item.effort}` : ''}`); option.value = item.name; option.dataset.digest = item.digest; profile.append(option); }
+      profile.value = profiles.some(item => item.name === previous) ? previous : ''; profilesKey = key;
+      if (previousDigest && previousDigest !== profileDigest()) { localChanged = true; error('Provider settings changed. Review the displayed provider and model, then press Start again.'); }
     }
+  }
+  function receive(result: TrialResult): boolean {
+    updateProfiles(result.profiles);
     accept(result.trial); if (result.error) error(result.error);
     return !result.error && !result.cancelled;
   }
@@ -53,7 +59,7 @@ export function trialView(bridge: TrialBridge, perform: (operation: () => Promis
       error();
       await perform(async () => {
         const document = getDocument()!, chosen = selection();
-        const result = await bridge[kind]({ sessionId: document.sessionId, revision: document.revision }, chosen);
+        const result = await bridge[kind]({ sessionId: document.sessionId, revision: document.revision }, chosen, profileDigest());
         if (receive(result) && kind === 'start') { selectedId = result.trial?.activeId ?? ''; localChanged = false; resultKey = ''; renderState(); }
         return result;
       });
@@ -63,12 +69,8 @@ export function trialView(bridge: TrialBridge, perform: (operation: () => Promis
   element<HTMLSelectElement>('trial-history').onchange = event => { selectedId = (event.target as HTMLSelectElement).value; resultKey = ''; renderState(); };
   element('trial-refresh').onclick = () => { if (current && selectedId) void action(() => bridge.refresh(current!.documentSessionId, selectedId)); };
   element('trial-export').onclick = () => { if (current && selectedId) void action(async () => { const result = await bridge.exportFixture(current!.documentSessionId, selectedId) as TrialResult & { exportedDirectory?: string }; if (result.exportedDirectory) { element('trial-exported').textContent = `Offline fixture and provenance saved in ${result.exportedDirectory}`; element('trial-exported').hidden = false; } return result; }); };
-  bridge.onChange(snapshot => {
-    if (snapshot.proposal?.preparedBy === 'assistant' && JSON.stringify(snapshot.proposal) !== proposalKey) {
-      // Discuss may have loaded profiles since this view last read them.
-      void bridge.current().then(receive).catch(() => error('The prepared proposal could not be loaded. Open Live trial and load provider settings again.'));
-    } else accept(snapshot);
-  });
+  bridge.onChange(accept);
+  bridge.onProfilesChange(profiles => { updateProfiles(profiles); renderState(); });
 
   function resultContent(record: TrialRecord): HTMLElement[] {
     const currentInputs = current?.currentIds.includes(record.id) && !localChanged && !pending && JSON.stringify(selection()) === JSON.stringify(record.selection);

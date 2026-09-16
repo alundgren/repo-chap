@@ -165,9 +165,14 @@ test('failed Refresh clears remote knowledge and changed named settings invalida
   assert.equal(refreshed.remote.status, 'unknown'); assert.equal(refreshed.status, 'completed');
   assert.equal(f.trials.snapshot().currentIds.length, 0); assert.equal((await f.calls()).length, calls);
   f.auth(true); await f.trials.refresh(record.id); assert.equal(f.trials.snapshot().currentIds.length, 1);
+  f.trials.prepare(f.document.snapshot(), f.selection, f.source.profile, 'assistant');
+  assert.equal(f.trials.snapshot().proposal!.profileDigest, record.profileDigest);
   f.trials.profilesChanged([{ ...f.source.profile, model: 'another-fictional-model' }]);
+  assert.equal(f.trials.snapshot().proposal, null);
   assert.equal(f.trials.snapshot().currentIds.length, 0);
   assert.equal(f.trials.snapshot().records[0]!.provider.model, f.source.profile.model);
+  f.trials.prepare(f.document.snapshot(), f.selection, f.source.profile, 'assistant'); f.trials.profilesChanged([]);
+  assert.equal(f.trials.snapshot().proposal, null);
 });
 
 test('Refresh can be cancelled without discarding the completed provider result', async t => {

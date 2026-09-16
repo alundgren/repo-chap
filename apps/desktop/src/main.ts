@@ -10,7 +10,8 @@ import { AuthoringTools } from './authoring-tools.js';
 import type { AuthoringOperation } from './authoring-protocol.js';
 import { DocumentSession } from './documents.js';
 import { ConversationController } from './conversations.js';
-import { TrialController } from './trials.js';
+import { TrialController, trialProfileDigest } from './trials.js';
+import { publicProfile } from './trial-protocol.js';
 import { prepareLiveTrialTool } from './trial-tool.js';
 import type { TrialResult, TrialSelection } from './trial-protocol.js';
 import { captureConversationContext } from './conversation-context.js';
@@ -38,6 +39,14 @@ if (process.env.REPO_CHAP_DESKTOP_DATA) app.setPath('userData', resolve(process.
 function current(): EditorResult { return { snapshot: documents?.snapshot() ?? null }; }
 function currentConversation(): ConversationResult {
   return { ...current(), conversation: conversation?.snapshot() ?? null, profiles: profiles.map(({ provider, name, model, effort }) => ({ provider, name, model, ...(effort ? { effort } : {}) })) };
+}
+function trialProfiles() { return profiles.map(profile => ({ ...publicProfile(profile), digest: trialProfileDigest(profile) })); }
+function updateProfiles(next: ProviderProfile[]): void {
+  profiles = next; trials?.profilesChanged(next);
+  if (window && !window.isDestroyed()) {
+    window.webContents.send('conversation:profiles-changed', currentConversation().profiles);
+    window.webContents.send('trial:profiles-changed', trialProfiles());
+  }
 }
 function requireDocuments(token: DocumentToken): DocumentSession {
   if (!documents) throw new Error('Open a workflow first.');
@@ -119,7 +128,7 @@ registerConversation('load-profiles', async () => {
   if (choice.canceled || !choice.filePaths[0]) return { ...currentConversation(), cancelled: true };
   const next = await readProfiles(choice.filePaths[0]);
   if (next.some(profile => Buffer.byteLength(JSON.stringify(profile)) > 8192)) throw new Error('Each conversation profile must fit within 8 KiB.');
-  trials?.profilesChanged(next); profiles = next;
+  updateProfiles(next);
 });
 registerConversation('select-profile', async (documentSessionId: string, name: string) => {
   if (!documents || documentSessionId !== documents.sessionId) throw new Error('The open workflow changed. Choose its provider again.');
@@ -240,7 +249,7 @@ register('close', async (token: DocumentToken | null, discard: boolean) => {
 });
 
 function currentTrial(): TrialResult {
-  return { ...current(), trial: trials?.snapshot() ?? null, profiles: currentConversation().profiles };
+  return { ...current(), trial: trials?.snapshot() ?? null, profiles: trialProfiles() };
 }
 function trialSources(source: DocumentSession): { id: string; path: string }[] {
   return [source.repositoryRoot, ...[...sourceRepositories].filter(path => path !== source.repositoryRoot)].map((path, index) => ({ id: index ? `source-${index}` : 'workspace', path }));
@@ -270,6 +279,11 @@ function trialProfile(selection: TrialSelection): ProviderProfile {
   if (!sourceRepositories.has(selection.sourceRepository)) throw new Error('Choose the local Git source using the source picker first.');
   return profile;
 }
+function displayedTrialProfile(selection: TrialSelection, expectedDigest: string): ProviderProfile {
+  const profile = trialProfile(selection);
+  if (expectedDigest !== trialProfileDigest(profile)) throw new Error('Provider settings changed. Review the displayed provider and model, then press Start again.');
+  return profile;
+}
 function registerTrial(name: string, operation: (...args: any[]) => Promise<void | TrialResult> | void | TrialResult, queued = true): void {
   ipcMain.handle(`trial:${name}`, (event, ...args: unknown[]) => {
     if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame?.url !== pageUrl) throw new Error('This trial operation is unavailable.');
@@ -288,7 +302,7 @@ registerTrial('load-profiles', async () => {
   if (choice.canceled || !choice.filePaths[0]) return { ...currentTrial(), cancelled: true };
   const next = await readProfiles(choice.filePaths[0]);
   if (next.some(profile => Buffer.byteLength(JSON.stringify(profile)) > 8192)) throw new Error('Each provider profile must fit within 8 KiB.');
-  trials?.profilesChanged(next); profiles = next;
+  updateProfiles(next);
 });
 registerTrial('choose-source', async (id: string) => {
   if (id !== documents?.sessionId || !window) throw new Error('Open the workflow before choosing its local Git source.');
@@ -297,13 +311,13 @@ registerTrial('choose-source', async (id: string) => {
   const sourceRepository = await realpath(choice.filePaths[0]); sourceRepositories.add(sourceRepository); trials?.invalidate();
   return { ...currentTrial(), sourceRepository };
 });
-registerTrial('prepare', async (token: DocumentToken, selection: TrialSelection) => {
+registerTrial('prepare', async (token: DocumentToken, selection: TrialSelection, profileDigest: string) => {
   const source = requireDocuments(token); const controller = await trialController(); source.assertCurrent(token);
-  controller.prepare(source.snapshot(), selection, trialProfile(selection));
+  controller.prepare(source.snapshot(), selection, displayedTrialProfile(selection, profileDigest));
 });
-registerTrial('start', async (token: DocumentToken, selection: TrialSelection) => {
+registerTrial('start', async (token: DocumentToken, selection: TrialSelection, profileDigest: string) => {
   const source = requireDocuments(token); const controller = await trialController(); source.assertCurrent(token);
-  controller.start(source.snapshot(), selection, trialProfile(selection));
+  controller.start(source.snapshot(), selection, displayedTrialProfile(selection, profileDigest));
 });
 registerTrial('invalidate', (id: string) => requireTrialSession(id).invalidate(), false);
 registerTrial('cancel', async (id: string, trialId: string) => requireTrialSession(id).cancel(trialId), false);

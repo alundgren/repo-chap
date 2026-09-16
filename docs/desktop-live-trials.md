@@ -27,6 +27,11 @@ receipts. Stale tokens, rejected input, cancellation and an exhausted receipt
 limit reject preparation. After an assistant edit, the operation uses the latest
 authoring context token. A successful result says `prepared: true, started: false`;
 the person reviews the populated Live trial form and presses Start separately.
+Reloading settings in either task view updates both profile lists. Prepare and
+Start carry the exact displayed settings identity; an outdated request rejects
+before any GitHub or provider call and requires another explicit Start. Changing
+or removing a prepared profile clears that proposal. A retained result continues
+to identify the settings used by its actual run.
 
 ## Retained evidence
 

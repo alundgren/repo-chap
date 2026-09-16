@@ -73,4 +73,5 @@ export interface ConversationBridge {
   fresh(conversationId: string): Promise<ConversationResult>;
   answer(conversationId: string, turnId: string, requestId: string, answer: ConversationInputAnswer): Promise<ConversationResult>;
   onChange(callback: (snapshot: ConversationSnapshot) => void): () => void;
+  onProfilesChange(callback: (profiles: ConversationProvider[]) => void): () => void;
 }
