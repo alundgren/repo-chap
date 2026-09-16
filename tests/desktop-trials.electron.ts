@@ -12,7 +12,7 @@ if (!proof) throw new Error('Set REPO_CHAP_DESKTOP_PROOF to a private proof dire
 await mkdir(proof, { recursive: true });
 const packaged = process.env.REPO_CHAP_DESKTOP_EXECUTABLE;
 const executablePath = packaged ?? createRequire(resolve('apps/desktop/package.json'))('electron') as string;
-async function launch(t: { after(callback: () => Promise<void>): void }, name: string) {
+async function launch(t: { after(callback: () => Promise<void>): void }, name: string, loadProfiles = true) {
   const source = await setup();
   for (const file of source.pkg.files) { await mkdir(dirname(join(source.repository, file.path)), { recursive: true }); await writeFile(join(source.repository, file.path), file.text); }
   const codexMode = join(source.temporary, 'codex.mode'), claudeMode = join(source.temporary, 'claude.mode');
@@ -25,7 +25,7 @@ async function launch(t: { after(callback: () => Promise<void>): void }, name: s
   for (const provider of ['codex', 'claude']) {
     const executable = join(source.temporary, `${provider}-chat`), modeFile = join(source.temporary, `${provider}-chat.mode`);
     await writeFile(modeFile, 'plain');
-    await writeFile(executable, `#!${process.execPath}\nglobal.fixture=${JSON.stringify({ provider, modeFile, noTools: true, log: join(source.temporary, `${provider}-chat.jsonl`), childPid: join(source.temporary, `${provider}-chat.pid`) })};require(${JSON.stringify(resolve('tests/helpers/fake-conversation.cjs'))});`, { mode: 0o700 });
+    await writeFile(executable, `#!${process.execPath}\nglobal.fixture=${JSON.stringify({ provider, modeFile, planFile: join(source.temporary, `${provider}-plan.json`), noTools: true, log: join(source.temporary, `${provider}-chat.jsonl`), childPid: join(source.temporary, `${provider}-chat.pid`) })};require(${JSON.stringify(resolve('tests/helpers/fake-conversation.cjs'))});`, { mode: 0o700 });
     profiles[`${provider}_author`] = { ...profile, provider, executable, timeoutMs: 30_000, maxOutputBytes: 4 * 1024 * 1024 };
   }
   await writeFile(source.settings, JSON.stringify({ schemaVersion: 1, profiles }), { mode: 0o600 });
@@ -75,8 +75,9 @@ async function launch(t: { after(callback: () => Promise<void>): void }, name: s
     await electron.evaluate(({ BrowserWindow }) => { for (const window of BrowserWindow.getAllWindows()) window.destroy(); }).catch(() => {}); await electron.close().catch(() => {}); await source.cleanup();
   });
   await expect(page.locator('#validation-title')).toHaveText('Validation passed');
-  await page.locator('#trial-tab').click(); await pick(source.settings); await page.locator('#trial-load-profiles').click();
-  await page.locator('#trial-repository').fill('reef-labs/paperboat'); await page.locator('#trial-pr').fill('42'); await page.locator('#trial-profile').selectOption('codex_trial');
+  await page.locator('#trial-tab').click();
+  if (loadProfiles) { await pick(source.settings); await page.locator('#trial-load-profiles').click(); await page.locator('#trial-profile').selectOption('codex_trial'); }
+  await page.locator('#trial-repository').fill('reef-labs/paperboat'); await page.locator('#trial-pr').fill('42');
   return { source, page, electron, trial, last, calls, pick, mode, finished, start, errors, requests };
 }
 
@@ -165,4 +166,44 @@ test('Electron explains auth, partial reads and provider failure, and cancels ch
   await page.getByRole('dialog').getByRole('button', { name: 'Stop and close' }).click(); await expect.poll(() => page.isClosed()).toBe(true);
   assert.equal(JSON.parse(await readFile(closing.recordPath, 'utf8')).status, 'cancelled');
   assert.deepEqual(f.errors, []); assert.deepEqual(f.requests, []);
+});
+
+for (const provider of ['codex', 'claude'] as const) test(`Electron ${provider} prepares through actual tools, preserves pending input and requires human Start`, { timeout: 150_000 }, async t => {
+  const f = await launch(t, `trial-${provider}-proposal`, false), { page } = f;
+  const reviewPath = f.source.pkg.files.find(file => file.path.endsWith('/review.md'))!.path;
+  const chatCalls = async () => (await readFile(join(f.source.temporary, `${provider}-chat.jsonl`), 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const replies = async () => (await chatCalls()).filter(item => item.authoringResult).map(item => item.authoringResult);
+  const send = async (name: string, steps: unknown[]) => {
+    await writeFile(join(f.source.temporary, `${provider}-plan.json`), JSON.stringify({ id: name, steps })); await writeFile(join(f.source.temporary, `${provider}-chat.mode`), 'author');
+    await page.locator('#conversation-question').fill(name); await page.locator('#conversation-send').click();
+  };
+  const done = () => expect.poll(() => page.evaluate(async () => (await window.repoChapConversation.current()).conversation?.history.findLast(entry => entry.kind === 'turn')?.status), { timeout: 20_000 }).toBe('completed');
+  const proposal = { tool: 'prepare_live_trial', arguments: { repository: 'reef-labs/paperboat', pr: 42, profile: `${provider}_trial`, sourceId: 'workspace' } };
+  await page.locator('#conversation-tab').click(); await f.pick(f.source.settings); await page.locator('#conversation-load-profiles').click(); await page.locator('#conversation-profile').selectOption(`${provider}_author`); await page.locator('#conversation-use-profile').click();
+  await send('Prepare after an unsaved edit', [
+    { action: { kind: 'edit', changes: [{ path: reviewPath, text: '# Assistant staged review\nKeep this unsaved.\n' }] } },
+    { ...proposal, arguments: { ...proposal.arguments, profile: 'unknown-profile' } },
+    { ...proposal, arguments: { ...proposal.arguments, sourceId: 'unapproved-source' } }, proposal,
+  ]); await done();
+  let results = await replies(); assert.equal(results[1].prepared, false); assert.equal(results[2].prepared, false); assert.equal(results[3].prepared, true); assert.equal(results[3].started, false);
+  const prepared = (await f.trial()).trial!.proposal!; assert.equal(prepared.preparedBy, 'assistant'); assert.equal(prepared.document.revision, (await f.trial()).snapshot!.revision);
+  assert.equal((await f.calls()).length, 0); assert.equal((await f.calls('claude')).length, 0); assert.equal(await f.electron.evaluate(() => (globalThis as any).trialFixture.queries.length), 0);
+  assert.notEqual(await readFile(join(f.source.repository, reviewPath), 'utf8'), '# Assistant staged review\nKeep this unsaved.\n');
+  await page.locator('#trial-tab').click(); await expect(page.locator('#trial-proposal')).toContainText('Prepared only'); await expect(page.locator('#trial-profile')).toHaveValue(`${provider}_trial`);
+  await page.screenshot({ path: join(proof!, `trial-13-${provider}-assistant-proposal.png`), fullPage: true });
+  await page.locator('#trial-start').focus(); await page.keyboard.press('Enter'); await f.finished(); const retained = await f.last();
+  assert.equal(retained.document.revision, prepared.document.revision); assert.equal(retained.provider.provider, provider);
+  const beforeCalls = (await f.calls(provider)).length, beforeReads = await f.electron.evaluate(() => (globalThis as any).trialFixture.queries.length);
+  await page.locator('#conversation-tab').click(); const gate = join(f.source.temporary, 'capture-proposal');
+  await send('Preserve text typed after Send', [{ ...proposal, gate }]);
+  await expect.poll(async () => (await chatCalls()).some(item => item.waitingForStep === 0)).toBe(true);
+  await page.locator('#source-tab').click(); await page.getByRole('button', { name: reviewPath, exact: true }).first().click(); await page.locator('#source').fill('# Newer human review\nPreserve these bytes.\n');
+  await writeFile(gate, 'continue'); await done(); results = await replies(); assert.equal(results.at(-1).prepared, false); assert.equal(results.at(-1).started, false);
+  assert.equal((await f.trial()).snapshot!.files.find(file => file.path === reviewPath)!.text, '# Newer human review\nPreserve these bytes.\n');
+  assert.equal((await f.trial()).trial!.proposal, null); assert.equal((await f.last()).id, retained.id);
+  await page.locator('#conversation-tab').click(); await page.locator('#conversation-fresh').click();
+  assert.equal((await f.last()).id, retained.id); assert.equal(JSON.parse(await readFile(retained.recordPath, 'utf8')).id, retained.id);
+  assert.equal((await f.calls(provider)).length, beforeCalls); assert.equal(await f.electron.evaluate(() => (globalThis as any).trialFixture.queries.length), beforeReads);
+  assert.equal(await f.electron.evaluate(() => (globalThis as any).trialFixture.mutations), 0); assert.deepEqual(f.errors, []); assert.deepEqual(f.requests, []);
+  await page.screenshot({ path: join(proof!, `trial-14-${provider}-preserved-evidence.png`), fullPage: true });
 });

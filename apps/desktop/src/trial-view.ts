@@ -63,7 +63,12 @@ export function trialView(bridge: TrialBridge, perform: (operation: () => Promis
   element<HTMLSelectElement>('trial-history').onchange = event => { selectedId = (event.target as HTMLSelectElement).value; resultKey = ''; renderState(); };
   element('trial-refresh').onclick = () => { if (current && selectedId) void action(() => bridge.refresh(current!.documentSessionId, selectedId)); };
   element('trial-export').onclick = () => { if (current && selectedId) void action(async () => { const result = await bridge.exportFixture(current!.documentSessionId, selectedId) as TrialResult & { exportedDirectory?: string }; if (result.exportedDirectory) { element('trial-exported').textContent = `Offline fixture and provenance saved in ${result.exportedDirectory}`; element('trial-exported').hidden = false; } return result; }); };
-  bridge.onChange(accept);
+  bridge.onChange(snapshot => {
+    if (snapshot.proposal?.preparedBy === 'assistant' && JSON.stringify(snapshot.proposal) !== proposalKey) {
+      // Discuss may have loaded profiles since this view last read them.
+      void bridge.current().then(receive).catch(() => error('The prepared proposal could not be loaded. Open Live trial and load provider settings again.'));
+    } else accept(snapshot);
+  });
 
   function resultContent(record: TrialRecord): HTMLElement[] {
     const currentInputs = current?.currentIds.includes(record.id) && !localChanged && !pending && JSON.stringify(selection()) === JSON.stringify(record.selection);

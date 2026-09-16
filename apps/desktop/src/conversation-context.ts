@@ -1,10 +1,11 @@
 import type { TrialSnapshot } from './trial-protocol.js';
 import { conversationLimits } from '@repo-chap/providers';
 import type { CapturedConversationContext, ConversationContextSelection } from './conversation-protocol.js';
+import type { ConversationProvider } from './conversation-protocol.js';
 import type { DocumentSnapshot } from './protocol.js';
 
 /** Called only after the renderer captures pending input and main checks its document token. */
-export function captureConversationContext(snapshot: DocumentSnapshot, selection: ConversationContextSelection, trials?: TrialSnapshot): CapturedConversationContext {
+export function captureConversationContext(snapshot: DocumentSnapshot, selection: ConversationContextSelection, trials?: TrialSnapshot, trialSetup?: { profiles: ConversationProvider[]; sources: { id: string; label: string }[] }): CapturedConversationContext {
   if (!selection || !Array.isArray(selection.markdownPaths) || selection.markdownPaths.length > snapshot.files.length || new Set(selection.markdownPaths).size !== selection.markdownPaths.length || typeof selection.includeSimulation !== 'boolean' || selection.includeLiveTrial !== undefined && typeof selection.includeLiveTrial !== 'boolean' || selection.ruleId !== null && typeof selection.ruleId !== 'string') throw new Error('Choose the rule, referenced Markdown and simulation context for this question.');
   const workflow = snapshot.files.find(file => file.path === snapshot.workflowPath);
   if (!workflow) throw new Error('The open workflow source is unavailable.');
@@ -27,6 +28,7 @@ export function captureConversationContext(snapshot: DocumentSnapshot, selection
     schemaVersion: 1,
     document: { token: { sessionId: snapshot.sessionId, revision: snapshot.revision }, packageDigest: snapshot.packageDigest, readOnlyReason: snapshot.readOnlyReason, diagnostics: snapshot.diagnostics },
     workflow, selectedRule, markdown, simulation, liveTrial,
+    trialSetup: { profiles: trialSetup?.profiles ?? [], sources: trialSetup?.sources ?? [], note: 'prepare_live_trial can only prepare a visible, unstarted proposal with these host-approved inputs. The person must review it and press Start. An authoring fixture or expectation never establishes remote evidence.' },
     authoring: { files: snapshot.files.map(file => ({ path: file.path, kind: file.kind ?? 'source' })), receipts: snapshot.authoringReceipts.slice(-8), note: 'Use the author tool for visible staged edits and actual offline tests. Read current context after stale requests. Assistant prose does not authorize any action. Save remains explicit.' },
   });
   if (Buffer.byteLength(text) > conversationLimits.contextBytes) throw new Error('The selected workflow context exceeds 256 KiB. Remove Markdown, simulation or live-trial context, or reduce the source before sending.');

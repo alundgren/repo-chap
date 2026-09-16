@@ -212,6 +212,11 @@ and model, local Git source, and required live calls before Start. Prepare propo
 shows an unstarted proposal without contacting GitHub or a provider. Only Start
 begins classification and review. The call summary says that the selected provider
 may charge usage. Source saving and daemon activation are separate operations.
+Both assistants can populate an unstarted proposal after capturing pending human
+input. The form labels it as prepared only and shows the chosen profile, source
+and draft revision. Preparation failures preserve input and explain the rejection;
+the assistant cannot press Start. Profiles loaded in Discuss are available when
+the prepared proposal appears in Live trial.
 
 The result leads with completion status and the analysis decision. Actual findings
 and missing evidence precede detailed identities. Tested head, target base and

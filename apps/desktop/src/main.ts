@@ -11,6 +11,7 @@ import type { AuthoringOperation } from './authoring-protocol.js';
 import { DocumentSession } from './documents.js';
 import { ConversationController } from './conversations.js';
 import { TrialController } from './trials.js';
+import { prepareLiveTrialTool } from './trial-tool.js';
 import type { TrialResult, TrialSelection } from './trial-protocol.js';
 import { captureConversationContext } from './conversation-context.js';
 import type { ConversationContextSelection, ConversationResult } from './conversation-protocol.js';
@@ -91,7 +92,20 @@ async function startConversation(profile: ProviderProfile): Promise<void> {
   const directory = await mkdtemp(join(parent, 'session-'));
   try {
     conversation = new ConversationController({
-      documentSessionId: documents.sessionId, workingDirectory: directory, profile, tools: () => authoring.tools(source),
+      documentSessionId: documents.sessionId, workingDirectory: directory, profile, tools: document => {
+        const tools = authoring.tools(source), sources = trialSources(source);
+        return [...tools, prepareLiveTrialTool(document, tools[0]!, async (token, input, signal) => {
+          const controller = await trialController();
+          if (signal.aborted) throw new Error('Cancelled before proposal preparation.');
+          if (documents !== source) throw new Error('The workflow was closed. Prepare a proposal for the open workflow.');
+          source.assertCurrent(token);
+          const selectedSource = sources.find(item => item.id === (input.sourceId ?? 'workspace'));
+          if (!selectedSource) throw new Error('Choose a local source ID from the captured trialSetup.');
+          const selection = { repository: input.repository, pr: input.pr, profile: input.profile, sourceRepository: selectedSource.path };
+          controller.prepare(source.snapshot(), selection, trialProfile(selection), 'assistant');
+          return controller.snapshot().proposal!;
+        })];
+      },
       onChange(snapshot) { if (window && !window.isDestroyed() && documents?.sessionId === snapshot.documentSessionId) window.webContents.send('conversation:changed', snapshot); },
     });
     conversationDirectory = directory;
@@ -116,7 +130,10 @@ registerConversation('select-profile', async (documentSessionId: string, name: s
 });
 registerConversation('send', (token: DocumentToken, prompt: string, selection: ConversationContextSelection) => {
   const source = requireDocuments(token), chat = requireConversation();
-  const captured = captureConversationContext(source.snapshot(), selection, trials?.snapshot());
+  const captured = captureConversationContext(source.snapshot(), selection, trials?.snapshot(), {
+    profiles: currentConversation().profiles,
+    sources: trialSources(source).map(({ id, path }) => ({ id, label: basename(path) })),
+  });
   void chat.send(prompt, captured);
 });
 // Replies and cancellation must remain available during pending or rejected document capture.
@@ -224,6 +241,9 @@ register('close', async (token: DocumentToken | null, discard: boolean) => {
 
 function currentTrial(): TrialResult {
   return { ...current(), trial: trials?.snapshot() ?? null, profiles: currentConversation().profiles };
+}
+function trialSources(source: DocumentSession): { id: string; path: string }[] {
+  return [source.repositoryRoot, ...[...sourceRepositories].filter(path => path !== source.repositoryRoot)].map((path, index) => ({ id: index ? `source-${index}` : 'workspace', path }));
 }
 async function trialController(): Promise<TrialController> {
   if (!documents) throw new Error('Open a workflow first.');

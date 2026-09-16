@@ -85,6 +85,7 @@ export class TrialController {
     if (document.sessionId !== current.sessionId || document.revision !== current.revision) throw new Error('The workflow changed. Prepare the trial for the current draft.');
     selection = selected(selection); validateProfile(profile);
     if (profile.name !== selection.profile) throw new Error('Choose a loaded provider profile.');
+    for (const record of this.records) if (canonicalJson(record.selection) !== canonicalJson(selection) || record.profileDigest !== digest(canonicalJson(profile))) record.invalidated = true;
     this.proposal = { document: { sessionId: document.sessionId, revision: document.revision }, selection, provider: publicProfile(profile), preparedBy };
     this.changed();
   }

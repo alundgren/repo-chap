@@ -48,18 +48,20 @@ const authoring = async () => {
     const step = plan.steps[index];
     if (step.gate) { save({ waitingForStep: index }); while (!fs.existsSync(step.gate)) await new Promise(resolve => setTimeout(resolve, 50)); }
     if (step.delayMs) { save({ waitingForStep: index }); await new Promise(resolve => setTimeout(resolve, step.delayMs)); }
-    const operation = step.duplicateOf !== undefined ? requests[step.duplicateOf] : { operationId: `${plan.id}-${index}`, expected: step.stale ? initial : token, action: step.action };
+    const operation = step.duplicateOf !== undefined ? requests[step.duplicateOf] : step.tool ? { ...step.arguments, expected: step.stale ? initial : token } : { operationId: `${plan.id}-${index}`, expected: step.stale ? initial : token, action: step.action };
+    const tool = step.tool ?? 'author';
     requests.push(operation);
     let response;
     if (provider === 'codex') {
       const id = 1000 + index;
       const waiting = new Promise(resolve => authoringReplies.set(id, resolve));
-      send({ id, method: 'item/tool/call', params: { threadId: session, turnId: 'turn-1', callId: `author-${index}`, tool: 'author', arguments: operation } });
+      send({ id, method: 'item/tool/call', params: { threadId: session, turnId: 'turn-1', callId: `author-${index}`, tool, arguments: operation } });
       response = await waiting;
       response = response.result.contentItems[0].text;
-    } else response = (await rpc(1000 + index, 'tools/call', { name: 'author', arguments: operation })).result.content[0].text;
+    } else response = (await rpc(1000 + index, 'tools/call', { name: tool, arguments: operation })).result.content[0].text;
     const result = JSON.parse(response); results.push(result); save({ authoringResult: result, step: index });
     if (result.context) token = result.context.token;
+    if (result.prepared) text('Prepared only. Review the proposal in Live trial and press Start when ready. ');
     if (result.data?.comparison) text(`The actual offline test ${result.data.comparison.passed ? 'passed' : 'failed'}: ${JSON.stringify(result.data.comparison.checks)}. `);
   }
   save({ authoringDone: true, results: results.length });
@@ -121,7 +123,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if ((message.id === 77 || message.id === 78) && pending) { pending = null; finish(); }
   } else {
     if (message.type === 'control_request' && message.request.subtype === 'initialize') send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: { account: { tokenSource: mode === 'login' ? 'none' : 'oauth', apiKeySource: 'none' } } } });
-    if (message.type === 'user') { currentInput = message.message.content; send({ type: 'system', subtype: 'init', session_id: session, tools: ['AskUserQuestion', ...(mode.startsWith('author') ? ['mcp__repo_chap__author'] : noTools ? [] : ['mcp__repo_chap__read_context'])], mcp_servers: [{ name: 'repo_chap', status: 'connected' }] }); void run(); }
+    if (message.type === 'user') { currentInput = message.message.content; send({ type: 'system', subtype: 'init', session_id: session, tools: ['AskUserQuestion', ...(mode.startsWith('author') ? [...new Set(JSON.parse(fs.readFileSync(global.fixture.planFile, 'utf8')).steps.map(step => `mcp__repo_chap__${step.tool ?? 'author'}`))] : noTools ? [] : ['mcp__repo_chap__read_context'])], mcp_servers: [{ name: 'repo_chap', status: 'connected' }] }); void run(); }
     if (message.type === 'control_response' && pending) { pending = null; finish(); }
   }
 });

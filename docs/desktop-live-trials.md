@@ -19,6 +19,15 @@ inspector text remains visible and blocks Start. Provider settings and normal
 local GitHub/provider login stay private; the app does not activate daemon
 configuration.
 
+Either assistant can call `prepare_live_trial` with a repository, PR and loaded
+profile name. Source IDs refer only to the workspace or directories already
+chosen with the picker. It captures pending human input through the host's
+read-only author operation and consumes one of that document session's 128
+receipts. Stale tokens, rejected input, cancellation and an exhausted receipt
+limit reject preparation. After an assistant edit, the operation uses the latest
+authoring context token. A successful result says `prepared: true, started: false`;
+the person reviews the populated Live trial form and presses Start separately.
+
 ## Retained evidence
 
 The shared `runAnalysis` API powers the CLI and desktop analysis. It uses
@@ -32,6 +41,9 @@ digest, provider settings identity, capture and source digests, head, target bas
 comparison base, validated findings and missing evidence. Actual token counters
 remain separate from estimates, including estimated monetary cost. Partial
 metadata or source evidence cannot become a clear analysis result.
+Exact draft currentness includes all loaded source and fixture bytes. Editing a
+loaded offline fixture therefore invalidates currentness conservatively, while
+the original live capture and validated provider payloads remain unchanged.
 
 The last GitHub read runs after completed analysis. The result says when its
 remote evidence was last checked. Later remote changes are unknown until the

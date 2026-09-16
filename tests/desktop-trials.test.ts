@@ -6,6 +6,8 @@ import { canonicalJson, digest, parseFixture } from '@repo-chap/workflow';
 import { GitHubReadError } from '@repo-chap/github';
 import type { Inspection } from '@repo-chap/github';
 import { DocumentSession } from '../apps/desktop/src/documents.ts';
+import { AuthoringTools } from '../apps/desktop/src/authoring-tools.ts';
+import { prepareLiveTrialTool } from '../apps/desktop/src/trial-tool.ts';
 import { TrialController, trialLimits } from '../apps/desktop/src/trials.ts';
 import { captureConversationContext } from '../apps/desktop/src/conversation-context.ts';
 import { setup, git } from './helpers/provider-fixture.ts';
@@ -34,6 +36,36 @@ async function fixture(t: { after(callback: () => Promise<void>): void }, mode =
 }
 async function waitFor(check: () => Promise<boolean>): Promise<void> { for (let index = 0; index < 150; index++) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 20)); } throw new Error('The expected provider activity did not start.'); }
 
+test('assistant proposals require a successful current capture and stay within the host receipt limit', async t => {
+  const f = await fixture(t); let mode = 'current';
+  const token = () => ({ sessionId: f.document.sessionId, revision: f.document.snapshot().revision });
+  const authoring = new AuthoringTools(() => f.document, id => {
+    void (async () => {
+      if (mode === 'pending') { authoring.reject(id, [{ field: 'reviewWaitSeconds', value: '' }]); return; }
+      if (mode === 'changed') await f.document.edit(f.document.snapshot(), f.document.workflowPath, f.document.snapshot().files.find(file => file.path === f.document.workflowPath)!.text + '\n');
+      await authoring.apply(id, f.document.snapshot()); authoring.confirm(id);
+    })();
+  });
+  const invoke = async () => {
+    const tool = prepareLiveTrialTool(token(), authoring.tools(f.document)[0]!, async (token, input) => {
+      f.document.assertCurrent(token); f.trials.prepare(f.document.snapshot(), { ...f.selection, ...input }, f.source.profile, 'assistant'); return f.trials.snapshot().proposal!;
+    });
+    return tool.execute({ repository: f.selection.repository, pr: 42, profile: f.selection.profile }, { id: 'fictional-tool-call', signal: new AbortController().signal });
+  };
+  mode = 'pending'; let response = await invoke(); assert.equal(response.isError, true); assert.equal(JSON.parse(response.text).prepared, false); assert.equal(f.trials.snapshot().proposal, null);
+  mode = 'changed'; response = await invoke(); assert.equal(response.isError, true); assert.equal(JSON.parse(response.text).prepared, false); assert.equal(f.trials.snapshot().proposal, null);
+  mode = 'current'; response = await invoke(); assert.equal(response.isError, undefined); assert.equal(JSON.parse(response.text).prepared, true); assert.equal(JSON.parse(response.text).started, false);
+  const prepared = f.trials.snapshot().proposal;
+  for (let index = f.document.snapshot().authoringReceipts.length; index < 128; index++) await f.document.author({ operationId: `fictional-read-${index}`, expected: token(), action: { kind: 'read', paths: [] } });
+  // The capture handler reports the host limit failure through the same renderer rejection path.
+  const limited = new AuthoringTools(() => f.document, id => { void authoringLimit(id); });
+  const authoringLimit = async (id: string) => { try { await limited.apply(id, f.document.snapshot()); limited.confirm(id); } catch { limited.reject(id, []); } };
+  const tool = prepareLiveTrialTool(token(), limited.tools(f.document)[0]!, async () => { throw new Error('Rejected capture must never prepare.'); });
+  response = await tool.execute({ repository: f.selection.repository, pr: 42, profile: f.selection.profile }, { id: 'fictional-limit-call', signal: new AbortController().signal });
+  assert.equal(response.isError, true); assert.match(response.text, /128 authoring receipts/); assert.equal(JSON.parse(response.text).prepared, false);
+  assert.deepEqual(f.trials.snapshot().proposal, prepared); assert.equal(f.reads(), 0); assert.equal((await f.calls()).length, 0);
+});
+
 for (const provider of ['codex', 'claude'] as const) test(`${provider} trial waits for explicit Start, pins unsaved content and retains actual read-only evidence`, async t => {
   const f = await fixture(t, 'valid', provider);
   const reviewPath = f.source.pkg.files.find(file => file.path.endsWith('/review.md'))!.path;
@@ -60,6 +92,8 @@ for (const provider of ['codex', 'claude'] as const) test(`${provider} trial wai
   assert.equal(context.simulation.status, 'none');
   const exported = await f.trials.fixture(record.id); assert.ok(parseFixture(JSON.parse(exported.text)).results!.review![0]!.payload);
   assert.equal(JSON.parse(exported.provenance).kind, 'explicit-live-trial-fixture-export');
+  f.trials.prepare(f.document.snapshot(), { ...f.selection, pr: 43 }, f.source.profile, 'assistant');
+  assert.equal(f.trials.snapshot().currentIds.length, 0); assert.equal(f.trials.snapshot().activeId, null);
   await f.trials.close(); const restored = new TrialController(f.options); await restored.restore(); assert.equal(restored.snapshot().records[0]!.id, record.id);
 });
 
