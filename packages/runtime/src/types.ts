@@ -41,7 +41,7 @@ export interface WaitTiming {
 export type RunStatus = 'ready' | 'running' | 'waiting' | 'blocked' | 'cancelled' | 'closed';
 export interface RunRecord {
   id: string; repositoryId: string; subjectKind: 'pull_request'; subjectId: string; number: number;
-  package: ArtifactRef; packageDigest: string; inspection: ArtifactRef; evidenceKey: string;
+  package: ArtifactRef; packageDigest: string; inspection: ArtifactRef; evidenceKey: string; observationKey?: string;
   headSha: string | null; baseSha: string | null; control: ControlState;
   status: RunStatus; reason: string; dueAt: number | null; nextAction: string | null;
   token: number; owner: string | null; leaseUntil: number | null; notesRevision: number;

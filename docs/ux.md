@@ -197,3 +197,10 @@ access loss clears visible readiness and retains the publication continuation;
 recovery does not require another model call for unchanged inputs. A terminal
 publication failure keeps its reason visible and exits local apply with failure
 even when the configured next action waits.
+
+Seeing the exact confirmed review or requested labels in a later GitHub poll
+does not mark that publication stale or charge for another analysis. The actual
+capture remains available, and concurrent human changes still invalidate current
+analysis. Cancellation during the final permission reads prevents the write;
+cancellation after a request started preserves its uncertain outcome for
+read-only reconciliation.

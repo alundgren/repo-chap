@@ -21,7 +21,9 @@ factories for repository-scoped `pull_requests:write`; labels require a separate
 write permission. The final target read uses the acquired operation credential;
 the complete evidence refresh uses the inspection credential for checks and
 other collections. Both reads finish before sending, followed by another current
-policy and independent lease check.
+policy and independent lease check. The lease check runs synchronously after
+the final asynchronous policy and profile reads, so cancellation, pause,
+migration or expiry during those reads prevents the request.
 
 `repo-chap apply --plan` runs analysis and retains the publication request without
 writing to GitHub. Normal apply prints the planned effect before dispatch.
@@ -73,7 +75,9 @@ the additive endpoint, and records a stale result when the PR changed.
 `PublicationReceipt` records the kind, semantic marker, expected and observed
 head/base revisions, remote reference, diagnostic, and independent outcome and
 freshness values. Review receipts retain coverage, verdict, and missing evidence.
-Label receipts list requested, observed, and preserved names.
+Label receipts list requested, observed, and preserved names. Review remote
+references also retain GitHub's `nodeId` when returned. This connects the REST
+receipt to the exact GraphQL review in subsequent observations.
 
 | Field | Values |
 | --- | --- |
@@ -103,6 +107,26 @@ Current input matching requires `run.evidenceAvailable`, matching effect/run
 evidence keys and expected head, plus the run's current analysis flags and pinned
 package when selecting the accepted result. An old confirmed receipt alone never
 establishes readiness after replacement analysis or migration.
+
+`run.observationKey` identifies the latest raw captured evidence. It is optional
+for older records, which use `run.evidenceKey` until their next observation.
+`run.evidenceKey` identifies the inputs used by analysis and effects. The keys
+can differ when a complete observation changes only because a confirmed
+publication became visible. Runtime retains the actual new inspection and raw
+observation without changing the analysis key or reserving another provider.
+Review additions must match the confirmed receipt's GraphQL node ID and the
+retained request's exact body, state and commit. Label additions must be among
+the confirmed requested names. Existing collection entries and all other
+evidence must match. Only collection page counts and the PR update timestamp
+associated with those proven additions are allowed to differ.
+
+A new human review, edited or copied review, unexpected or removed label,
+changed head/base, or incomplete collection invalidates the retained analysis.
+Subsequent configured actions still capture their actual current inspection and
+source artifacts. Their jobs bind those immutable references, the stable
+analysis key, package and revisions; artifact validation remains required.
+Consumers should use the shared current publication summary and accepted
+results, rather than comparing a raw observation digest to a historical receipt.
 
 Send attempts use independent leases and survive release of provider ownership.
 Only proven stale inputs invalidate analysis and request a fresh observation.

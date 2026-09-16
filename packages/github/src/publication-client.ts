@@ -19,7 +19,7 @@ function review(value: unknown, target: PublicationTarget): PublishedReview {
   const data = object(value), id = data.id, url = string(data.html_url), body = data.body;
   if (!Number.isSafeInteger(id) || Number(id) <= 0 || typeof body !== 'string' ||
     !url.startsWith(`https://github.com/${target.repository}/pull/${target.number}#`)) throw new Error('Invalid review identity.');
-  return { id: String(id), url, headSha: sha(data.commit_id), body, state: string(data.state) };
+  return { id: String(id), ...(data.node_id === undefined ? {} : { nodeId: string(data.node_id) }), url, headSha: sha(data.commit_id), body, state: string(data.state) };
 }
 export interface PublicationClientOptions {
   fetch?: typeof globalThis.fetch; signal?: AbortSignal; now?: () => number;

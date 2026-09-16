@@ -1,6 +1,6 @@
 import { canonicalJson, digest, validateActionPayload, type WorkflowPackage } from '@repo-chap/workflow';
 import { validateCitations, validateSourceBundle, type SourceBundle } from '@repo-chap/providers';
-import { validateTarget, type Inspection, type LabelPublication, type PublicationTarget, type PublicationReceipt, type ReviewPublication } from '@repo-chap/github';
+import { validateTarget, type Inspection, type LabelPublication, type Publication, type PublicationTarget, type PublicationReceipt, type ReviewPublication } from '@repo-chap/github';
 import type { AnalysisResult, EffectRecord, RunRecord } from './types.js';
 import { RuntimeError } from './artifacts.js';
 
@@ -16,6 +16,26 @@ export function summarizePublications(run: RunRecord, effects: EffectRecord[]): 
       currentAnalysisAvailable: run.evidenceAvailable && run.control.memory?.[kind === 'review.publish' ? 'reviewCurrent' : 'classificationCurrent'] === true,
       receipt };
   });
+}
+
+/** Confirmed output does not invalidate the analysis that produced it. All other evidence must match. */
+export function onlyPublicationChanges(previous: Inspection, current: Inspection, publications: { publication: Publication; receipt: PublicationReceipt }[]): boolean {
+  if (previous.status !== 'complete' || current.status !== 'complete' || previous.packageDigest !== current.packageDigest) return false;
+  const before = previous.evidence, after = structuredClone(current.evidence), pr = after.pullRequest;
+  if (!pr || !before.pullRequest) return false;
+  const matching = publications.filter(({ publication }) => publication.target.repositoryId === after.repository?.id && publication.target.pullRequestId === pr.id &&
+    publication.target.headSha === pr.headSha && publication.target.baseSha === pr.baseSha);
+  const reviews = after.reviews.items.filter(review => !before.reviews.items.some(prior => prior.id === review.id));
+  const labels = after.labels.items.filter(label => !before.labels.items.some(prior => prior.id === label.id));
+  if (!reviews.length && !labels.length || reviews.some(review => !matching.some(({ publication, receipt }) => publication.kind === 'review.publish' && review.id === receipt.remote?.nodeId &&
+    review.state === 'COMMENTED' && review.headSha === publication.target.headSha && review.body === publication.body)) ||
+    labels.some(label => !matching.some(({ publication }) => publication.kind === 'labels.set' && publication.labels.includes(label.name)))) return false;
+  after.reviews.items = after.reviews.items.filter(review => !reviews.includes(review));
+  after.labels.items = after.labels.items.filter(label => !labels.includes(label));
+  after.reviews.coverage.pages = before.reviews.coverage.pages;
+  after.labels.coverage.pages = before.labels.coverage.pages;
+  pr.updatedAt = before.pullRequest.updatedAt;
+  return canonicalJson(after) === canonicalJson(before);
 }
 
 interface Citation { path: string; side: 'base' | 'head'; startLine: number; endLine: number; explanation: string }
@@ -39,7 +59,6 @@ function validateInput(input: PublicationInput, uses: 'agent.review' | 'agent.cl
     job.package.digest !== digest(canonicalJson(pkg)) || job.inspection.digest !== digest(canonicalJson(inspection)) || job.sources.digest !== digest(canonicalJson(sources)) ||
     pkg.workflow.actions[job.actionId]?.uses !== uses || job.evidenceKey !== run.evidenceKey ||
     inspection.evidenceDigest !== digest(canonicalJson(inspection.evidence)) ||
-    run.evidenceKey !== digest(canonicalJson({ head: pr.headSha, base: pr.baseSha, evidence: inspection.evidenceDigest })) ||
     job.headSha !== run.headSha || job.baseSha !== run.baseSha || sources.headSha !== run.headSha || sources.baseSha !== run.baseSha || pr.headSha !== run.headSha || pr.baseSha !== run.baseSha ||
     inspection.evidence.revision.status !== 'stable' || pr.lifecycle !== 'open' || pr.draft ||
     run.control.memory?.[uses === 'agent.review' ? 'reviewCurrent' : 'classificationCurrent'] !== true)

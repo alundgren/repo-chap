@@ -15,7 +15,7 @@ export interface LabelPublication {
 }
 export type Publication = ReviewPublication | LabelPublication;
 export interface RemotePublicationTarget extends PublicationTarget { lifecycle: 'open' | 'closed'; draft: boolean }
-export interface PublishedReview { id: string; url: string; headSha: string; body: string; state: string }
+export interface PublishedReview { id: string; nodeId?: string; url: string; headSha: string; body: string; state: string }
 export type BeforePublicationSend = (readTarget: () => Promise<RemotePublicationTarget>) => Promise<boolean>;
 export interface PublicationRemote {
   target(target: PublicationTarget): Promise<RemotePublicationTarget>;
@@ -29,7 +29,7 @@ export interface PublicationReceipt {
   outcome: 'confirmed' | 'rejected' | 'unknown'; freshness: 'current' | 'stale' | 'unverified';
   reason: string; expectedHeadSha: string; observedHeadSha: string | null;
   expectedBaseSha: string; observedBaseSha: string | null; reobserve: boolean;
-  remote: { id: string; url: string } | null; analysis?: PublishedAnalysis;
+  remote: { id: string; nodeId?: string; url: string } | null; analysis?: PublishedAnalysis;
   labels?: { requested: string[]; observed: string[]; preserved: string[] };
   retryable: boolean; reconcileAfter?: number;
 }
@@ -53,7 +53,7 @@ function receipt(publication: Publication, outcome: PublicationReceipt['outcome'
   return { schemaVersion: 1, kind: publication.kind, marker: publication.marker, outcome, freshness, reason,
     expectedHeadSha: publication.target.headSha, observedHeadSha: observed?.headSha ?? null,
     expectedBaseSha: publication.target.baseSha, observedBaseSha: observed?.baseSha ?? null,
-    reobserve: freshness !== 'current', retryable: false, remote: remote ? { id: remote.id, url: remote.url } : null,
+    reobserve: freshness !== 'current', retryable: false, remote: remote ? { id: remote.id, ...(remote.nodeId ? { nodeId: remote.nodeId } : {}), url: remote.url } : null,
     ...(publication.kind === 'review.publish' ? { analysis: publication.analysis } : {
       labels: { requested: publication.labels, observed: labels ?? [], preserved: (labels ?? []).filter(name => !publication.labels.includes(name)) },
     }),

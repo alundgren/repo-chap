@@ -2,11 +2,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { lstat, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { prepareCaptureDirectory, validateTarget, type Inspection, type PublicationReceipt } from '@repo-chap/github';
+import { prepareCaptureDirectory, validateTarget, type Inspection, type Publication, type PublicationReceipt } from '@repo-chap/github';
 import { buildPackage, canonicalJson, digest, parseFixture, referencePath, supportedCapabilities, validateActionPayload, type ControlState, type Diagnostic, type WorkflowPackage } from '@repo-chap/workflow';
 import { readArtifact, readRepairResult, validateTestedCandidate, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
 import { applyPolicyDigest, requireApplyPolicy, type ApplyPolicy } from './policy.js';
 import { ArtifactStore, RuntimeError } from './artifacts.js';
+import { onlyPublicationChanges } from './publication.js';
 import { defaultLimits, type AnalysisJob, type AnalysisResult, type ArtifactRef, type Claim, type EffectRecord, type EffectRequest, type EffectState, type EffectLease, type EffectAttempt, type RepairAttemptJob, type RepairAttemptResult, type MigrationRecord, type Registration, type RepositoryRecord, type RunRecord, type RuntimeLimits, type SourceRegistration, type WorkflowVersion } from './types.js';
 
 const json = (value: unknown): string => canonicalJson(JSON.parse(JSON.stringify(value)));
@@ -271,19 +272,25 @@ export class RuntimeStore {
     if (inspection.evidence.repository?.id !== repo.id || inspection.evidence.requested.repository.toLowerCase() !== repo.name.toLowerCase()) throw new RuntimeError('Observation belongs to another repository.');
     const observation = inspection.fixture.observations[0]!;
     if (observation.headSha !== pr.headSha || observation.baseSha !== pr.baseSha || observation.evidenceDigest !== inspection.evidenceDigest) throw new RuntimeError('Observation revisions do not match its evidence.');
-    const ref = await this.artifacts.put(inspection), key = digest(json({ head: pr.headSha, base: pr.baseSha, evidence: inspection.evidenceDigest }));
+    const ref = await this.artifacts.put(inspection), observedKey = digest(json({ head: pr.headSha, base: pr.baseSha, evidence: inspection.evidenceDigest }));
+    const priorRow = this.db.prepare('SELECT data FROM runs WHERE repository_id=? AND subject_id=?').get(repo.id, pr.id);
+    const prior = priorRow ? decode<RunRecord>(priorRow) : null;
+    const publicationOnly = prior && await this.publicationEvidenceCurrent(prior.id, prior.evidenceKey, inspection);
     return this.transaction(() => {
       const row = this.db.prepare('SELECT data FROM runs WHERE repository_id=? AND subject_id=?').get(repo.id, pr.id);
       const currentRepo = this.repository(repo.id), pinned = row ? decode<RunRecord>(row).packageDigest : currentRepo.packageDigest;
       if (!pinned || inspection.packageDigest !== pinned) throw new StaleObservationError();
       let run: RunRecord;
+      const unchanged = row && prior && publicationOnly && decode<RunRecord>(row).inspection.digest === prior.inspection.digest &&
+        decode<RunRecord>(row).evidenceKey === prior.evidenceKey && decode<RunRecord>(row).packageDigest === prior.packageDigest;
+      const key = unchanged ? prior.evidenceKey : observedKey;
       if (!row) {
         run = { id: randomUUID(), repositoryId: repo.id, subjectKind: 'pull_request', subjectId: pr.id, number: pr.number,
-          package: currentRepo.package!, packageDigest: pinned, workflowVersionId: currentRepo.activeVersionId!, waitTiming: null, inspection: ref, evidenceKey: key, headSha: pr.headSha, baseSha: pr.baseSha, control: { memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } },
+          package: currentRepo.package!, packageDigest: pinned, workflowVersionId: currentRepo.activeVersionId!, waitTiming: null, inspection: ref, evidenceKey: key, observationKey: observedKey, headSha: pr.headSha, baseSha: pr.baseSha, control: { memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } },
           status: 'ready', reason: 'New PR observed.', dueAt: now, nextAction: null, token: 0, owner: null, leaseUntil: null, notesRevision: 0, retries: 0, steps: 0, agents: 0, suppression: null, evidenceAvailable: true, failedActions: {}, retryAction: null };
         this.db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run(run.id, repo.id, pr.id, json(run));
       } else {
-        run = decode(row); run.inspection = ref;
+        run = decode(row); run.inspection = ref; run.observationKey = observedKey;
         if (!run.evidenceAvailable && run.status !== 'cancelled') {
           if (run.evidenceKey === key && inspection.status === 'complete' && this.publicationContinuation(run)) {
             const saved = run.publication!;
@@ -308,6 +315,20 @@ export class RuntimeStore {
       this.db.prepare('INSERT INTO observations(run_id,artifact,observed_at) VALUES (?,?,?)').run(run.id, json(ref), now);
       return run;
     });
+  }
+  async publicationEvidenceCurrent(runId: string, evidenceKey: string, inspection: Inspection): Promise<boolean> {
+    const run = this.run(runId);
+    if (run.evidenceKey !== evidenceKey || inspection.packageDigest !== run.packageDigest) return false;
+    const observedKey = digest(json({ head: inspection.evidence.pullRequest?.headSha, base: inspection.evidence.pullRequest?.baseSha, evidence: inspection.evidenceDigest }));
+    if ((run.observationKey ?? run.evidenceKey) === observedKey) return true;
+    const publications: { publication: Publication; receipt: PublicationReceipt }[] = [];
+    for (const effect of this.effects(run.id)) {
+      const receipt = effect.receipt as PublicationReceipt | null;
+      if (effect.state !== 'confirmed' || effect.evidenceKey !== run.evidenceKey || !['review.publish', 'labels.set'].includes(effect.kind) || receipt?.outcome !== 'confirmed') continue;
+      const publication = await this.artifacts.get<Publication>(effect.payload);
+      if (publication.kind === effect.kind && publication.marker === receipt.marker) publications.push({ publication, receipt });
+    }
+    return onlyPublicationChanges(await this.artifacts.get<Inspection>(run.inspection), inspection, publications);
   }
   private invalidate(run: RunRecord, state: string, rejectPlanned = true): void {
     run.token++; run.owner = null; run.leaseUntil = null;

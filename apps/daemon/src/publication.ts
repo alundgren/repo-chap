@@ -77,8 +77,9 @@ export async function dispatchPublication(store: RuntimeStore, claim: Claim, act
     try { fresh = await inspectPullRequest(reader(), pkg, { repository: repo.name, pr: run.number, reviewers: repo.reviewers, previous: inspection }); }
     catch { throw new PublicationRemoteError('rejected', 'Current PR evidence could not be read before publication. Retry the retained result after refreshing access.', true); }
     if (fresh.status !== 'complete') throw new PublicationRemoteError('rejected', 'Current PR evidence is incomplete. Retry the retained publication after a complete read.', true);
-    if (fresh.evidenceDigest !== inspection.evidenceDigest) { inputsChanged = true; throw new PublicationRemoteError('rejected', 'PR evidence changed before publication. Reobserve before using the retained analysis.'); }
-    return store.effectCurrent(lease, now()) && !signal.aborted && await authorized();
+    if (!await store.publicationEvidenceCurrent(run.id, run.evidenceKey, fresh)) { inputsChanged = true; throw new PublicationRemoteError('rejected', 'PR evidence changed before publication. Reobserve before using the retained analysis.'); }
+    const permitted = await authorized();
+    return permitted && !signal.aborted && store.effectCurrent(lease, now());
   } };
   let receipt: PublicationReceipt;
   try {
