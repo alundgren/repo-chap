@@ -4,7 +4,7 @@ import { serveControl } from './control.js';
 import { loadInstallation } from './config.js';
 
 export { DaemonService, type DaemonDependencies } from './service.js';
-export { executeAnalysis, fetchSources, profileDigest } from './worker.js';
+export { executeAnalysis, fetchSources, executeRepair, fetchRepairSources, profileDigest } from './worker.js';
 export { readWorkflowCommit, fetchWorkflowCommit } from './source.js';
 export { requestControl, serveControl, handleControl, type ControlRequest, type ControlResponse } from './control.js';
 export async function startDaemon(directory: string, config: string): Promise<{ service: DaemonService; stop: () => Promise<void> }> {

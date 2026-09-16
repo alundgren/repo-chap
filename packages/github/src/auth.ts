@@ -45,7 +45,22 @@ export interface InstallationOptions {
   fetch?: typeof globalThis.fetch;
   now?: () => number;
 }
+export interface PushCredentials extends CredentialSource { repository: string; permission: 'contents:write' }
+export async function localPushCredentials(repository: string, options: Parameters<typeof localCredentials>[0] = {}): Promise<PushCredentials> {
+  validateRepository(repository);
+  return { ...await localCredentials(options), repository, permission: 'contents:write' };
+}
+export function installationPushCredentials(options: InstallationOptions, repository: string): PushCredentials {
+  validateRepository(repository);
+  return { ...installationToken(options, { contents: 'write', pull_requests: 'read' }, [repository.split('/')[1]!]), repository, permission: 'contents:write' };
+}
+function validateRepository(repository: string): void {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9-]*\/[a-zA-Z0-9_.-]+$/.test(repository)) throw new GitHubReadError('credentials');
+}
 export function installationCredentials(options: InstallationOptions): CredentialSource {
+  return installationToken(options, { contents: 'read', pull_requests: 'read', checks: 'read', statuses: 'read' });
+}
+function installationToken(options: InstallationOptions, permissions: Record<string, string>, repositories?: string[]): CredentialSource {
   if (!options.appId || !Number.isSafeInteger(options.installationId) || options.installationId < 1)
     throw new GitHubReadError('credentials');
   const vault = secrets(); vault.add(options.privateKey);
@@ -62,7 +77,7 @@ export function installationCredentials(options: InstallationOptions): Credentia
       const jwt = vault.add(`${unsigned}.${sign('RSA-SHA256', Buffer.from(unsigned), options.privateKey).toString('base64url')}`);
       const response = await request(`https://api.github.com/app/installations/${options.installationId}/access_tokens`, {
         method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
-        body: JSON.stringify({ permissions: { contents: 'read', pull_requests: 'read', checks: 'read', statuses: 'read' } }),
+        body: JSON.stringify({ permissions, ...(repositories ? { repositories } : {}) }),
         signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
       });
       if (!response.ok) {
@@ -78,9 +93,10 @@ export function installationCredentials(options: InstallationOptions): Credentia
         throw new GitHubReadError('credentials');
       }
       const text = await responseText(response, 65_536);
-      const data = JSON.parse(text) as { token?: unknown; expires_at?: unknown };
+      const data = JSON.parse(text) as { token?: unknown; expires_at?: unknown; permissions?: Record<string, unknown> };
       if (typeof data.token !== 'string' || !data.token || typeof data.expires_at !== 'string' || Date.parse(data.expires_at) <= now() + 60_000 || !Number.isFinite(Date.parse(data.expires_at)))
         throw new GitHubReadError('credentials');
+      if (permissions.contents === 'write' && data.permissions?.contents !== 'write') throw new GitHubReadError('credentials');
       cached = { token: vault.add(data.token), expires: Date.parse(data.expires_at) };
       return cached.token;
     } catch (error) {

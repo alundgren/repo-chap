@@ -15,6 +15,7 @@
   "dependencies": {
     "@repo-chap/workflow": "workspace:*",
     "@repo-chap/github": "workspace:*",
-    "@repo-chap/providers": "workspace:*"
+    "@repo-chap/providers": "workspace:*",
+    "@repo-chap/execution": "workspace:*"
   }
 }

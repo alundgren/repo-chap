@@ -17,8 +17,14 @@ export function remote(inspection: Inspection, count = 1) {
     else if (operation === 'InspectMetadata') data = { repository: { id: repo.id, nameWithOwner: repo.name, isPrivate: true, pullRequest: {
       id: `PR_${request.variables.number}`, number: request.variables.number, url: pr.url.replace(/\d+$/, String(request.variables.number)), title: pr.title, body: pr.body, author: { login: pr.author }, state: closed ? 'CLOSED' : 'OPEN', isDraft: draft,
       headRefOid: pr.headSha, baseRefOid: pr.baseSha, headRefName: pr.headRef, baseRefName: pr.baseRef, headRepository: { id: repo.id, nameWithOwner: repo.name },
-      createdAt: pr.createdAt, updatedAt: pr.updatedAt, mergeable: 'MERGEABLE', reviewDecision: null,
+      createdAt: pr.createdAt, updatedAt: pr.updatedAt, mergeable: pr.mergeability.toUpperCase(), reviewDecision: null,
     } } };
+    else if (operation === 'PushTarget') data = { repository: { id: repo.id, nameWithOwner: repo.name, defaultBranchRef: { name: 'main' }, pullRequest: {
+      id: pr.id, number: pr.number, state: closed ? 'CLOSED' : 'OPEN', isDraft: draft, headRefOid: pr.headSha, baseRefOid: pr.baseSha,
+      headRefName: pr.headRef, baseRefName: pr.baseRef, headRepository: pr.headRepository && { id: pr.headRepository.id, nameWithOwner: pr.headRepository.name },
+    } } };
+    else if (operation === 'InspectreviewThreads') data = { repository: { pullRequest: { reviewThreads: page(inspection.evidence.threads.items.map(thread => ({ id: thread.id, isResolved: thread.resolved, isOutdated: thread.outdated, path: thread.path, line: thread.line }))) } } };
+    else if (operation === 'InspectThreadComments') data = { node: { comments: page(inspection.evidence.threads.items.find(thread => thread.id === request.variables.id)!.comments.items.map(comment => ({ id: comment.id, author: { login: comment.author }, body: comment.body, createdAt: comment.createdAt, commit: comment.headSha && { oid: comment.headSha } }))) } };
     else if (operation === 'InspectChecks') data = { repository: { object: { statusCheckRollup: { contexts: page([]) } } } };
     else if (operation === 'Inspectreactions') data = { repository: { pullRequest: { reactions: page(reviewer ? [{ id: 'EYES_fictional', user: { login: 'willow-bot' }, content: 'EYES', createdAt: '2026-09-16T12:00:00Z' }] : []) } } };
     else if (operation.startsWith('Inspect')) data = { repository: { pullRequest: { [operation.slice(7)]: page([]) } } };

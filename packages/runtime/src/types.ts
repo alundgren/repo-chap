@@ -1,6 +1,7 @@
 import type { Capability, ControlState, Diagnostic, WorkflowPackage } from '@repo-chap/workflow';
 import type { Inspection } from '@repo-chap/github';
 import type { ProviderResult } from '@repo-chap/providers';
+import type { ArtifactRef as ExecutionArtifact, ExecutionPolicy, RepairResult } from '@repo-chap/execution';
 
 export interface ArtifactRef { id: string; digest: string; bytes: number }
 export interface RuntimeLimits {
@@ -48,6 +49,7 @@ export interface RunRecord {
   evidenceAvailable: boolean;
   failedActions: Record<string, string>; retryAction: string | null;
   workflowVersionId: string; waitTiming: WaitTiming | null;
+  repair?: { job: RepairAttemptJob; result: ExecutionArtifact; candidateSha: string | null; checksCurrent: boolean; pushEffectId: string | null } | null;
 }
 export interface Claim { runId: string; owner: string; token: number; until: number; evidenceKey: string; notesRevision: number }
 export interface AnalysisJob {
@@ -60,11 +62,17 @@ export interface AnalysisJob {
 export interface AnalysisResult {
   schemaVersion: 1; job: AnalysisJob; provider: ProviderResult;
 }
+export interface RepairAttemptJob extends Omit<AnalysisJob, 'sources'> {
+  kind: 'repair'; sources: ExecutionArtifact; policy: ExecutionPolicy; policyDigest: string; applyPolicyDigest: string;
+}
+export interface RepairAttemptResult { schemaVersion: 1; job: RepairAttemptJob; repair: RepairResult; reference: ExecutionArtifact }
 export interface EffectRequest {
   kind: string; destination: string; evidenceKey: string; payload: ArtifactRef; expectedRevision: string;
 }
 export type EffectState = 'planned' | 'sending' | 'confirmed' | 'rejected' | 'unknown';
 export interface EffectRecord extends EffectRequest { id: string; runId: string; token: number; state: EffectState; receipt: unknown | null }
+export interface EffectLease { effectId: string; runId: string; owner: string; token: number; until: number }
+export interface EffectAttempt { effectId: string; token: number; startedAt: number; finishedAt: number | null; state: EffectState; receipt: unknown | null }
 export interface Registration { id: string; name: string; package: WorkflowPackage; profile: string; reviewers: string[] }
 export interface SourceRegistration { id: string; name: string; workflowPath: string; branch: string | null; profile: string; reviewers: string[]; maximumCapabilities: Capability[] }
 export interface ObservationInput { repositoryId: string; inspection: Inspection; package: ArtifactRef }

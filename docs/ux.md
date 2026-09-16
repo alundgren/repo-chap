@@ -125,3 +125,16 @@ version, states that derived analysis was invalidated when needed, and confirms
 that existing waits, suppression, receipts and charges remain recorded. Help warns
 that migration stops active analysis. These are text controls with JSON equivalents;
 there is no new visual application flow.
+
+## Conditional push controls
+
+Daemon status and startup name analysis or apply mode. Apply is selected through
+private installation policies for named repositories. Inspect lists the tested
+candidate, required-check state, and each planned, sending, confirmed, rejected
+or unknown effect with its target and expected old commit. It does not present
+a planned push as success. JSON retains individual send attempts and receipts.
+
+A failed push keeps its tested candidate. Bounded retry returns to the push
+action and retains charges. Unknown outcomes stay visible and require read-only
+reconciliation; another or missing remote commit names the need for inspection.
+Repair and send limits explicitly ask for a human decision. No mode offers merge.

@@ -26,7 +26,8 @@ process.stdin.on('end', () => {
   if (['blocked', 'no_change'].includes(mode)) result = { schemaVersion: 1, outcome: mode, expectedHeadSha: data.sources.headSha,
     reason: mode === 'blocked' ? 'The product value is unknown; choose three or four.' : 'The requested behavior already exists.', threads, notesMarkdown: 'No candidate was prepared.' };
   else {
-    fs.writeFileSync('src/value.js', mode === 'leftover_conflict' ? '<<<<<<< HEAD\nexport const value = 3;\n=======\nexport const value = 4;\n>>>>>>> base\n' : mode === 'keep_head' ? 'export const value = 2;\n' : 'export const value = 3;\n');
+    const incremented = Number(/value = (\d+)/.exec(fs.readFileSync('src/value.js', 'utf8'))?.[1]) + 1;
+    fs.writeFileSync('src/value.js', mode === 'increment' ? `export const value = ${incremented};\n` : mode === 'leftover_conflict' ? '<<<<<<< HEAD\nexport const value = 3;\n=======\nexport const value = 4;\n>>>>>>> base\n' : mode === 'keep_head' ? 'export const value = 2;\n' : 'export const value = 3;\n');
     let paths = mode === 'keep_head' ? [] : ['src/value.js'];
     if (mode === 'outside_policy') { fs.mkdirSync('src-extra'); fs.writeFileSync('src-extra/unrelated.js', 'changed\n'); paths.push('src-extra/unrelated.js'); }
     if (mode === 'symlink') { fs.symlinkSync('/tmp/unrelated-example', 'src/link'); paths.push('src/link'); }
@@ -37,6 +38,7 @@ process.stdin.on('end', () => {
     result = { schemaVersion: 1, outcome: 'candidate', expectedHeadSha: data.sources.headSha, baseSha: data.sources.baseSha, candidateSha: data.sources.headSha,
       summary: 'Apply the requested value.', changedPaths: mode === 'wrong_paths' ? [] : paths, threads, suggestedChecks: ['suggested-but-not-required'], notesMarkdown: 'The value follows the supplied repository instructions.' };
   }
+  if (mode === 'invalid_payload') result = {};
   if (provider === 'claude') console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, structured_output: result, session_id: '11111111-2222-3333-4444-555555555555', usage: { input_tokens: 100, output_tokens: 20 } }));
   else {
     console.log(JSON.stringify({ type: 'thread.started', thread_id: 'session_repair' }));

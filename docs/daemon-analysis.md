@@ -197,9 +197,9 @@ Outbox requests have stable semantic IDs containing repository/run identity,
 kind, destination, evidence, expected revision and payload digest. Attempt times,
 ownership tokens and workflow provenance do not create a second logical request.
 States are `planned`, `sending`, `confirmed`, `rejected` and `unknown`. Lost
-ownership while sending becomes unknown. Reconciliation may confirm or reject it
+effect ownership while sending becomes unknown. Reconciliation may confirm or reject it
 with a receipt; it cannot silently return to sending. These storage operations
-do not authorize dispatch, and this daemon installs no external effect handlers.
+do not authorize dispatch, and analysis mode dispatches no external effect handlers. Apply-mode push uses its own durable effect lease.
 
 A transactional process-ownership record prevents a second daemon from opening
 the same control socket. After SIGKILL, startup replaces a dead process's record
@@ -216,3 +216,10 @@ provider failures, late completions and deletion of worker/source caches.
 They make no paid provider request and no GitHub or Slack mutation. Real App
 installation access, native deployment, provider authentication and analysis
 quality remain human pilot checks.
+
+## Optional repair and push
+
+Private per-repository apply policies enable durable repair, required-check
+validation and conditional push. Analysis remains the default. See
+[conditional repair and push](conditional-push.md) for authorization, effect leases,
+unknown-outcome recovery and schema-3 migration.
