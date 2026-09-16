@@ -1,7 +1,7 @@
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { isAbsolute, dirname } from 'node:path';
-import { installationCredentials, installationPushCredentials, installationPullRequestWriteCredentials, prepareCaptureDirectory } from '@repo-chap/github';
+import { installationCredentials, installationPushCredentials, installationPullRequestWriteCredentials, installationPublicationCredentials, prepareCaptureDirectory, type PublicationCapability } from '@repo-chap/github';
 import { readProfile } from '@repo-chap/providers';
 import { RuntimeError, validateLimits, readApplyPolicy, type ApplyPolicy, type RuntimeLimits } from '@repo-chap/runtime';
 import type { DaemonDependencies } from './service.js';
@@ -45,6 +45,10 @@ export async function loadInstallation(path: string, directory: string): Promise
         threadCredentials: async (repository: string) => {
           if (!policies.has(repository.toLowerCase())) throw new RuntimeError('No explicit apply policy exists for this repository.');
           return installationPullRequestWriteCredentials(app, repository);
+        },
+        publicationCredentials: async (repository: string, capability: PublicationCapability) => {
+          if (!policies.has(repository.toLowerCase())) throw new RuntimeError('No explicit apply policy exists for this repository.');
+          return installationPublicationCredentials(app, repository, capability);
         },
       } : {}),
     } };

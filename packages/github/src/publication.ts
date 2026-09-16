@@ -16,12 +16,13 @@ export interface LabelPublication {
 export type Publication = ReviewPublication | LabelPublication;
 export interface RemotePublicationTarget extends PublicationTarget { lifecycle: 'open' | 'closed'; draft: boolean }
 export interface PublishedReview { id: string; url: string; headSha: string; body: string; state: string }
+export type BeforePublicationSend = (readTarget: () => Promise<RemotePublicationTarget>) => Promise<boolean>;
 export interface PublicationRemote {
   target(target: PublicationTarget): Promise<RemotePublicationTarget>;
   reviews(target: PublicationTarget): Promise<PublishedReview[]>;
   labels(target: PublicationTarget): Promise<string[]>;
-  publishReview(publication: ReviewPublication): Promise<PublishedReview>;
-  addLabels(target: PublicationTarget, labels: string[]): Promise<string[]>;
+  publishReview(publication: ReviewPublication, beforeSend: BeforePublicationSend): Promise<PublishedReview>;
+  addLabels(target: PublicationTarget, labels: string[], beforeSend: BeforePublicationSend): Promise<string[]>;
 }
 export interface PublicationReceipt {
   schemaVersion: 1; kind: Publication['kind']; marker: string;
@@ -30,14 +31,15 @@ export interface PublicationReceipt {
   expectedBaseSha: string; observedBaseSha: string | null; reobserve: boolean;
   remote: { id: string; url: string } | null; analysis?: PublishedAnalysis;
   labels?: { requested: string[]; observed: string[]; preserved: string[] };
+  retryable: boolean; reconcileAfter?: number;
 }
 export class PublicationRemoteError extends Error {
-  constructor(readonly outcome: 'rejected' | 'unknown', message: string) { super(message); }
+  constructor(readonly outcome: 'rejected' | 'unknown', message: string, readonly retryable = false) { super(message); }
 }
 export interface PublicationDispatch {
   phase: 'planned' | 'unknown';
   authorize(capability: Publication['kind']): Promise<boolean>;
-  /** Persist sending and check current effect ownership before allowing a write. */
+  /** Check the already persisted effect lease after credential retrieval. */
   beforeSend(): Promise<boolean>;
 }
 function isCurrent(expected: PublicationTarget, observed: RemotePublicationTarget): boolean {
@@ -51,7 +53,7 @@ function receipt(publication: Publication, outcome: PublicationReceipt['outcome'
   return { schemaVersion: 1, kind: publication.kind, marker: publication.marker, outcome, freshness, reason,
     expectedHeadSha: publication.target.headSha, observedHeadSha: observed?.headSha ?? null,
     expectedBaseSha: publication.target.baseSha, observedBaseSha: observed?.baseSha ?? null,
-    reobserve: freshness !== 'current', remote: remote ? { id: remote.id, url: remote.url } : null,
+    reobserve: freshness !== 'current', retryable: false, remote: remote ? { id: remote.id, url: remote.url } : null,
     ...(publication.kind === 'review.publish' ? { analysis: publication.analysis } : {
       labels: { requested: publication.labels, observed: labels ?? [], preserved: (labels ?? []).filter(name => !publication.labels.includes(name)) },
     }),
@@ -62,6 +64,20 @@ async function readAfter(publication: Publication, remote: PublicationRemote): P
 }
 function matchesReview(review: PublishedReview, publication: ReviewPublication): boolean {
   return review.headSha === publication.target.headSha && review.body === publication.body && review.state === 'COMMENTED';
+}
+async function authorizeSend(publication: Publication, readTarget: () => Promise<RemotePublicationTarget>, dispatch: PublicationDispatch): Promise<boolean> {
+  let observed: RemotePublicationTarget;
+  try { observed = await readTarget(); }
+  catch { throw new PublicationRemoteError('rejected', 'The final PR read failed before publication. Retry the retained publication after refreshing access.', true); }
+  if (!isCurrent(publication.target, observed)) throw new PublicationRemoteError('rejected', 'The PR changed before publication. Reobserve and analyze the current revision.');
+  try {
+    if (!await dispatch.authorize(publication.kind)) throw new PublicationRemoteError('rejected', `Apply policy does not authorize ${publication.kind}. The validated analysis remains local.`);
+    if (!await dispatch.beforeSend()) throw new PublicationRemoteError('rejected', 'Publication ownership changed before the request.');
+  } catch (error) {
+    if (error instanceof PublicationRemoteError) throw error;
+    throw new PublicationRemoteError('rejected', 'Current authorization could not be checked before publication. Retry the retained result after checking private settings.', true);
+  }
+  return true;
 }
 
 export async function publishReview(publication: ReviewPublication, remote: PublicationRemote, dispatch: PublicationDispatch): Promise<PublicationReceipt> {
@@ -76,23 +92,18 @@ export async function publishReview(publication: ReviewPublication, remote: Publ
       return receipt(publication, 'confirmed', 'Found the previously published review. No second review was submitted.', await readAfter(publication, remote), match);
     }
   } catch {
-    return receipt(publication, dispatch.phase === 'unknown' ? 'unknown' : 'rejected', 'Cannot finish review reconciliation. Refresh GitHub evidence before publication.', null);
+    return { ...receipt(publication, dispatch.phase === 'unknown' ? 'unknown' : 'rejected', 'Cannot finish review reconciliation. Refresh GitHub evidence before publication.', null), retryable: dispatch.phase === 'planned' };
   }
   if (dispatch.phase === 'unknown') return receipt(publication, 'unknown', 'The prior review request has an uncertain result and no matching marked review is visible. It will not be sent again.', observed);
   if (!isCurrent(publication.target, observed)) return receipt(publication, 'rejected', 'The PR changed before review publication. Reobserve and analyze the current revision.', observed);
-  // Listing reviews can take several requests. Check the PR again next to the write.
-  const latest = await readAfter(publication, remote);
-  if (!latest || !isCurrent(publication.target, latest)) return receipt(publication, 'rejected', 'Current PR identity could not be confirmed before review publication.', latest);
-  observed = latest;
-  if (!await dispatch.authorize(publication.kind)) return receipt(publication, 'rejected', 'Apply policy does not authorize review.publish. The validated review remains local.', observed);
-  if (!await dispatch.beforeSend()) return receipt(publication, 'rejected', 'Publication ownership changed before the review request.', observed);
   let published: PublishedReview;
   try {
-    published = await remote.publishReview(publication);
+    published = await remote.publishReview(publication, readTarget => authorizeSend(publication, readTarget, dispatch));
     if (!matchesReview(published, publication)) throw new PublicationRemoteError('unknown', 'GitHub returned a review that does not match the submitted content.');
   } catch (error) {
-    return receipt(publication, error instanceof PublicationRemoteError ? error.outcome : 'unknown',
-      error instanceof PublicationRemoteError ? error.message : 'The review request has an uncertain result. Reconcile its marker before any retry.', await readAfter(publication, remote));
+    return { ...receipt(publication, error instanceof PublicationRemoteError ? error.outcome : 'unknown',
+      error instanceof PublicationRemoteError ? error.message : 'The review request has an uncertain result. Reconcile its marker before any retry.', await readAfter(publication, remote)),
+      retryable: error instanceof PublicationRemoteError && error.retryable };
   }
   return receipt(publication, 'confirmed', 'Published a comment review attached to the reviewed commit. Human merge is still required.', await readAfter(publication, remote), published);
 }
@@ -100,23 +111,19 @@ export async function publishReview(publication: ReviewPublication, remote: Publ
 export async function setClassificationLabels(publication: LabelPublication, remote: PublicationRemote, dispatch: PublicationDispatch): Promise<PublicationReceipt> {
   let observed: RemotePublicationTarget, labels: string[];
   try { observed = await remote.target(publication.target); labels = await remote.labels(publication.target); }
-  catch { return receipt(publication, dispatch.phase === 'unknown' ? 'unknown' : 'rejected', 'Cannot finish label reconciliation. Refresh GitHub evidence before publication.', null); }
+  catch { return { ...receipt(publication, dispatch.phase === 'unknown' ? 'unknown' : 'rejected', 'Cannot finish label reconciliation. Refresh GitHub evidence before publication.', null), retryable: dispatch.phase === 'planned' }; }
   if (publication.labels.every(name => labels.includes(name))) return receipt(publication, 'confirmed', publication.labels.length
     ? 'All requested labels are already present. This receipt does not attribute existing labels to Repo Chap.'
     : 'The classification contains no labels. Existing labels were preserved.', await readAfter(publication, remote), null, labels);
   if (dispatch.phase === 'unknown') return receipt(publication, 'unknown', 'Some requested labels are absent after an uncertain request. It will not be sent again.', observed, null, labels);
   if (!isCurrent(publication.target, observed)) return receipt(publication, 'rejected', 'The PR changed before label publication. Reobserve and classify the current revision.', observed, null, labels);
-  const latest = await readAfter(publication, remote);
-  if (!latest || !isCurrent(publication.target, latest)) return receipt(publication, 'rejected', 'Current PR identity could not be confirmed before label publication.', latest, null, labels);
-  observed = latest;
-  if (!await dispatch.authorize(publication.kind)) return receipt(publication, 'rejected', 'Apply policy does not authorize labels.set. The validated classification remains local.', observed, null, labels);
-  if (!await dispatch.beforeSend()) return receipt(publication, 'rejected', 'Publication ownership changed before the label request.', observed, null, labels);
   try {
-    labels = await remote.addLabels(publication.target, publication.labels);
+    labels = await remote.addLabels(publication.target, publication.labels, readTarget => authorizeSend(publication, readTarget, dispatch));
     if (!publication.labels.every(name => labels.includes(name))) throw new PublicationRemoteError('unknown', 'GitHub did not confirm every requested label. Reconcile before any retry.');
   } catch (error) {
-    return receipt(publication, error instanceof PublicationRemoteError ? error.outcome : 'unknown',
-      error instanceof PublicationRemoteError ? error.message : 'The label request has an uncertain result. Reconcile the requested labels before any retry.', await readAfter(publication, remote), null, labels);
+    return { ...receipt(publication, error instanceof PublicationRemoteError ? error.outcome : 'unknown',
+      error instanceof PublicationRemoteError ? error.message : 'The label request has an uncertain result. Reconcile the requested labels before any retry.', await readAfter(publication, remote), null, labels),
+      retryable: error instanceof PublicationRemoteError && error.retryable };
   }
   return receipt(publication, 'confirmed', 'Added the configured classification labels and preserved existing labels.', await readAfter(publication, remote), null, labels);
 }

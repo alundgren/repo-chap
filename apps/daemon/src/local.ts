@@ -5,6 +5,7 @@ import { DaemonService, type DaemonDependencies } from './service.js';
 import { handleControl } from './control.js';
 import { reconcilePendingPushes } from './push.js';
 import { reconcilePendingThreads } from './threads.js';
+import { reconcilePendingPublications } from './publication.js';
 
 export interface LocalApplyOptions {
   directory: string; repository: string; number: number; package: WorkflowPackage; profile: string;
@@ -55,7 +56,10 @@ export async function inspectLocalApply(directory: string, runId: string, depend
     const scoped = { ...access, directory, target: { repository: repository.name, number: run.number } };
     service = new DaemonService(store, scoped);
     if (dependencies) {
-      store.recover(service.now()); await reconcilePendingPushes(store, scoped, service.now, signal ?? new AbortController().signal);
+      store.recover(service.now());
+      const readSignal = signal ?? new AbortController().signal;
+      await reconcilePendingPushes(store, scoped, service.now, readSignal);
+      await reconcilePendingPublications(store, scoped, service.now, readSignal);
       await reconcilePendingThreads(store, scoped, () => new GitHubReader(scoped.credentials, { ...scoped.readOptions, signal, now: service!.now,
         cooldown: { read: () => store.cooldown(), extend: until => { store.cooldown(until); } } }), service.now);
     }

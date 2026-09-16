@@ -232,6 +232,27 @@ test('actual local apply retry recovers a temporary final read with the saved ca
     assert.equal(retried.value.reservations.length, 1); assert.equal(await s.calls(), 1);
   } finally { await s.cleanup(); }
 });
+test('local apply checks repair and push capabilities per action after accepting a publication-only policy', async () => {
+  const denied = await localCliFixture();
+  try {
+    await writeFile(denied.policy, JSON.stringify({ schemaVersion: 1, repository: 'reef-labs/paperboat', capabilities: ['review.publish'], maxRepairsPerLifecycle: 1, maxPushAttempts: 1 }), { mode: 0o600 });
+    const result = denied.run([...denied.args, '--json']);
+    assert.equal(result.status, 8, result.stderr || result.stdout); assert.match(result.value.run.reason, /does not authorize/);
+    assert.match(denied.pkg.workflow.actions[result.value.run.nextAction]!.uses, /agent\.(address_review|resolve_conflict)/);
+    assert.equal(result.value.attempts.length, 0); assert.equal(result.value.effects.length, 0);
+    assert.equal(git(denied.remotePath, 'rev-parse', 'refs/heads/update'), denied.head);
+  } finally { await denied.cleanup(); }
+  const push = await localCliFixture();
+  try {
+    const planned = push.run([...push.args, '--plan', '--json']); assert.equal(planned.status, 0, planned.stderr || planned.stdout);
+    const policy = JSON.parse(await readFile(push.policy, 'utf8')); policy.capabilities = policy.capabilities.filter((value: string) => value !== 'pr.push');
+    await writeFile(push.policy, JSON.stringify(policy), { mode: 0o600 });
+    const result = push.run([...push.args, '--json']);
+    assert.equal(result.status, 8, result.stderr || result.stdout); assert.match(result.value.run.reason, /does not authorize/); assert.equal(result.value.run.nextAction, 'push_candidate');
+    assert.equal(result.value.effects[0].state, 'planned'); assert.equal(result.value.effectAttempts.length, 0); assert.equal(await push.calls(), 1);
+    assert.equal(git(push.remotePath, 'rev-parse', 'refs/heads/update'), push.head);
+  } finally { await push.cleanup(); }
+});
 test('SIGKILL after Git acceptance before receipt persistence confirms the one existing commit on restart', async () => {
   const s = await daemonFixture();
   try {

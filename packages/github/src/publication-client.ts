@@ -1,7 +1,7 @@
-import type { CredentialSource } from './auth.js';
+import type { CredentialSource, PublicationCapability, PublicationCredentials } from './auth.js';
 import { responseText } from './http.js';
 import { validateTarget } from './inspect.js';
-import { PublicationRemoteError, type PublicationRemote, type PublicationTarget, type PublishedReview, type RemotePublicationTarget, type ReviewPublication } from './publication.js';
+import { PublicationRemoteError, type BeforePublicationSend, type PublicationRemote, type PublicationTarget, type PublishedReview, type RemotePublicationTarget, type ReviewPublication } from './publication.js';
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid GitHub publication response.');
@@ -25,6 +25,7 @@ export interface PublicationClientOptions {
   fetch?: typeof globalThis.fetch; signal?: AbortSignal; now?: () => number;
   maxRequests?: number; maxDurationMs?: number;
   cooldown?: { read(): number; extend(until: number): void };
+  writeCredentials?: (repository: string, capability: PublicationCapability) => Promise<PublicationCredentials>;
 }
 /** Named operations only. The dispatcher owns authorization and durable send records. */
 export class GitHubPublicationClient implements PublicationRemote {
@@ -44,16 +45,27 @@ export class GitHubPublicationClient implements PublicationRemote {
   }
   private check(): void {
     if (this.options.signal?.aborted || this.now() >= this.deadline || this.requests >= (this.options.maxRequests ?? 200) || this.bytes >= 16 * 1024 * 1024)
-      throw new PublicationRemoteError('rejected', 'The publication request limit or deadline was reached.');
-    if ((this.options.cooldown?.read() ?? 0) > this.now()) throw new PublicationRemoteError('rejected', 'GitHub requests are waiting for the installation cooldown.');
+      throw new PublicationRemoteError('rejected', 'The publication request limit or deadline was reached.', true);
+    if ((this.options.cooldown?.read() ?? 0) > this.now()) throw new PublicationRemoteError('rejected', 'GitHub requests are waiting for the installation cooldown.', true);
   }
-  private async request(method: 'GET' | 'POST', path: string, body?: unknown): Promise<unknown> {
+  private async request(method: 'GET' | 'POST', path: string, body?: unknown,
+    write?: { target: PublicationTarget; capability: PublicationCapability; beforeSend: BeforePublicationSend }, readCredentials?: CredentialSource): Promise<unknown> {
     this.check();
     const signal = this.options.signal ? AbortSignal.any([this.options.signal, AbortSignal.timeout(Math.max(1, this.deadline - this.now()))]) : AbortSignal.timeout(Math.max(1, this.deadline - this.now()));
-    const token = await this.credentials.token(signal);
-    this.check();
     let dispatched = false;
     try {
+      let credentials = readCredentials ?? this.credentials;
+      if (method === 'POST') {
+        if (!write || !this.options.writeCredentials) throw new PublicationRemoteError('rejected', 'Publication requires explicit write credentials for this capability.');
+        const scoped = await this.options.writeCredentials(write.target.repository, write.capability);
+        if (scoped.repository.toLowerCase() !== write.target.repository.toLowerCase() || scoped.capability !== write.capability ||
+          scoped.permission !== (write.capability === 'review.publish' ? 'pull_requests:write' : 'issues:write')) throw new PublicationRemoteError('rejected', 'Publication credentials do not match this repository and capability.');
+        credentials = scoped;
+      }
+      const token = await credentials.token(signal); this.check();
+      if (write && !await write.beforeSend(() => this.targetUsing(write.target, { ...credentials, token: async () => token })))
+        throw new PublicationRemoteError('rejected', 'Publication no longer has current permission or ownership.');
+      this.check();
       this.requests++; dispatched = true;
       const response = await (this.options.fetch ?? globalThis.fetch)(`https://api.github.com${path}`, {
         method, redirect: 'error', signal,
@@ -78,7 +90,7 @@ export class GitHubPublicationClient implements PublicationRemote {
       return JSON.parse(text);
     } catch (error) {
       if (error instanceof PublicationRemoteError) throw error;
-      throw new PublicationRemoteError(method === 'POST' && dispatched ? 'unknown' : 'rejected', 'GitHub publication communication failed. Refresh evidence and reconcile any uncertain request.');
+      throw new PublicationRemoteError(method === 'POST' && dispatched ? 'unknown' : 'rejected', 'GitHub publication communication failed. Refresh evidence and reconcile any uncertain request.', !dispatched);
     }
   }
   private async pages(path: string): Promise<unknown[]> {
@@ -92,7 +104,10 @@ export class GitHubPublicationClient implements PublicationRemote {
     throw new Error('GitHub publication pagination limit reached.');
   }
   async target(target: PublicationTarget): Promise<RemotePublicationTarget> {
-    const data = object(await this.request('GET', `${this.path(target)}/pulls/${target.number}`));
+    return this.targetUsing(target, this.credentials);
+  }
+  private async targetUsing(target: PublicationTarget, credentials: CredentialSource): Promise<RemotePublicationTarget> {
+    const data = object(await this.request('GET', `${this.path(target)}/pulls/${target.number}`, undefined, undefined, credentials));
     const head = object(data.head), base = object(data.base), repository = object(base.repo);
     if (data.number !== target.number || typeof data.draft !== 'boolean' || !['open', 'closed'].includes(String(data.state))) throw new Error('Invalid pull request publication target.');
     return { repository: string(repository.full_name), repositoryId: string(repository.node_id), pullRequestId: string(data.node_id), number: data.number as number,
@@ -104,14 +119,14 @@ export class GitHubPublicationClient implements PublicationRemote {
   async labels(target: PublicationTarget): Promise<string[]> {
     return labelNames(await this.pages(`${this.path(target)}/issues/${target.number}/labels`));
   }
-  async publishReview(publication: ReviewPublication): Promise<PublishedReview> {
+  async publishReview(publication: ReviewPublication, beforeSend: BeforePublicationSend): Promise<PublishedReview> {
     const data = await this.request('POST', `${this.path(publication.target)}/pulls/${publication.target.number}/reviews`,
-      { commit_id: publication.target.headSha, event: 'COMMENT', body: publication.body });
+      { commit_id: publication.target.headSha, event: 'COMMENT', body: publication.body }, { target: publication.target, capability: 'review.publish', beforeSend });
     try { return review(data, publication.target); }
     catch { throw new PublicationRemoteError('unknown', 'GitHub accepted the review request but returned an unreadable receipt. Reconcile its marker.'); }
   }
-  async addLabels(target: PublicationTarget, labels: string[]): Promise<string[]> {
-    const data = await this.request('POST', `${this.path(target)}/issues/${target.number}/labels`, { labels });
+  async addLabels(target: PublicationTarget, labels: string[], beforeSend: BeforePublicationSend): Promise<string[]> {
+    const data = await this.request('POST', `${this.path(target)}/issues/${target.number}/labels`, { labels }, { target, capability: 'labels.set', beforeSend });
     try { return labelNames(data); }
     catch { throw new PublicationRemoteError('unknown', 'GitHub accepted the label request but returned an unreadable receipt. Reconcile the requested labels.'); }
   }

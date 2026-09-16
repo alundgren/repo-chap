@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { loadWorkflow, WorkflowError } from '@repo-chap/workflow';
-import { localCredentials, localPushCredentials, localPullRequestWriteCredentials, validateTarget, GitHubReadError } from '@repo-chap/github';
+import { localCredentials, localPushCredentials, localPullRequestWriteCredentials, localPublicationCredentials, validateTarget, GitHubReadError } from '@repo-chap/github';
 import { readProfile, ProviderConfigurationError } from '@repo-chap/providers';
 import { readApplyPolicy, requireApplyPolicy, RuntimeError } from '@repo-chap/runtime';
 import { runLocalApply, inspectLocalApply } from '@repo-chap/daemon';
@@ -12,10 +12,10 @@ export const applyHelp = `Local apply uses GH_TOKEN, GITHUB_TOKEN, or your gh lo
   repo-chap apply inspect <run-id> --state-dir <private-directory> [--json]
   repo-chap apply reconcile <run-id> --state-dir <private-directory> [--json]
 
-The private policy authorizes bounded repair and push. Planned pushes print before dispatch.
---plan performs live GitHub reads, provider repair and local checks, then saves the push plan without remote writes.
+The private policy authorizes each selected action. Planned remote effects print before dispatch.
+--plan performs live GitHub reads, provider analysis or repair and local checks, then saves planned effects without remote writes.
 Run the same command without --plan to continue. --retry explicitly retries a retained failed action within its original limits.
-Inspect is offline. Reconcile only reads unknown remote outcomes; it never starts a model or pushes.
+Inspect is offline. Reconcile only reads unknown remote outcomes; it never starts a model or sends an effect.
 Reuse the same state directory across invocations to preserve lifetime limits and recovery. Keep it separate from daemon state.
 Waiting work exits with its next wake time; rerun after that time. Ctrl-C stops active work. Humans merge.
 Exit 8 means local apply failed, was blocked, or needs unknown-outcome inspection; 130 means cancelled work.
@@ -49,12 +49,13 @@ export async function applyCommand(args: string[]): Promise<void> {
       if (!/^\d+$/.test(options['--pr']!)) throw new RuntimeError('--pr requires a positive integer.');
       const repository = options['--repo']!, number = Number(options['--pr']); validateTarget(repository, number);
       const config = resolve(options['--provider-config']!), policyPath = resolve(options['--policy']!);
-      requireApplyPolicy(await readApplyPolicy(policyPath), repository, ['workspace.write', 'checks.run', ...(seen.has('--plan') ? [] : ['pr.push'] as const)]);
+      requireApplyPolicy(await readApplyPolicy(policyPath), repository, []);
       const profile = await readProfile(config, options['--profile']!), pkg = await loadWorkflow(command, { repositoryRoot: options['--repo-root'], maximumCapabilities: profile.maximumCapabilities });
       const displayed = new Set<string>();
       details = await runLocalApply({ directory, repository, number, package: pkg, profile: profile.name, planOnly: seen.has('--plan'), retry: seen.has('--retry'),
         reviewers: options['--reviewers']?.split(',').map(value => value.trim()), signal: controller.signal }, {
         credentials: await localCredentials(), profile: name => readProfile(config, name), applyPolicy: () => readApplyPolicy(policyPath), pushCredentials: name => localPushCredentials(name), threadCredentials: name => localPullRequestWriteCredentials(name),
+        publicationCredentials: (name, capability) => localPublicationCredentials(name, capability),
         onPlannedEffect: effect => { if (!json && !displayed.has(effect.id)) { displayed.add(effect.id); process.stdout.write(`Planned ${effect.kind} to ${effect.destination}; expected ${effect.expectedRevision}. Effect ${effect.id}\n`); } },
       });
     }

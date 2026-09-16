@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { generateKeyPairSync } from 'node:crypto';
 import { buildPackage, canonicalJson, digest, replay, type Workflow } from '@repo-chap/workflow';
 import { collectSources, type SourceBundle } from '@repo-chap/providers';
-import { GitHubPublicationClient, PublicationRemoteError, publishReview, setClassificationLabels, tokenCredentials,
+import { GitHubPublicationClient, PublicationRemoteError, publishReview, setClassificationLabels, tokenCredentials, installationCredentials, installationPublicationCredentials,
   type LabelPublication, type PublicationDispatch, type PublicationRemote, type PublishedReview, type RemotePublicationTarget, type ReviewPublication } from '@repo-chap/github';
 import { prepareLabelPublication, prepareReviewPublication, RuntimeStore, type AnalysisResult, type PublicationInput } from '@repo-chap/runtime';
 import { setup, git } from './helpers/provider-fixture.ts';
@@ -54,7 +55,8 @@ function fakeRemote(publication: ReviewPublication | LabelPublication) {
   const remote: PublicationRemote = {
     target: async () => { state.reads++; if (state.readFailure) throw new Error('unavailable'); return structuredClone(state.target); },
     labels: async () => [...state.labels], reviews: async () => structuredClone(state.reviews),
-    publishReview: async plan => {
+    publishReview: async (plan, beforeSend) => {
+      if (!await beforeSend(() => remote.target(plan.target))) throw new PublicationRemoteError('rejected', 'Not authorized.');
       state.writes++;
       const result: PublishedReview = { id: 'review-1', url: `https://github.com/${plan.target.repository}/pull/${plan.target.number}#pullrequestreview-1`, headSha: plan.target.headSha, state: 'COMMENTED', body: plan.body };
       state.reviews.push(result);
@@ -62,7 +64,8 @@ function fakeRemote(publication: ReviewPublication | LabelPublication) {
       if (state.loseResponse) throw new Error('response lost');
       return result;
     },
-    addLabels: async (_target, labels) => {
+    addLabels: async (_target, labels, beforeSend) => {
+      if (!await beforeSend(() => remote.target(_target))) throw new PublicationRemoteError('rejected', 'Not authorized.');
       state.writes++; state.labels = [...new Set([...state.labels, ...labels])];
       if (state.changeAfterSend) state.target.headSha = 'e'.repeat(40);
       if (state.loseResponse) throw new Error('response lost');
@@ -72,6 +75,45 @@ function fakeRemote(publication: ReviewPublication | LabelPublication) {
   return { state, remote };
 }
 const permitted = (phase: PublicationDispatch['phase'] = 'planned'): PublicationDispatch => ({ phase, authorize: async () => true, beforeSend: async () => true });
+
+test('App publication credentials narrow the repository and validate the actual review or label write permission', async () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
+  const requests: any[] = []; let allow = true;
+  const fetch: typeof globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body)); requests.push(request);
+    return Response.json({ token: 'fictional-installation-token', expires_at: new Date(Date.now() + 3600_000).toISOString(), permissions: allow ? request.permissions : {} });
+  };
+  const options = { appId: 'fixture', installationId: 7, privateKey, fetch };
+  await installationCredentials(options).token();
+  assert.ok(Object.values(requests[0].permissions).every(value => value === 'read'));
+  for (const capability of ['review.publish', 'labels.set'] as const) {
+    const credentials = installationPublicationCredentials(options, 'reef-labs/paperboat', capability); await credentials.token();
+    const request = requests.at(-1)!;
+    assert.deepEqual(request.repositories, ['paperboat']); assert.equal(request.permissions[capability === 'review.publish' ? 'pull_requests' : 'issues'], 'write');
+    assert.equal(request.permissions.contents, 'read');
+    allow = false; await assert.rejects(installationPublicationCredentials(options, 'reef-labs/paperboat', capability).token()); allow = true;
+  }
+});
+
+test('publication final target read uses the acquired write credential and never falls back to inspection authority', async () => {
+  const s = await fixture();
+  try {
+    const publication = prepareReviewPublication(s.input); let writes = 0, finalReads = 0;
+    const client = new GitHubPublicationClient(tokenCredentials('fictional-read-token'), {
+      writeCredentials: async (repository, capability) => ({ ...tokenCredentials('fictional-write-token'), repository, capability, permission: 'pull_requests:write' }),
+      fetch: async (_url, init) => {
+        assert.equal((init!.headers as Record<string, string>).Authorization, 'Bearer fictional-write-token');
+        if (init?.method === 'GET') {
+          finalReads++; return Response.json({ node_id: publication.target.pullRequestId, number: 42, state: 'open', draft: false, head: { sha: s.head },
+            base: { sha: s.base, repo: { node_id: publication.target.repositoryId, full_name: publication.target.repository } } });
+        }
+        writes++; return Response.json({ id: 1, html_url: 'https://github.com/reef-labs/paperboat/pull/42#pullrequestreview-1', commit_id: s.head, body: publication.body, state: 'COMMENTED' });
+      },
+    });
+    await client.publishReview(publication, async readTarget => { assert.equal((await readTarget()).headSha, s.head); return true; });
+    assert.equal(finalReads, 1); assert.equal(writes, 1);
+  } finally { await s.cleanup(); }
+});
 
 test('publication renders every finding and uses the pinned common ancestor for base citations', async () => {
   const s = await fixture('review', { payload: payload => { payload.findings[0].evidence.push(citation('base')); }, source: async repository => {
@@ -233,12 +275,13 @@ test('REST publication binds COMMENT to the commit and treats lost mutation resp
   const s = await fixture();
   try {
     const plan = prepareReviewPublication(s.input); let writes = 0;
-    const client = new GitHubPublicationClient(tokenCredentials('fictional-token'), { fetch: async (_url, init) => {
+    const client = new GitHubPublicationClient(tokenCredentials('fictional-token'), {
+      writeCredentials: async (repository, capability) => ({ ...tokenCredentials('fictional-write-token'), repository, capability, permission: 'pull_requests:write' }), fetch: async (_url, init) => {
       assert.equal(init?.method, 'POST'); const body = JSON.parse(String(init?.body)); writes++;
       assert.equal(body.event, 'COMMENT'); assert.equal(body.commit_id, s.head); assert.equal(body.body, plan.body); assert.equal(body.comments, undefined);
       throw new Error('fictional connection loss');
     } });
-    await assert.rejects(client.publishReview(plan), error => error instanceof PublicationRemoteError && error.outcome === 'unknown'); assert.equal(writes, 1);
+    await assert.rejects(client.publishReview(plan, async () => true), error => error instanceof PublicationRemoteError && error.outcome === 'unknown'); assert.equal(writes, 1);
   } finally { await s.cleanup(); }
 });
 

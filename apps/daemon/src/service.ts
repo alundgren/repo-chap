@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { controlDecision, currentFacts, evaluate, hasCompleteEvidence, WorkflowError, type Capability, type WorkflowPackage, type Observation, type Workflow } from '@repo-chap/workflow';
-import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions, type PushCredentials, type PushTransport, type PullRequestWriteCredentials, type ThreadTransport } from '@repo-chap/github';
+import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions, type PushCredentials, type PushTransport, type PullRequestWriteCredentials, type ThreadTransport, type PublicationCapability, type PublicationCredentials, type PublicationRemote } from '@repo-chap/github';
 import { ExecutionError, validateTestedCandidate, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
 import type { ProviderProfile, SourceBundle } from '@repo-chap/providers';
 import { RuntimeError, RuntimeStore, StaleObservationError, requireApplyPolicy, applyPolicyDigest, type ApplyPolicy, type EffectRecord, type RepairAttemptJob, type RepairAttemptResult, type AnalysisJob, type AnalysisResult, type Claim, type Registration, type RepositoryRecord, type RunRecord, type SourceRegistration } from '@repo-chap/runtime';
 import { executeAnalysis, fetchSources, executeRepair, fetchRepairSources, profileDigest } from './worker.js';
 import { dispatchCandidatePush, reconcilePendingPushes } from './push.js';
 import { dispatchThreadResolutions, reconcilePendingThreads } from './threads.js';
+import { dispatchPublication, reconcilePendingPublications } from './publication.js';
 import { fetchWorkflowCommit } from './source.js';
 
 export interface DaemonDependencies {
@@ -19,6 +20,8 @@ export interface DaemonDependencies {
   pushCredentials?: (repository: string) => Promise<PushCredentials>;
   threadCredentials?: (repository: string) => Promise<PullRequestWriteCredentials>;
   threadTransport?: (repository: string, signal: AbortSignal) => Promise<ThreadTransport>;
+  publicationCredentials?: (repository: string, capability: PublicationCapability) => Promise<PublicationCredentials>;
+  publicationRemote?: (signal: AbortSignal) => PublicationRemote;
   repairSources?: (repository: string, inspection: Inspection, signal: AbortSignal) => Promise<ExecutionArtifact>;
   repair?: (job: RepairAttemptJob, profile: ProviderProfile, signal: AbortSignal, isCurrent: () => boolean) => Promise<RepairAttemptResult>;
   pushTransport?: (repository: string, checkout: string, signal: AbortSignal) => Promise<PushTransport>;
@@ -98,6 +101,7 @@ export class DaemonService {
       this.store.recover(this.now()); this.abortStale();
       await reconcilePendingPushes(this.store, this.dependencies, this.now, this.shutdown.signal);
       await reconcilePendingThreads(this.store, this.dependencies, () => this.reader(), this.now);
+      await reconcilePendingPublications(this.store, this.dependencies, this.now, this.shutdown.signal);
       for (const repo of this.store.repositories().sort((a, b) => a.nextPollAt - b.nextPollAt)) {
         if (this.dependencies.target && repo.name.toLowerCase() !== this.dependencies.target.repository.toLowerCase()) continue;
         if (this.stopped || this.store.cooldown() > this.now()) break;
@@ -184,7 +188,8 @@ export class DaemonService {
       return;
     }
     const repairing = ['agent.resolve_conflict', 'agent.address_review'].includes(action.uses);
-    const applying = repairing || ['checks.validate_candidate', 'github.push_candidate', 'github.resolve_eligible_threads'].includes(action.uses);
+    const publishing = ['github.publish_review', 'github.set_labels'].includes(action.uses);
+    const applying = repairing || publishing || ['checks.validate_candidate', 'github.push_candidate', 'github.resolve_eligible_threads'].includes(action.uses);
     if (!['agent.classify', 'agent.review'].includes(action.uses) && !(applying && this.dependencies.applyPolicy)) { park('blocked', `Analysis mode stopped before ${action.uses}. Review retained analysis locally.`, null, actionId, true); return; }
     if (action.uses === 'github.resolve_eligible_threads') {
       try { await dispatchThreadResolutions(this.store, claim, actionId, pkg, this.dependencies, () => this.reader(), this.now, signal); }
@@ -197,6 +202,11 @@ export class DaemonService {
     }
     const repo = this.store.repository(run.repositoryId), profile = await this.dependencies.profile(repo.profile);
     if (!action.capabilities.every(cap => profile.maximumCapabilities.includes(cap) && pkg.workflow.requestedCapabilities.includes(cap))) { park('blocked', 'Current operator capabilities do not permit this action.', null, actionId); return; }
+    if (publishing) {
+      try { await dispatchPublication(this.store, claim, actionId, pkg, this.dependencies, () => this.reader(), this.now, signal); }
+      catch (error) { if (this.store.isCurrent(claim, this.now())) park('blocked', error instanceof RuntimeError ? error.message : 'Publication could not prepare its validated result or private policy.', null, actionId); }
+      return;
+    }
     if (action.uses === 'github.push_candidate') {
       try { await dispatchCandidatePush(this.store, claim, actionId, pkg, this.dependencies, () => this.reader(), this.now, signal); }
       catch (error) { if (this.store.isCurrent(claim, this.now())) park('blocked', error instanceof RuntimeError ? error.message : 'Push validation failed. Inspect the retained candidate, checks and policy.', null, actionId); }

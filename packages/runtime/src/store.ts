@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { lstat, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { prepareCaptureDirectory, validateTarget, type Inspection } from '@repo-chap/github';
+import { prepareCaptureDirectory, validateTarget, type Inspection, type PublicationReceipt } from '@repo-chap/github';
 import { buildPackage, canonicalJson, digest, parseFixture, referencePath, supportedCapabilities, validateActionPayload, type ControlState, type Diagnostic, type WorkflowPackage } from '@repo-chap/workflow';
 import { readArtifact, readRepairResult, validateTestedCandidate, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
 import { applyPolicyDigest, requireApplyPolicy, type ApplyPolicy } from './policy.js';
@@ -570,6 +570,34 @@ export class RuntimeStore {
     for (const row of this.db.prepare("SELECT id FROM effects WHERE run_id=? AND state='sending'").all(runId)) this.unknownEffect(String(row.id), Date.now());
   }
   planEffect(claim: Claim, request: EffectRequest, now: number): string { return this.transaction(() => this.insertEffect(this.requireCurrent(claim, now), claim.token, request)); }
+  async currentAnalysis(runId: string, uses: 'agent.review' | 'agent.classify'): Promise<{ reference: ArtifactRef; result: AnalysisResult }> {
+    const run = this.run(runId), pkg = await this.artifacts.get<WorkflowPackage>(run.package);
+    if (run.control.memory?.[uses === 'agent.review' ? 'reviewCurrent' : 'classificationCurrent'] !== true) throw new RuntimeError('Publication requires current accepted analysis.');
+    const notes = this.db.prepare('SELECT artifact FROM notes WHERE run_id=? ORDER BY revision DESC').all(runId);
+    for (const note of notes) {
+      const reference = JSON.parse(String(note.artifact)) as ArtifactRef;
+      const result = await this.artifacts.get<AnalysisResult | RepairAttemptResult>(reference);
+      if ('provider' in result && result.provider.outcome === 'completed' && result.job.evidenceKey === run.evidenceKey && result.job.packageDigest === run.packageDigest &&
+        pkg.workflow.actions[result.job.actionId]?.uses === uses) return { reference, result };
+    }
+    throw new RuntimeError('No accepted analysis result matches the current publication inputs.');
+  }
+  bindPublication(claim: Claim, id: string, actionId: string, now: number): void {
+    this.transaction(() => {
+      const run = this.requireCurrent(claim, now), effect = this.effects(run.id).find(value => value.id === id);
+      if (!effect || !['review.publish', 'labels.set'].includes(effect.kind)) throw new RuntimeError('Publication requires a retained effect request.');
+      run.retryAction = actionId; this.saveRun(run);
+    });
+  }
+  continuePublication(claim: Claim, actionId: string, nextAction: string, reason: string, success: boolean, now: number): void {
+    this.transaction(() => {
+      const run = this.requireCurrent(claim, now);
+      if (success) { delete run.failedActions[actionId]; if (run.retryAction === actionId) run.retryAction = null; }
+      else { run.failedActions[actionId] = run.evidenceKey; run.retryAction = actionId; run.control.memory = { ...run.control.memory, packetCurrent: false }; }
+      run.reason = reason; run.nextAction = nextAction; run.status = 'ready'; run.dueAt = now;
+      run.owner = null; run.leaseUntil = null; this.saveRun(run);
+    });
+  }
   effects(runId: string): EffectRecord[] {
     return this.db.prepare('SELECT * FROM effects WHERE run_id=?').all(runId).map(row => ({ ...JSON.parse(String(row.request)), id: row.id, runId: row.run_id, token: row.token, state: row.state, receipt: row.receipt ? JSON.parse(String(row.receipt)) : null })) as EffectRecord[];
   }
@@ -634,6 +662,16 @@ export class RuntimeStore {
       const changed = this.db.prepare("UPDATE effects SET state=?,receipt=? WHERE id=? AND state='unknown'").run(next, json(receipt), id).changes === 1;
       if (changed) this.db.prepare("UPDATE effect_attempts SET state=?,receipt=?,finished_at=? WHERE effect_id=? AND state='unknown'").run(next, json(receipt), now, id);
       return changed;
+    });
+  }
+  refreshPublicationReceipt(id: string, receipt: PublicationReceipt): boolean {
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT request,receipt FROM effects WHERE id=? AND state='confirmed'").get(id);
+      if (!row) return false;
+      const request = JSON.parse(String(row.request)) as EffectRequest, prior = JSON.parse(String(row.receipt)) as PublicationReceipt;
+      if (!['review.publish', 'labels.set'].includes(request.kind) || receipt.outcome !== 'confirmed' || receipt.marker !== prior.marker || receipt.kind !== prior.kind)
+        throw new RuntimeError('Publication freshness must preserve the confirmed effect identity.');
+      return this.db.prepare("UPDATE effects SET receipt=? WHERE id=? AND state='confirmed'").run(json(receipt), id).changes === 1;
     });
   }
   effectAttempts(id: string): EffectAttempt[] {

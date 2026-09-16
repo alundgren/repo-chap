@@ -8,10 +8,25 @@ either publication action without its required analysis result. Offline replay
 proposes the effect and uses a supplied stub without calling GitHub.
 
 The publication builders in `@repo-chap/runtime` verify the current run, accepted
-analysis, pinned package, captured observation, and source artifact. The GitHub
-handlers require authorization and a durable send callback. The daemon must
-connect those callbacks to its current private apply policy and effect ownership.
-The read-only inspection credential does not grant publication permission.
+analysis, pinned package, captured observation, and source artifact. Daemon and
+local apply share the same handlers and schema-3 effect leases. Each action
+requires its own capability in the private apply policy, workflow, action, and
+current provider profile. Publication-only policies need neither repair nor push
+permission. Authorization is checked at dispatch and again after acquiring the
+write credential. Inspection credentials retain their existing read-only scope.
+
+Review writes require a repository-scoped `pull_requests:write` credential;
+labels require `issues:write`. App token responses must confirm the requested
+write permission. The final target read uses the acquired operation credential;
+the complete evidence refresh uses the inspection credential for checks and
+other collections. Both reads finish before sending, followed by another current
+policy and independent lease check.
+
+`repo-chap apply --plan` runs analysis and retains the publication request without
+writing to GitHub. Normal apply prints the planned effect before dispatch.
+`apply inspect` reads private state offline. `apply reconcile` can confirm unknown
+effects or refresh unverified receipts through reads alone; it never invokes a
+provider or sends a publication.
 
 ## Review evidence
 
@@ -64,6 +79,23 @@ Label receipts list requested, observed, and preserved names.
 | `outcome` | `confirmed`, `rejected`, `unknown` |
 | `freshness` | `current`, `stale`, `unverified` |
 | `reobserve` | True when freshness is stale or unverified |
+| `retryable` | True only for a rejected request that may be attempted within retained limits |
+| `reconcileAfter` | Earliest next remote reconciliation time, when a follow-up read is due |
+
+Inspect exposes `effects`, `effectAttempts`, and accepted analysis in `results`.
+A local citation or completeness rejection creates a rejected effect with an
+inspectable reason and no send attempt; the complete analysis stays in results.
+Consumers must not present that rejection as a successful or clean review.
+Historical effects remain after new observations and workflow migrations, so a
+consumer must compare the effect's evidence key and expected revision with the
+current run before treating its receipt as current evidence.
+
+Send attempts use independent leases and survive release of provider ownership.
+Only proven stale inputs invalidate analysis and request a fresh observation.
+Unavailable follow-up reads preserve the confirmed receipt with unverified
+freshness, then schedule read-only reconciliation. They do not rerun analysis or
+resend the effect. Individual send receipts remain in `effectAttempts` when the
+top-level confirmed receipt receives a later freshness update.
 
 Review markers bind the repository and PR identity, run, revisions, pinned diff,
 and validated review content. Workflow versions, prompt text, attempt numbers,
@@ -89,3 +121,7 @@ GitHub documents the review commit and comment event in
 and the additive label endpoint in
 [adding labels to an issue](https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue).
 Real GitHub App scope verification and account behavior require the human pilot.
+
+The shared apply integration is based on reviewed issue #9. Final integration
+with issue #10's shared pull request write-credential factory, completion review,
+and the complete inherited test suite remain pending in this preparation branch.

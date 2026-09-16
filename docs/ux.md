@@ -183,3 +183,10 @@ and choices made by people. An empty classification is a visible no-op. Receipts
 distinguish remote acceptance from current-head status; an accepted stale review
 does not imply readiness for the new commit. These are GitHub text outputs and
 structured local records. There is no new desktop view or control.
+
+Local apply authorizes the selected action: a publication-only policy can publish
+validated analysis without enabling repair or push. Inspect prints each effect's
+outcome and freshness together, includes review coverage and missing evidence,
+and links the published review. An unverified follow-up read preserves remote
+acceptance while explaining why current readiness is not confirmed. Offline
+inspect and read-only reconciliation also cover publication receipts.
