@@ -222,3 +222,21 @@ test('an expired serializable deadline stops before checkout or provider creatio
   try { const job = s.job(); job.deadline = '2026-01-01T00:00:00Z'; const { result } = await runRepair(job, s.options); assert.equal(result.status, 'timeout'); assert.equal(result.provider, undefined); assert.equal(result.candidate, undefined); }
   finally { await s.cleanup(); }
 });
+
+for (const provider of ['codex', 'claude'] as const) test(`${provider} conflict repair can retain the PR tree in a new tested two-parent commit`, async () => {
+  const s = await setup(provider, 'keep_head', true);
+  try {
+    s.policy.requiredChecks[0]!.args[1] = s.policy.requiredChecks[0]!.args[1]!.replace('value = 3', 'value = 2');
+    const originalTree = git(s.repository, 'rev-parse', `${s.head}^{tree}`);
+    const { result, reference } = await runRepair(s.job(), s.options);
+    assert.equal(result.status, 'candidate', result.diagnostic); assert.equal(result.requiredChecksPassed, true);
+    assert.equal(result.candidate!.tree, originalTree); assert.notEqual(result.candidate!.sha, s.head);
+    assert.deepEqual(result.candidate!.parents, [s.head, s.base]); assert.deepEqual((result.payload as any).changedPaths, []);
+    assert.equal(result.checks[0]!.candidateSha, result.candidate!.sha); assert.equal(result.checks[0]!.status, 'passed');
+    assert.equal((await readArtifact(s.output, result.candidate!.patch)).length, 0);
+    const restored = join(s.temporary, 'restored'); await restoreCandidate(s.output, reference, restored);
+    assert.equal(git(restored, 'rev-parse', 'HEAD'), result.candidate!.sha);
+    assert.equal(git(restored, 'show', '-s', '--format=%P', 'HEAD'), `${s.head} ${s.base}`);
+    assert.equal(git(restored, 'rev-parse', 'HEAD^{tree}'), originalTree);
+  } finally { await s.cleanup(); }
+});

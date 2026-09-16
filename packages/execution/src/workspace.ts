@@ -133,7 +133,8 @@ export async function runRepair(input: RepairJob, options: RepairOptions): Promi
         if (proposal.candidateSha !== job.headSha) throw new ExecutionFailure('invalid_output', 'Candidate proposals must reference the pinned head; the host finalizes the new commit.');
         await git(checkout, ['add', '--all', '--', '.'], deadline, controller.signal);
         const paths = await changedPaths(checkout, job.headSha, deadline, controller.signal);
-        if (!paths.length) throw new ExecutionFailure('invalid_output', 'A candidate proposal made no change. Return no_change with its reason.');
+        if (!conflict && !paths.length) throw new ExecutionFailure('invalid_output', 'A review candidate proposal made no change. Return no_change with its reason.');
+        if (await git(checkout, ['ls-files', '--unmerged', '-z'], deadline, controller.signal)) throw new ExecutionFailure('invalid_output', 'The candidate index still contains unresolved conflicts.');
         if (canonicalJson(paths) !== canonicalJson([...proposal.changedPaths].sort()) || paths.some(path => !permittedPath(path, job.policy))) throw new ExecutionFailure('invalid_output', 'Candidate changed paths do not match the proposal or execution policy.');
         for (const path of paths) {
           const entry = await git(checkout, ['ls-files', '--stage', '--', path], deadline, controller.signal);

@@ -86,7 +86,10 @@ Both providers first pass the unchanged canonical and configured payload
 validators. The host then validates paths and thread decisions, stages the
 proposed files and creates a commit itself. Review repairs have the captured PR
 head as their sole parent. Conflict repairs have the captured PR head first and
-the captured target base second. The host replaces the proposal SHA with this
+the captured target base second. A reproduced conflict may retain the PR tree
+with an empty changed-path list; it still needs the new two-parent commit to
+record the conflict resolution. An empty content diff alone does not make that
+commit unnecessary. Review repairs still require a content change. The host replaces the proposal SHA with this
 new commit and runs both payload validators again before running checks.
 Consumers must use `RepairResult.payload` and `RepairResult.candidate`, not the
 proposal retained in `RepairResult.provider.payload`.
@@ -152,6 +155,42 @@ Checks each have their own timeout/output bound inside the job deadline.
 Cancellation, timeout and process exit terminate the process group, including
 remaining descendants. Notes and diagnostics stay in private artifacts outside
 the checkout. Candidate commits contain repository edits only.
+
+## Inspect a retained candidate
+
+Save the workspace command's `--json` output to a private file. From a built
+Repo Chap source checkout with dependencies installed, this example reads the
+verified result, prints its patch and required-check logs, and restores the
+candidate to an empty private directory. All paths below are local examples.
+
+```sh
+corepack pnpm exec node --input-type=module - \
+  /private/trials/repairs /private/trials/repair-result.json \
+  /private/trials/restored-candidate <<'JS'
+import { readFile } from 'node:fs/promises';
+import { readArtifact, readRepairResult, restoreCandidate } from '@repo-chap/execution';
+const [store, outputFile, destination] = process.argv.slice(2);
+const output = JSON.parse(await readFile(outputFile, 'utf8'));
+const result = await readRepairResult(store, output.resultReference);
+console.log(result.status, result.diagnostic);
+if (result.candidate) {
+  process.stdout.write(await readArtifact(store, result.candidate.patch));
+  for (const check of result.checks) {
+    console.log(`${check.id}: ${check.status}`);
+    if (check.log) process.stdout.write(await readArtifact(store, check.log));
+  }
+  await restoreCandidate(store, output.resultReference, destination);
+  console.log(`Restored ${result.candidate.sha} to ${destination}`);
+}
+JS
+```
+
+If the JSON command output was lost, use `readRepairAttempt(store, attemptId)`
+with the printed attempt ID. A completed receipt returns the same result and
+reference. A `running` receipt is unfinished and must be reconciled before a new
+attempt. Restoring a failed-check candidate is useful for inspection; restoration
+never authorizes publication. A conflict candidate can have an empty patch, so
+also inspect its recorded parents and required-check receipts.
 
 ## CLI outcomes and human verification
 

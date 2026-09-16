@@ -26,8 +26,8 @@ process.stdin.on('end', () => {
   if (['blocked', 'no_change'].includes(mode)) result = { schemaVersion: 1, outcome: mode, expectedHeadSha: data.sources.headSha,
     reason: mode === 'blocked' ? 'The product value is unknown; choose three or four.' : 'The requested behavior already exists.', threads, notesMarkdown: 'No candidate was prepared.' };
   else {
-    fs.writeFileSync('src/value.js', mode === 'leftover_conflict' ? '<<<<<<< HEAD\nexport const value = 3;\n=======\nexport const value = 4;\n>>>>>>> base\n' : 'export const value = 3;\n');
-    let paths = ['src/value.js'];
+    fs.writeFileSync('src/value.js', mode === 'leftover_conflict' ? '<<<<<<< HEAD\nexport const value = 3;\n=======\nexport const value = 4;\n>>>>>>> base\n' : mode === 'keep_head' ? 'export const value = 2;\n' : 'export const value = 3;\n');
+    let paths = mode === 'keep_head' ? [] : ['src/value.js'];
     if (mode === 'outside_policy') { fs.mkdirSync('src-extra'); fs.writeFileSync('src-extra/unrelated.js', 'changed\n'); paths.push('src-extra/unrelated.js'); }
     if (mode === 'symlink') { fs.symlinkSync('/tmp/unrelated-example', 'src/link'); paths.push('src/link'); }
     if (mode === 'changed_head') { cp.execFileSync('git', ['-c', 'user.name=River', '-c', 'user.email=river@example.invalid', 'commit', '-am', 'Unexpected provider commit']); }
