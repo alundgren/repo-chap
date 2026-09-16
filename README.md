@@ -5,13 +5,15 @@ GitHub pull requests moving through review, bounded repairs, and readable Slack
 handoffs. People merge.
 
 Status: the `repo-chap` CLI supports offline validation/replay, GitHub capture,
-provider analysis, tested local workspace repair and a private Linux analysis
-daemon. Remote effects and Electron remain planned.
+provider analysis, tested local workspace repair and a private Linux daemon.
+The Electron app edits workflow source, runs offline simulations and discusses
+captured drafts and results through a selected local Codex or Claude CLI.
 See [workflow commands and shared contracts](docs/workflow-api.md) to build,
 install, validate the supplied example, and replay fictional fixtures.
 
 - [Local workspace repair and recovery](docs/workspace-repair.md)
 - [Private analysis daemon and recovery](docs/daemon-analysis.md)
+- [Desktop workflow editor and discussion](docs/desktop.md)
 - [Linux service installation, diagnostics and backup](docs/daemon-operations.md)
 - [Product brief](docs/product-brief.md)
 - [Architecture](docs/pr-workflows/architecture.md)
@@ -47,8 +49,12 @@ system temporary storage and is never committed.
 
 ## Local authoring assistant in v1
 
-The Electron editor includes a conversation with an agent running through a
-supported local CLI. It can answer questions about the workflow, help create it,
+Discuss currently supports streamed questions, follow-ups, input replies,
+cancellation and provider-specific sessions. Editing/test tools and explicitly
+started live trials below remain later v1 implementation work.
+
+The complete v1 assistant will run through a supported local CLI. It will answer
+questions about the workflow, help create it,
 and make visible edits to JSON, referenced Markdown, and local test fixtures.
 It can run offline workflow tests and discuss actual results with the person.
 The existing PR-review chat feature in another Electron application is technical
