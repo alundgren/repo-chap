@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { chmod, lstat, mkdir, open, readdir, rename, rm } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { backup, DatabaseSync } from 'node:sqlite';
 import { prepareCaptureDirectory } from '@repo-chap/github';
@@ -76,7 +76,8 @@ async function checkFile(root: string, file: SavedFile): Promise<void> {
 async function freshDestination(source: string, destination: string): Promise<{ target: string; staging: string }> {
   const parent = await prepareCaptureDirectory(dirname(resolve(destination))), target = join(parent, basename(resolve(destination)));
   const relation = relative(source, target);
-  if (!relation || !relation.startsWith('..') || source.startsWith(`${target}/`)) throw new RuntimeError('Choose a backup or restore destination outside its source directory.');
+  const outsideSource = relation === '..' || relation.startsWith(`..${sep}`);
+  if (!outsideSource || source.startsWith(`${target}${sep}`)) throw new RuntimeError('Choose a backup or restore destination outside its source directory.');
   if (await lstat(target).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; })) throw new RuntimeError('Backup and restore require a new destination directory. Existing data is never replaced.');
   const staging = join(parent, `.repo-chap-${randomUUID()}.pending`); await mkdir(staging, { mode: 0o700 });
   return { target, staging };

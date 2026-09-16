@@ -117,12 +117,23 @@ test('backup captures committed WAL data and future table rows without rebuildin
   } finally { store.close(); await s.cleanup(); }
 });
 
-test('missing referenced artifacts, altered backup files and existing destinations fail without replacing data', async () => {
+test('backup and restore reject contained destinations, corruption and incomplete durable data', async () => {
   const s = await setup(), directory = join(s.temporary, 'state'), destination = join(s.temporary, 'backup'), restored = join(s.temporary, 'restored');
   const store = await RuntimeStore.open(directory);
   try {
     const repo = await store.register({ id: 'R_paperboat', name: 'reef-labs/paperboat', package: s.pkg, profile: 'pilot', reviewers: [] }, Date.now());
+    await assert.rejects(backupState(directory, join(directory, '..backup')), /outside its source/);
+    await assert.rejects(readdir(join(directory, '..backup')), { code: 'ENOENT' });
+    assert.deepEqual(store.repository(repo.id), repo);
     const manifest = await backupState(directory, destination);
+    const snapshot = await readFile(join(destination, 'runtime.sqlite'));
+    await assert.rejects(restoreState(destination, join(destination, '..restore')), /outside its source/);
+    await assert.rejects(readdir(join(destination, '..restore')), { code: 'ENOENT' });
+    assert.deepEqual(await readFile(join(destination, 'runtime.sqlite')), snapshot);
+    assert.equal(await readFile(join(destination, 'manifest.json'), 'utf8'), JSON.stringify(manifest));
+    const validDestination = join(s.temporary, 'valid-restored'); await restoreState(destination, validDestination);
+    const valid = await RuntimeStore.open(validDestination);
+    try { assert.deepEqual(valid.repository(repo.id), repo); } finally { valid.close(); }
     await writeFile(join(destination, 'manifest.json'), JSON.stringify({ ...manifest, runtimeSchema: '3' }));
     await assert.rejects(restoreState(destination, join(s.temporary, 'wrong-schema')), /schema/);
     await writeFile(join(destination, 'manifest.json'), JSON.stringify(manifest));
