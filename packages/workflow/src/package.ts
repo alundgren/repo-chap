@@ -1,4 +1,6 @@
 import { posix } from 'node:path';
+import builtinSchemas from './builtin-results.schema.json' with { type: 'json' };
+import { actionRegistry } from './registry.js';
 import type { ValidateFunction } from 'ajv/dist/2020.js';
 import { canonicalJson, digest, fail, freeze, parseJson, record, WorkflowError } from './common.js';
 import { limits, schemaDiagnostics, schemaValidator, validateWorkflow } from './validate.js';
@@ -46,10 +48,24 @@ function contractValidator(pkg: WorkflowPackage, actionId: string): ValidateFunc
     fail('schema_reference', reference, 'Invalid JSON Pointer encoding.');
   }
   if (typeof selected !== 'boolean' && !record(selected)) fail('schema_reference', reference, 'Output contract fragment must select a schema.');
-  try { return schemaValidator().compile(fragment ? { ...document, $ref: `#${fragment}` } : document); }
+  try {
+    const ajv = schemaValidator();
+    const key = 'urn:repo-chap:output-contract';
+    ajv.addSchema(document, key);
+    const validate = ajv.getSchema(`${key}${fragment ? `#${fragment}` : ''}`);
+    if (!validate) fail('schema_reference', reference, 'Output contract fragment could not be resolved.');
+    return validate;
+  }
   catch (error) { return fail('invalid_schema', reference, `Invalid output contract: ${error instanceof Error ? error.message : String(error)}`); }
 }
+const builtinValidator = schemaValidator().addSchema(builtinSchemas);
 export function validateActionPayload(pkg: WorkflowPackage, actionId: string, payload: unknown): void {
+  const action = pkg.workflow.actions[actionId];
+  const requiredResult = action && actionRegistry[action.uses]?.result;
+  if (requiredResult) {
+    const required = builtinValidator.getSchema(`${builtinSchemas.$id}#/$defs/${requiredResult}`)!;
+    if (!required(payload)) throw new WorkflowError(schemaDiagnostics(required, `/results/${actionId}/payload`));
+  }
   const validate = contractValidator(pkg, actionId);
   if (!validate(payload)) throw new WorkflowError(schemaDiagnostics(validate, `/results/${actionId}/payload`));
 }

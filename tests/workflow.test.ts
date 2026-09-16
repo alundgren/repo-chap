@@ -225,3 +225,113 @@ test('fixture parsing rejects missing time, coerced booleans and unsupported ver
   const input = await fixture('handoff');
   for (const invalid of [{ ...input, now: undefined }, { ...input, schemaVersion: 2 }, { ...input, observations: [{ facts: { conflict: 'false' } }] }, { ...input, now: '2026-02-30T12:00:00Z' }]) rejectsCode(() => parseFixture(invalid), 'schema');
 });
+
+test('replacement candidates and failed retries cannot reuse earlier checks or push results', async () => {
+  const candidate = JSON.parse(await readFile('docs/pr-workflows/examples/results/candidate.json', 'utf8'));
+  for (const stage of ['repair-success', 'repair-failure', 'checks-failure', 'push-failure']) {
+    const workflow = copy();
+    const input = await fixture('conflict');
+    if (stage.startsWith('repair')) {
+      workflow.actions.second_repair = { ...workflow.actions.resolve_conflict!, onSuccess: 'push_candidate', onFailure: 'push_candidate' };
+      workflow.actions.validate_candidate!.onSuccess = 'second_repair';
+      input.results!.second_repair = [stage === 'repair-success' ? { status: 'success', payload: { ...candidate, candidateSha: 'd'.repeat(40) } } : { status: 'failure' }];
+    } else if (stage === 'checks-failure') {
+      workflow.actions.recheck = { ...workflow.actions.validate_candidate!, onFailure: 'push_candidate' };
+      workflow.actions.validate_candidate!.onSuccess = 'recheck';
+      input.results!.recheck = [{ status: 'failure' }];
+    } else {
+      workflow.actions.retry_push = { ...workflow.actions.push_candidate!, onFailure: 'resolve_threads' };
+      workflow.actions.push_candidate!.onSuccess = 'retry_push';
+      input.results!.retry_push = [{ status: 'failure' }];
+    }
+    rejectsCode(() => compile(workflow), 'action_input');
+    // Old serialized packages may predate the current validator's checks.
+    const result = replay({ ...pkg, workflow }, input);
+    assert.equal(result.status, 'blocked', stage);
+    assert.match(result.reason, /requires a successful/);
+    assert.ok(!result.actions.some(action => action.actionId === 'resolve_threads'), stage);
+    if (stage !== 'push-failure') assert.ok(!result.actions.some(action => action.actionId === 'push_candidate'), stage);
+  }
+});
+
+test('a replacement candidate succeeds only after its own checks', async () => {
+  const workflow = copy();
+  workflow.actions.second_repair = { ...workflow.actions.resolve_conflict!, onSuccess: 'second_checks' };
+  workflow.actions.second_checks = { ...workflow.actions.validate_candidate! };
+  workflow.actions.validate_candidate!.onSuccess = 'second_repair';
+  const input = await fixture('conflict');
+  const candidate = JSON.parse(await readFile('docs/pr-workflows/examples/results/candidate.json', 'utf8'));
+  input.results!.second_repair = [{ status: 'success', payload: { ...candidate, candidateSha: 'd'.repeat(40) } }];
+  input.results!.second_checks = [{ status: 'success' }];
+  const result = replay(compile(workflow), input);
+  assert.equal(result.status, 'needs_observation');
+  assert.deepEqual(result.actions.map(action => action.actionId), ['resolve_conflict', 'validate_candidate', 'second_repair', 'second_checks', 'push_candidate', 'resolve_threads']);
+});
+
+test('failed analysis stays invalid after observation even when an old acceptable result exists', async () => {
+  for (const id of ['review', 'classify']) {
+    const workflow = copy();
+    workflow.rules.unshift(
+      { id: 'refresh_analysis', when: { field: 'facts.conflict', op: 'eq', value: true }, action: id },
+      { id: 'handoff_after_refresh', when: { field: 'facts.conflict', op: 'eq', value: false }, action: 'handoff' },
+    );
+    workflow.actions[id]!.onFailure = '$observe';
+    const input = await fixture('handoff');
+    input.observations[0]!.facts.conflict = true;
+    const next = structuredClone(input.observations[0]!); next.facts.conflict = false;
+    input.observations.push(next);
+    input.results![id] = [{ status: 'failure' }];
+    const result = replay(compile(workflow), input);
+    assert.equal(result.proposedEffects.at(-1)?.outcome, 'blocked_execution', id);
+    assert.equal(result.control.memory?.[id === 'review' ? 'reviewCurrent' : 'classificationCurrent'], false);
+    assert.equal(result.control[id === 'review' ? 'review' : 'classification'], undefined);
+  }
+});
+
+test('successful replacement analysis can restore readiness after a failed attempt', async () => {
+  for (const id of ['review', 'classify']) {
+    const workflow = copy(); workflow.actions[id]!.onFailure = '$observe';
+    const input = await fixture('handoff');
+    input.control!.memory![id === 'review' ? 'reviewCurrent' : 'classificationCurrent'] = false;
+    input.observations.push(structuredClone(input.observations[0]!), structuredClone(input.observations[0]!));
+    const name = id === 'review' ? 'review' : 'classification';
+    const payload = JSON.parse(await readFile(`docs/pr-workflows/examples/results/${name}.json`, 'utf8'));
+    input.results![id] = [{ status: 'failure' }, { status: 'success', payload }];
+    const result = replay(compile(workflow), input);
+    assert.equal(result.proposedEffects.at(-1)?.outcome, 'ready_for_human_merge', id);
+    assert.deepEqual(result.actions.slice(0, 2).map(action => action.status), ['failure', 'success']);
+  }
+});
+
+test('custom schemas cannot remove the required built-in result contract', async () => {
+  for (const [id, payload] of [['resolve_conflict', null], ['classify', {}], ['review', {}]] as const) {
+    const workflow = copy(); workflow.actions[id]!.outputSchema = 'permissive.json';
+    const permissive = buildPackage(workflowPath, {
+      ...source, [workflowPath]: JSON.stringify(workflow),
+      'docs/pr-workflows/examples/team-pr/permissive.json': '{"$schema":"https://json-schema.org/draft/2020-12/schema"}',
+    });
+    const input = await fixture(id === 'resolve_conflict' ? 'conflict' : 'handoff');
+    if (id !== 'resolve_conflict') input.control!.memory![id === 'review' ? 'reviewCurrent' : 'classificationCurrent'] = false;
+    input.results![id] = [{ status: 'success', payload }];
+    rejectsCode(() => replay(permissive, input), 'schema');
+  }
+});
+
+test('schema fragments validate their own constraints and retain internal references', async () => {
+  const contractPath = 'docs/pr-workflows/schemas/results.schema.json';
+  const contract = JSON.parse(source[contractPath]!);
+  contract.type = 'null';
+  contract.$defs.originalCandidate = contract.$defs.candidate;
+  contract.$defs.candidate = { $ref: '#/$defs/originalCandidate' };
+  const selected = buildPackage(workflowPath, { ...source, [contractPath]: JSON.stringify(contract) });
+  const result = replay(selected, await fixture('conflict'));
+  assert.equal(result.status, 'needs_observation');
+  assert.equal(result.actions.at(-1)?.actionId, 'resolve_threads');
+  const constrained = copy(); constrained.actions.resolve_conflict!.outputSchema = 'narrow.json';
+  const narrow = buildPackage(workflowPath, {
+    ...source, [workflowPath]: JSON.stringify(constrained),
+    'docs/pr-workflows/examples/team-pr/narrow.json': JSON.stringify({ $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties: { candidateSha: { const: 'd'.repeat(40) } } }),
+  });
+  const input = await fixture('conflict');
+  rejectsCode(() => replay(narrow, input), 'schema');
+});

@@ -26,7 +26,7 @@ export function replay(pkg: WorkflowPackage, input: ReplayFixture): ReplayResult
   let observation = fixture.observations[0]!;
   let actionId = '';
   let failureReason: string | undefined;
-  const inputs = new Set<string>();
+  const inputs = new Map<string, string>();
   const used: Record<string, number> = Object.create(null);
   const now = Date.parse(fixture.now);
   for (let step = 0; step < (fixture.maxSteps ?? limits.replaySteps); step++) {
@@ -38,7 +38,7 @@ export function replay(pkg: WorkflowPackage, input: ReplayFixture): ReplayResult
     const definition = actionRegistry[action.uses]!;
     const facts = currentFacts(workflow, observation, fixture.now);
     const memory = currentMemory(control, observation);
-    if (definition.requires && !inputs.has(definition.requires)) return stop('blocked', `${actionId} requires a successful ${definition.requires} result in this action chain.`);
+    if (definition.requires && (!inputs.has('candidate') || inputs.get(definition.requires) !== inputs.get('candidate'))) return stop('blocked', `${actionId} requires a successful ${definition.requires} result in this action chain.`);
     if (action.uses === 'control.close') {
       if (facts.lifecycle !== 'closed' && facts.lifecycle !== 'merged') return stop('blocked', 'Closure requires an observation that confirms closed or merged.');
       result.actions.push({ actionId, uses: action.uses, status: 'simulated', reason: 'Observed lifecycle is closed.' });
@@ -89,6 +89,15 @@ export function replay(pkg: WorkflowPackage, input: ReplayFixture): ReplayResult
     const stub = fixture.results?.[actionId]?.[index];
     if (!stub) return stop('needs_result', `Supply fixture.results.${actionId}[${index}] to continue the proposed action.`);
     used[actionId] = index + 1;
+    for (const kind of definition.invalidates ?? []) inputs.delete(kind);
+    if (definition.repair || action.uses === 'agent.review') {
+      control.memory = { ...control.memory, reviewCurrent: false, packetCurrent: false };
+      delete control.review;
+    }
+    if (definition.repair || action.uses === 'agent.classify') {
+      control.memory = { ...control.memory, classificationCurrent: false, packetCurrent: false };
+      delete control.classification;
+    }
     if (definition.consumesAgentBudget) {
       agents++; control.attemptsThisHead = (control.attemptsThisHead ?? 0) + 1;
       if (definition.repair) control.repairsThisLifecycle = (control.repairsThisLifecycle ?? 0) + 1;
@@ -122,7 +131,10 @@ export function replay(pkg: WorkflowPackage, input: ReplayFixture): ReplayResult
     }
     if (!success) failureReason ??= stub.reason ?? `${actionId} failed.`;
     result.actions.push({ actionId, uses: action.uses, status: success ? 'success' : 'failure', reason: success ? 'Used the supplied successful result.' : failureReason! });
-    if (success && definition.produces) inputs.add(definition.produces);
+    if (success && definition.produces) {
+      const candidateSha = definition.produces === 'candidate' ? (stub.payload as { candidateSha: string }).candidateSha : inputs.get('candidate')!;
+      inputs.set(definition.produces, candidateSha);
+    }
     const next = success ? action.onSuccess : action.onFailure;
     if (next === '$wait') return stop('waiting', failureReason ?? 'The action chain is waiting for an external signal.');
     if (next === '$blocked') return stop('blocked', failureReason ?? 'The action chain requested an operational block.');

@@ -1,0 +1,418 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repo-chap.example.test/schemas/builtin-results-v1.json",
+  "title": "Required built-in agent results",
+  "$defs": {
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "headSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "baseSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "enum": [
+            "acceptable",
+            "concerns",
+            "blocking",
+            "inconclusive"
+          ]
+        },
+        "coverage": {
+          "enum": [
+            "complete",
+            "partial"
+          ]
+        },
+        "missingEvidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "enum": [
+                  "bug",
+                  "security",
+                  "reliability",
+                  "maintainability",
+                  "ux",
+                  "test_gap"
+                ]
+              },
+              "severity": {
+                "enum": [
+                  "critical",
+                  "high",
+                  "medium",
+                  "low",
+                  "info"
+                ]
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "side": {
+                      "enum": [
+                        "base",
+                        "head"
+                      ]
+                    },
+                    "startLine": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "endLine": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "explanation": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "side",
+                    "startLine",
+                    "endLine",
+                    "explanation"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "severity",
+              "confidence",
+              "title",
+              "reason",
+              "evidence"
+            ]
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "headSha",
+        "baseSha",
+        "summary",
+        "verdict",
+        "coverage",
+        "missingEvidence",
+        "findings"
+      ]
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "headSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "labels": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "enum": [
+                  "security",
+                  "ux",
+                  "auth",
+                  "db_migration",
+                  "tests",
+                  "other"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "side": {
+                      "enum": [
+                        "base",
+                        "head"
+                      ]
+                    },
+                    "startLine": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "endLine": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "explanation": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "side",
+                    "startLine",
+                    "endLine",
+                    "explanation"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "name",
+              "reason",
+              "evidence"
+            ]
+          }
+        },
+        "uncertain": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "headSha",
+        "labels",
+        "uncertain"
+      ]
+    },
+    "candidate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "expectedHeadSha": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            "baseSha": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            "candidateSha": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1
+            },
+            "changedPaths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "threads": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "threadId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "disposition": {
+                    "enum": [
+                      "addressed",
+                      "declined",
+                      "blocked"
+                    ]
+                  },
+                  "response": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "evidenceRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "threadId",
+                  "disposition",
+                  "response",
+                  "evidenceRefs"
+                ]
+              }
+            },
+            "suggestedChecks": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "notesMarkdown": {
+              "type": "string",
+              "minLength": 1
+            },
+            "outcome": {
+              "const": "candidate"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "expectedHeadSha",
+            "baseSha",
+            "candidateSha",
+            "summary",
+            "changedPaths",
+            "threads",
+            "suggestedChecks",
+            "notesMarkdown",
+            "outcome"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": {
+              "const": 1
+            },
+            "outcome": {
+              "enum": [
+                "blocked",
+                "no_change"
+              ]
+            },
+            "expectedHeadSha": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "threads": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "threadId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "disposition": {
+                    "enum": [
+                      "addressed",
+                      "declined",
+                      "blocked"
+                    ]
+                  },
+                  "response": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "evidenceRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "threadId",
+                  "disposition",
+                  "response",
+                  "evidenceRefs"
+                ]
+              }
+            },
+            "notesMarkdown": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "outcome",
+            "expectedHeadSha",
+            "reason",
+            "threads",
+            "notesMarkdown"
+          ]
+        }
+      ]
+    }
+  }
+}

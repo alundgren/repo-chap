@@ -86,6 +86,10 @@ trimming and lowercase conversion. Action IDs follow the lowercase schema.
 The validator also rejects unknown actions, missing continuations, incompatible
 execution types or capabilities, unreachable actions, and paths that reach
 candidate checks, push, or thread resolution without their required predecessor.
+Starting a repair invalidates the previous candidate, checks, and push result.
+Starting checks invalidates earlier checks and push results; starting a push
+invalidates an earlier push result. Failure routes retain those invalidations.
+Replay binds successful checks and push stubs to the current candidate SHA.
 
 The exported `actionRegistry` defines these trusted names:
 
@@ -151,9 +155,17 @@ suppression evidence digest cannot authorize another repair.
 Optional `results` maps action IDs to ordered stub arrays. Each stub has
 `status: success | failure | unknown`, an optional `payload`, and an optional
 `reason`. Successful agent payloads must satisfy the action's pinned output
-contract. Repair `blocked` and `no_change` payloads follow the failure route,
+contract and the engine-owned `builtin-results.schema.json` contract for that
+built-in action. Repository contracts may add constraints but cannot remove
+required result fields. Selecting a JSON Pointer validates only that definition,
+with its document available for internal references; unrelated root constraints
+do not apply. Repair `blocked` and `no_change` payloads follow the failure route,
 record suppression, and never reach a push. Unknown outcomes stop for
-reconciliation. Head/base changes invalidate projected current analysis while
+reconciliation. Starting a new review or classification invalidates its old
+readiness projection before accepting any result, including failure or unknown
+outcomes. Repair attempts invalidate both analysis projections. These
+invalidations survive `$observe` until successful replacement analysis.
+Head/base changes invalidate projected current analysis while
 preserving budgets. A supplied payload for an older head or base blocks work.
 
 A successful action follows `onSuccess`; a failure follows `onFailure`.

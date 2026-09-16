@@ -107,9 +107,11 @@ export function validateWorkflow(value: unknown, maximumCapabilities: readonly C
     checkedInputs.add(key);
     const definition = Object.hasOwn(actionRegistry, action.uses) ? actionRegistry[action.uses] : undefined;
     if (definition?.requires && !available.has(definition.requires)) error('action_input', `/actions/${id}`, `${action.uses} requires a successful ${definition.requires} result on every incoming path.`);
-    const success = new Set(available);
+    const retained = new Set(available);
+    for (const kind of definition?.invalidates ?? []) retained.delete(kind);
+    const success = new Set(retained);
     if (definition?.produces) success.add(definition.produces);
-    checkInputs(action.onSuccess, success); checkInputs(action.onFailure, available);
+    checkInputs(action.onSuccess, success); checkInputs(action.onFailure, retained);
   }
   workflow.rules.forEach(rule => checkInputs(rule.action, new Set()));
   checkInputs(workflow.otherwise, new Set());
