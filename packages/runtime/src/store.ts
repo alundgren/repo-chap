@@ -8,6 +8,7 @@ import { readArtifact, readRepairResult, validateTestedCandidate, type ArtifactR
 import { applyPolicyDigest, requireApplyPolicy, type ApplyPolicy } from './policy.js';
 import { ArtifactStore, RuntimeError } from './artifacts.js';
 import { onlyPublicationChanges } from './publication.js';
+import { claimProcess, releaseProcess } from './ownership.js';
 import { defaultLimits, type AnalysisJob, type AnalysisResult, type ArtifactRef, type Claim, type EffectRecord, type EffectRequest, type EffectState, type EffectLease, type EffectAttempt, type RepairAttemptJob, type RepairAttemptResult, type MigrationRecord, type Registration, type RepositoryRecord, type RunRecord, type RuntimeLimits, type SourceRegistration, type WorkflowVersion } from './types.js';
 import { SlackOutbox } from './slack.js';
 
@@ -35,7 +36,7 @@ export class RuntimeStore {
     this.repairDirectory = join(directory, 'repairs');
     if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='metadata'").get()) {
       const version = db.prepare("SELECT value FROM metadata WHERE key='schema'").get() as { value: string } | undefined;
-      if (!['1', '2', '3'].includes(version?.value ?? '')) { db.close(); throw new RuntimeError('Unsupported runtime database version.'); }
+      if (!['1', '2', '3', '4'].includes(version?.value ?? '')) { db.close(); throw new RuntimeError('Unsupported runtime database version.'); }
     }
     db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -61,11 +62,11 @@ export class RuntimeStore {
           for (const run of this.runs(repo.id)) { run.workflowVersionId = version.id; run.waitTiming = null; this.saveRun(run); }
         }
       }
-      if (schema && schema.value !== '3') {
+      if (schema && ['1', '2'].includes(schema.value)) {
         // An older daemon could have sent a request without a durable effect lease.
         db.prepare("UPDATE effects SET state='unknown' WHERE state='sending'").run();
       }
-      db.prepare("INSERT INTO metadata VALUES ('schema','3') ON CONFLICT(key) DO UPDATE SET value='3'").run();
+      db.prepare("INSERT INTO metadata VALUES ('schema','4') ON CONFLICT(key) DO UPDATE SET value='4'").run();
       return new SlackOutbox(db, this.artifacts, this);
     });
   }
@@ -77,7 +78,21 @@ export class RuntimeStore {
       const info = await lstat(path).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; });
       if (info && (!info.isFile() || info.isSymbolicLink() || info.mode & 0o077 || process.getuid && info.uid !== process.getuid())) throw new RuntimeError('SQLite files must be private regular files owned by the daemon account.');
     }
-    return new RuntimeStore(new DatabaseSync(file), root, limits);
+    const db = new DatabaseSync(file);
+    let migrationOwner: string | undefined;
+    try {
+      if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='metadata'").get()) {
+        const version = db.prepare("SELECT value FROM metadata WHERE key='schema'").get();
+        if (version && ['1', '2', '3'].includes(String(version.value))) migrationOwner = claimProcess(db);
+      }
+      const store = new RuntimeStore(db, root, limits);
+      if (migrationOwner) { releaseProcess(db, migrationOwner); migrationOwner = undefined; }
+      return store;
+    } catch (error) {
+      if (migrationOwner) releaseProcess(db, migrationOwner);
+      try { db.close(); } catch {}
+      throw error;
+    }
   }
   close(): void { this.db.close(); }
   private transaction<T>(operation: () => T): T {
@@ -87,20 +102,44 @@ export class RuntimeStore {
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   claimDaemon(): string {
-    return this.transaction(() => {
-      const row = this.db.prepare("SELECT value FROM metadata WHERE key='daemon_owner'").get() as { value: string } | undefined;
-      if (row) {
-        const owner = JSON.parse(row.value) as { pid: number };
-        if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new RuntimeError('The daemon ownership record is invalid. Inspect private runtime storage.');
-        try { process.kill(owner.pid, 0); throw new RuntimeError('A daemon already owns this state directory. Use daemon status.'); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-      }
-      const token = randomUUID();
-      this.db.prepare("INSERT INTO metadata VALUES ('daemon_owner',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(json({ pid: process.pid, token })); return token;
-    });
+    return claimProcess(this.db);
   }
   releaseDaemon(token: string): void {
-    this.db.prepare("DELETE FROM metadata WHERE key='daemon_owner' AND json_extract(value,'$.token')=?").run(token);
+    releaseProcess(this.db, token);
+  }
+  recovery(): { paused: boolean; restoredAt: number | null; reconciledAt: number | null; unknownEffects: number } {
+    const row = this.db.prepare("SELECT value FROM metadata WHERE key='restore_recovery'").get();
+    const saved = row ? JSON.parse(String(row.value)) : { paused: false, restoredAt: null, reconciledAt: null };
+    return { ...saved, unknownEffects: Number(this.db.prepare("SELECT COUNT(*) AS count FROM effects WHERE state IN ('sending','unknown')").get()!.count) };
+  }
+  prepareRestoredState(now: number): void {
+    this.transaction(() => {
+      for (const run of this.runs()) if (run.owner) {
+        run.token++; run.owner = null; run.leaseUntil = null;
+        this.db.prepare("UPDATE attempts SET state='abandoned' WHERE run_id=? AND state='running'").run(run.id);
+        if (run.status === 'running') { run.status = 'ready'; run.dueAt = now; run.reason = 'Restored interrupted work; its reservation remains consumed.'; }
+        this.saveRun(run);
+      }
+      for (const row of this.db.prepare("SELECT id FROM effects WHERE state='sending'").all()) this.unknownEffect(String(row.id), now);
+      this.db.prepare('DELETE FROM effect_leases').run();
+      this.db.prepare("DELETE FROM metadata WHERE key='daemon_owner'").run();
+      this.db.prepare("INSERT INTO metadata VALUES ('restore_recovery',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .run(json({ paused: true, restoredAt: now, reconciledAt: null }));
+    });
+  }
+  recordRecoveryReconciliation(now: number): void {
+    const recovery = this.recovery();
+    if (recovery.paused) this.db.prepare("UPDATE metadata SET value=? WHERE key='restore_recovery'").run(json({ paused: true, restoredAt: recovery.restoredAt, reconciledAt: now }));
+  }
+  resumeRestoredState(keepUnknown: boolean): ReturnType<RuntimeStore['recovery']> {
+    return this.transaction(() => {
+      const recovery = this.recovery();
+      if (!recovery.paused) throw new RuntimeError('This installation has no restore pause. Repository pauses use daemon resume.');
+      if (recovery.reconciledAt === null) throw new RuntimeError('Run daemon reconcile and inspect its outcomes before releasing the restore pause.');
+      if (recovery.unknownEffects && !keepUnknown) throw new RuntimeError('Uncertain effects remain. Inspect them, then use --keep-unknown to resume unrelated work while retaining their unknown outcomes.');
+      this.db.prepare("UPDATE metadata SET value=? WHERE key='restore_recovery'").run(json({ paused: false, restoredAt: recovery.restoredAt, reconciledAt: recovery.reconciledAt }));
+      return this.recovery();
+    });
   }
   repositories(): RepositoryRecord[] { return this.db.prepare('SELECT data FROM repositories ORDER BY name').all().map(row => decode<RepositoryRecord>(row)); }
   repository(id: string): RepositoryRecord {
@@ -393,7 +432,7 @@ export class RuntimeStore {
     this.recover(now);
     return this.transaction(() => {
       const run = this.run(runId), repo = this.repository(run.repositoryId);
-      if (!owner || repo.paused || run.owner || ['cancelled', 'closed'].includes(run.status)) return null;
+      if (this.recovery().paused || !owner || repo.paused || run.owner || ['cancelled', 'closed'].includes(run.status)) return null;
       if (effectId) {
         const effect = this.effects(run.id).find(value => value.id === effectId);
         if (!effect || effect.evidenceKey !== run.evidenceKey || !run.evidenceAvailable || !(effect.state === 'planned' || effect.state === 'rejected' && (effect.receipt as { retryable?: boolean } | null)?.retryable === true)) return null;
@@ -416,7 +455,7 @@ export class RuntimeStore {
   }
   isCurrent(claim: Claim, now: number): boolean {
     const run = this.run(claim.runId);
-    return run.owner === claim.owner && run.token === claim.token && run.leaseUntil! > now && run.evidenceKey === claim.evidenceKey && run.notesRevision === claim.notesRevision;
+    return !this.recovery().paused && run.owner === claim.owner && run.token === claim.token && run.leaseUntil! > now && run.evidenceKey === claim.evidenceKey && run.notesRevision === claim.notesRevision;
   }
   private requireCurrent(claim: Claim, now: number): RunRecord {
     if (!this.isCurrent(claim, now)) throw new RuntimeError('Ownership or pinned inputs changed. The result is stale.'); return this.run(claim.runId);
@@ -698,7 +737,7 @@ export class RuntimeStore {
   effectCurrent(lease: EffectLease, now: number): boolean {
     const row = this.db.prepare('SELECT * FROM effect_leases WHERE effect_id=?').get(lease.effectId), run = this.run(lease.runId);
     const effect = this.effects(run.id).find(value => value.id === lease.effectId);
-    return !!row && row.owner === lease.owner && row.token === lease.token && Number(row.until) > now && effect?.state === 'sending' &&
+    return !this.recovery().paused && !!row && row.owner === lease.owner && row.token === lease.token && Number(row.until) > now && effect?.state === 'sending' &&
       effect.evidenceKey === run.evidenceKey && !['cancelled', 'closed'].includes(run.status) && !this.repository(run.repositoryId).paused;
   }
   ownsEffect(runId: string, owner: string, now: number): boolean {
