@@ -1,7 +1,8 @@
 const fs = require('node:fs');
 const readline = require('node:readline');
 const cp = require('node:child_process');
-const { provider, mode, log, childPid } = global.fixture;
+const { provider, log, childPid, modeFile, noTools } = global.fixture;
+const mode = modeFile ? fs.readFileSync(modeFile, 'utf8').trim() : global.fixture.mode;
 const args = process.argv.slice(2);
 const option = name => args[args.indexOf(name) + 1];
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
@@ -31,12 +32,15 @@ const run = async () => {
     const child = cp.spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'], { stdio: 'ignore' });
     fs.writeFileSync(childPid, String(child.pid)); setInterval(() => {}, 1000); return;
   }
+  if (mode === 'stream') { text('A partial answer about this workflow. '); setTimeout(finish, 800); return; }
+  if (mode === 'long') { text('Long fictional answer. '.repeat(8000)); finish(); return; }
   if (mode === 'input' || mode === 'unsupported-input' || mode === 'approval') {
     pending = 'input';
     if (provider === 'codex') send({ id: 77, method: mode === 'unsupported-input' ? 'item/commandExecution/requestApproval' : 'item/tool/requestUserInput', params: { threadId: session, turnId: 'turn-1', isBlocking: true, questions: [{ id: 'scope', header: 'Scope', question: 'Which rule?', isOther: true, options: [{ label: 'Waiting', description: 'Use the waiting rule.' }] }] } });
     else send({ type: 'control_request', request_id: 'input-1', request: { subtype: 'can_use_tool', tool_name: mode === 'unsupported-input' ? 'Bash' : mode === 'approval' ? 'mcp__repo_chap__read_context' : 'AskUserQuestion', input: { questions: [{ header: 'Scope', question: 'Which rule?', multiSelect: false, options: [{ label: 'Waiting', description: 'Use the waiting rule.' }] }] } } });
     return;
   }
+  if (noTools && mode !== 'unknown-tool') { finish(); return; }
   const name = mode === 'unknown-tool' ? 'change_files' : 'read_context';
   if (provider === 'codex') { pending = 'tool'; send({ id: 78, method: 'item/tool/call', params: { threadId: session, turnId: 'turn-1', callId: 'call-context', tool: name, arguments: {} } }); }
   else {
@@ -63,7 +67,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if ((message.id === 77 || message.id === 78) && pending) { pending = null; finish(); }
   } else {
     if (message.type === 'control_request' && message.request.subtype === 'initialize') send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: { account: { tokenSource: mode === 'login' ? 'none' : 'oauth', apiKeySource: 'none' } } } });
-    if (message.type === 'user') { send({ type: 'system', subtype: 'init', session_id: session, tools: ['AskUserQuestion', 'mcp__repo_chap__read_context'], mcp_servers: [{ name: 'repo_chap', status: 'connected' }] }); void run(); }
+    if (message.type === 'user') { send({ type: 'system', subtype: 'init', session_id: session, tools: ['AskUserQuestion', ...(noTools ? [] : ['mcp__repo_chap__read_context'])], mcp_servers: [{ name: 'repo_chap', status: 'connected' }] }); void run(); }
     if (message.type === 'control_response' && pending) { pending = null; finish(); }
   }
 });

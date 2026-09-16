@@ -1,5 +1,5 @@
-import type { ConversationErrorCode, ConversationInputRequest, ProviderProfile } from '@repo-chap/providers';
-import type { DocumentToken } from './protocol.js';
+import type { ConversationErrorCode, ConversationInputAnswer, ConversationInputRequest, ProviderProfile } from '@repo-chap/providers';
+import type { DocumentToken, EditorResult } from './protocol.js';
 
 export type ConversationProvider = Pick<ProviderProfile, 'provider' | 'name' | 'model' | 'effort'>;
 
@@ -52,4 +52,24 @@ export interface ConversationSnapshot {
   input: { turnId: string; request: ConversationInputRequest } | null;
   history: ConversationHistoryEntry[];
   omittedEntries: number;
+}
+
+export interface ConversationContextSelection {
+  ruleId: string | null;
+  markdownPaths: string[];
+  includeSimulation: boolean;
+}
+export interface ConversationResult extends EditorResult {
+  conversation: ConversationSnapshot | null;
+  profiles: ConversationProvider[];
+}
+export interface ConversationBridge {
+  current(): Promise<ConversationResult>;
+  loadProfiles(): Promise<ConversationResult>;
+  selectProfile(documentSessionId: string, name: string): Promise<ConversationResult>;
+  send(token: DocumentToken, prompt: string, selection: ConversationContextSelection): Promise<ConversationResult>;
+  cancel(conversationId: string, turnId: string): Promise<ConversationResult>;
+  fresh(conversationId: string): Promise<ConversationResult>;
+  answer(conversationId: string, turnId: string, requestId: string, answer: ConversationInputAnswer): Promise<ConversationResult>;
+  onChange(callback: (snapshot: ConversationSnapshot) => void): () => void;
 }

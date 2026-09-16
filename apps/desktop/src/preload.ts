@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { EditorBridge } from './protocol.js';
+import type { ConversationBridge, ConversationSnapshot } from './conversation-protocol.js';
 
 const bridge: EditorBridge = {
   current: () => ipcRenderer.invoke('editor:current'),
@@ -25,3 +26,19 @@ const bridge: EditorBridge = {
   },
 };
 contextBridge.exposeInMainWorld('repoChap', bridge);
+
+const conversation: ConversationBridge = {
+  current: () => ipcRenderer.invoke('conversation:current'),
+  loadProfiles: () => ipcRenderer.invoke('conversation:load-profiles'),
+  selectProfile: (documentSessionId, name) => ipcRenderer.invoke('conversation:select-profile', documentSessionId, name),
+  send: (token, prompt, selection) => ipcRenderer.invoke('conversation:send', token, prompt, selection),
+  cancel: (id, turnId) => ipcRenderer.invoke('conversation:cancel', id, turnId),
+  fresh: id => ipcRenderer.invoke('conversation:fresh', id),
+  answer: (id, turnId, requestId, answer) => ipcRenderer.invoke('conversation:answer', id, turnId, requestId, answer),
+  onChange: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, snapshot: ConversationSnapshot): void => callback(snapshot);
+    ipcRenderer.on('conversation:changed', listener);
+    return () => ipcRenderer.removeListener('conversation:changed', listener);
+  },
+};
+contextBridge.exposeInMainWorld('repoChapConversation', conversation);

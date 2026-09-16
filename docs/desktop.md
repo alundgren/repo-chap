@@ -3,6 +3,9 @@
 Repo Chap's Electron app edits a repository's workflow JSON and its explicit
 prompt, output-contract and context-file references. An existing `review.md`
 appears when the workflow references it. Markdown links remain text.
+The [Discuss view](desktop-conversation.md) uses an explicitly selected local
+Codex or Claude profile to answer questions about captured drafts and actual
+simulation results.
 
 Use Node 24 and the pinned pnpm through Corepack:
 
@@ -26,7 +29,7 @@ corepack pnpm --filter @repo-chap/desktop start --workflow /path/to/repository/w
 
 The renderer has no Node or filesystem access. The main process owns the open
 document session, native pickers, validation and file writes. A sandboxed preload
-exposes only the editor operations. Local fonts ship with the app. Opening,
+exposes typed editor and conversation operations. Local fonts ship with the app. Opening,
 editing and saving never start providers, fetch Markdown links, or connect to
 the daemon. The app blocks remote navigation and renderer network requests.
 

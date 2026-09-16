@@ -1,7 +1,9 @@
 import type { DocumentSnapshot, DocumentToken, EditorBridge, EditorResult, OpenKind } from './protocol.js';
 import { processView } from './process-view.ts';
+import { conversationView } from './conversation-view.ts';
+import type { ConversationBridge } from './conversation-protocol.js';
 
-declare global { interface Window { repoChap: EditorBridge } }
+declare global { interface Window { repoChap: EditorBridge; repoChapConversation: ConversationBridge } }
 const bridge = window.repoChap;
 const element = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const source = element<HTMLTextAreaElement>('source');
@@ -10,7 +12,7 @@ let selected = '';
 let queue = Promise.resolve();
 let queuedEdits = 0;
 let prompting = false;
-let view: 'source' | 'process' | 'simulation' = 'source';
+let view: 'source' | 'process' | 'simulation' | 'conversation' = 'source';
 const unsent = new Map<string, string>();
 const basename = (path: string): string => path.split('/').at(-1)!;
 function referenceName(path: string): string {
@@ -28,6 +30,7 @@ function say(text: string, error = false): void {
   message.classList.toggle('danger', error);
 }
 const process = processView(bridge, perform, () => state, message => { say(message); render(); });
+const conversation = conversationView(window.repoChapConversation, perform, () => state);
 
 async function perform(operation: () => Promise<EditorResult>, message?: string, captureInspector = true): Promise<boolean> {
   if ((prompting && captureInspector) || !state) return false;
@@ -55,7 +58,7 @@ function render(replaceSource = false): void {
   element('welcome').hidden = !!state;
   element('workspace').hidden = !state;
   if (!state) return;
-  for (const name of ['source', 'process', 'simulation'] as const) {
+  for (const name of ['source', 'process', 'simulation', 'conversation'] as const) {
     element(`${name}-view`).hidden = view !== name;
     element(`${name}-tab`).setAttribute('aria-pressed', String(view === name));
   }
@@ -118,8 +121,10 @@ function render(replaceSource = false): void {
     return li;
   }));
   element('footer-detail').textContent = state.readOnlyReason ? 'Read-only source' : 'Save explicitly · Ctrl/Cmd+S';
+  element('footer-mode').textContent = view === 'conversation' ? 'Local files · CLI conversation' : 'Local files · Offline simulation';
   document.title = `${dirty() ? '• ' : ''}${basename(state.workflowPath)} · Repo Chap`;
   process.render(state, prompting || queuedEdits > 0 || !!unsent.size);
+  conversation.render(state, prompting, process.pending());
 }
 
 function setPrompting(value: boolean): void { prompting = value; render(); }
@@ -196,15 +201,20 @@ async function save(): Promise<boolean> {
 
 async function leave(action: 'open' | 'close'): Promise<'continue' | 'discard' | 'cancel'> {
   await queue;
-  if (!dirty()) return 'continue';
-  const paths = [...state!.files.filter(file => file.dirty || unsent.has(file.path)).map(file => file.path), ...(process.pending() ? [`Action inspector: ${process.pending()} unsaved setting(s)`] : [])].join('\n');
-  const choice = await confirm('Keep your unsaved changes?', `These files have unsaved changes:\n${paths}`, [
-    { id: 'save', label: `Save all and ${action}`, style: 'primary', disabled: !!state!.diagnostics.length || !!state!.readOnlyReason || !!unsent.size },
-    { id: 'discard', label: `Discard and ${action}`, style: 'danger' },
-    { id: 'cancel', label: 'Cancel' },
-  ]);
-  if (choice === 'save') return await save() ? 'continue' : 'cancel';
-  return choice === 'discard' ? 'discard' : 'cancel';
+  let choice: 'continue' | 'discard' = 'continue';
+  if (dirty()) {
+    const paths = [...state!.files.filter(file => file.dirty || unsent.has(file.path)).map(file => file.path), ...(process.pending() ? [`Action inspector: ${process.pending()} unsaved setting(s)`] : [])].join('\n');
+    const result = await confirm('Keep your unsaved changes?', `These files have unsaved changes:\n${paths}`, [
+      { id: 'save', label: `Save all and ${action}`, style: 'primary', disabled: !!state!.diagnostics.length || !!state!.readOnlyReason || !!unsent.size },
+      { id: 'discard', label: `Discard and ${action}`, style: 'danger' },
+      { id: 'cancel', label: 'Cancel' },
+    ]);
+    if (result === 'save') { if (!await save()) return 'cancel'; }
+    else if (result === 'discard') choice = 'discard';
+    else return 'cancel';
+  }
+  if (conversation.running() && await confirm('Stop the running conversation?', `The current answer will stop when you ${action}. Visible conversation history is cleared when you leave this workflow.`, [{ id: 'stop', label: `Stop and ${action}` }, { id: 'cancel', label: 'Cancel' }]) !== 'stop') return 'cancel';
+  return choice;
 }
 
 async function openWorkflow(kind: OpenKind): Promise<void> {
@@ -222,7 +232,7 @@ async function openWorkflow(kind: OpenKind): Promise<void> {
 element('open-workflow').onclick = () => { void openWorkflow('workflow'); };
 element('open-repository').onclick = () => { void openWorkflow('repository'); };
 element('save').onclick = () => { void save(); };
-for (const name of ['source', 'process', 'simulation'] as const) element(`${name}-tab`).onclick = () => { void (async () => { if (name !== view && !await process.flush()) return; view = name; render(true); })(); };
+for (const name of ['source', 'process', 'simulation', 'conversation'] as const) element(`${name}-tab`).onclick = () => { void (async () => { if (name !== view && !await process.flush()) return; view = name; render(true); })(); };
 element('export').onclick = () => { void perform(() => bridge.exportWorkflow(token()), 'Workflow JSON copy exported. Referenced files were not copied; keep their relative paths when using it.'); };
 element('reset').onclick = () => {
   void (async () => {

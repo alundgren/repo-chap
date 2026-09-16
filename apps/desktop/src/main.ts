@@ -1,13 +1,22 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, session as electronSession } from 'electron';
-import { basename, join, resolve } from 'node:path';
-import { realpath, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
+import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { readFixtureText } from '@repo-chap/workflow';
+import { readProfiles } from '@repo-chap/providers';
+import type { ConversationInputAnswer, ProviderProfile } from '@repo-chap/providers';
 import { pathToFileURL } from 'node:url';
 import { DocumentSession } from './documents.js';
+import { ConversationController } from './conversations.js';
+import { captureConversationContext } from './conversation-context.js';
+import type { ConversationContextSelection, ConversationResult } from './conversation-protocol.js';
 import type { DocumentToken, EditorResult, OpenKind, SimulationInputKind, VisualEdit } from './protocol.js';
 
 let window: BrowserWindow | null = null;
 let documents: DocumentSession | null = null;
+let conversation: ConversationController | null = null;
+let conversationDirectory: string | null = null;
+let conversationCleanup = Promise.resolve();
+let profiles: ProviderProfile[] = [];
 let allowClose = false;
 let operations = Promise.resolve();
 const pagePath = join(__dirname, 'index.html');
@@ -17,11 +26,97 @@ app.setName('Repo Chap');
 if (process.env.REPO_CHAP_DESKTOP_DATA) app.setPath('userData', resolve(process.env.REPO_CHAP_DESKTOP_DATA));
 
 function current(): EditorResult { return { snapshot: documents?.snapshot() ?? null }; }
+function currentConversation(): ConversationResult {
+  return { ...current(), conversation: conversation?.snapshot() ?? null, profiles: profiles.map(({ provider, name, model, effort }) => ({ provider, name, model, ...(effort ? { effort } : {}) })) };
+}
 function requireDocuments(token: DocumentToken): DocumentSession {
   if (!documents) throw new Error('Open a workflow first.');
   documents.assertCurrent(token);
   return documents;
 }
+
+function registerConversation(name: string, operation: (...args: any[]) => Promise<void | ConversationResult> | void | ConversationResult, queued = true): void {
+  ipcMain.handle(`conversation:${name}`, (event, ...args: unknown[]) => {
+    if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame?.url !== pageUrl) throw new Error('This conversation operation is unavailable.');
+    const run = async (): Promise<ConversationResult> => {
+      try { return await operation(...args) ?? currentConversation(); }
+      catch (error) { return { ...currentConversation(), error: error instanceof Error ? error.message : 'The conversation operation failed. Your drafts have been kept.' }; }
+    };
+    if (!queued) return run();
+    const response = operations.then(run);
+    operations = response.then(() => {});
+    return response;
+  });
+}
+function requireConversation(id?: string): ConversationController {
+  if (!conversation || id !== undefined && conversation.snapshot().id !== id) throw new Error('This conversation is no longer active. Choose a provider for the open workflow.');
+  return conversation;
+}
+async function closeConversation(): Promise<void> {
+  const closing = conversation, directory = conversationDirectory;
+  conversation = null; conversationDirectory = null;
+  if (closing || directory) {
+    const cleanup = conversationCleanup.then(async () => {
+      await closing?.close();
+      if (directory) await rm(directory, { recursive: true, force: true });
+    });
+    // Report this failure to its caller without preventing a later explicit recovery.
+    conversationCleanup = cleanup.catch(() => {});
+    await cleanup;
+    return;
+  }
+  await conversationCleanup;
+}
+async function startConversation(profile: ProviderProfile): Promise<void> {
+  await conversationCleanup;
+  if (!documents) throw new Error('Open a workflow first.');
+  const root = await realpath(app.getPath('userData'));
+  for (let path = root; ; path = dirname(path)) {
+    if (await lstat(join(path, '.git')).catch(() => null)) throw new Error('Keep the desktop application data directory outside Git.');
+    if (dirname(path) === path) break;
+  }
+  const parent = join(root, 'conversations');
+  await mkdir(parent, { recursive: true, mode: 0o700 });
+  if (await realpath(parent) !== parent || await lstat(join(parent, '.git')).catch(() => null)) throw new Error('Keep the private conversation directory outside Git and do not redirect it with a symbolic link.');
+  const directory = await mkdtemp(join(parent, 'session-'));
+  try {
+    conversation = new ConversationController({
+      documentSessionId: documents.sessionId, workingDirectory: directory, profile,
+      onChange(snapshot) { if (window && !window.isDestroyed() && documents?.sessionId === snapshot.documentSessionId) window.webContents.send('conversation:changed', snapshot); },
+    });
+    conversationDirectory = directory;
+  } catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }
+}
+
+registerConversation('current', currentConversation, false);
+registerConversation('load-profiles', async () => {
+  if (!window) return;
+  const choice = await dialog.showOpenDialog(window, { title: 'Load private Repo Chap provider settings', properties: ['openFile'], filters: [{ name: 'Provider settings JSON', extensions: ['json'] }] });
+  if (choice.canceled || !choice.filePaths[0]) return { ...currentConversation(), cancelled: true };
+  const next = await readProfiles(choice.filePaths[0]);
+  if (next.some(profile => Buffer.byteLength(JSON.stringify(profile)) > 8192)) throw new Error('Each conversation profile must fit within 8 KiB.');
+  profiles = next;
+});
+registerConversation('select-profile', async (documentSessionId: string, name: string) => {
+  if (!documents || documentSessionId !== documents.sessionId) throw new Error('The open workflow changed. Choose its provider again.');
+  const selected = profiles.find(profile => profile.name === name);
+  if (!selected) throw new Error('Load provider settings and choose one of their named profiles.');
+  if (conversation) await conversation.selectProvider(selected);
+  else await startConversation(selected);
+});
+registerConversation('send', (token: DocumentToken, prompt: string, selection: ConversationContextSelection) => {
+  const source = requireDocuments(token), chat = requireConversation();
+  const captured = captureConversationContext(source.snapshot(), selection);
+  void chat.send(prompt, captured);
+});
+// Replies and cancellation must remain available during pending or rejected document capture.
+registerConversation('cancel', async (id: string, turnId: string) => {
+  const chat = requireConversation(id);
+  if (chat.snapshot().activeTurnId !== turnId) throw new Error('That turn is no longer running.');
+  await chat.cancel();
+}, false);
+registerConversation('answer', (id: string, turnId: string, requestId: string, answer: ConversationInputAnswer) => requireConversation(id).answer(turnId, requestId, answer), false);
+registerConversation('fresh', async (id: string) => requireConversation(id).fresh(), false);
 function register(name: string, operation: (...args: any[]) => Promise<void | EditorResult> | void | EditorResult): void {
   ipcMain.handle(`editor:${name}`, (event, ...args: unknown[]) => {
     if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame?.url !== pageUrl) throw new Error('This editor operation is unavailable.');
@@ -54,6 +149,7 @@ register('open', async (kind: OpenKind, token: DocumentToken | null, discard: bo
   });
   if (result.canceled || !result.filePaths[0]) return { ...current(), cancelled: true };
   const next = await DocumentSession.open(result.filePaths[0], repositoryRoot);
+  await closeConversation();
   documents = next;
 });
 register('edit', async (token: DocumentToken, path: string, text: string) => requireDocuments(token).edit(token, path, text));
@@ -87,11 +183,12 @@ register('export-workflow', async (token: DocumentToken) => {
   await writeFile(choice.filePath, text, 'utf8');
 });
 register('check-external', async () => { await documents?.checkExternal(); });
-register('close', (token: DocumentToken | null, discard: boolean) => {
+register('close', async (token: DocumentToken | null, discard: boolean) => {
   if (documents) {
     documents.assertCurrent(token!);
     if (documents.dirty && discard !== true) throw new Error('Save or discard your drafts before closing.');
   }
+  await closeConversation();
   allowClose = true;
   window?.close();
 });
@@ -111,7 +208,8 @@ async function createWindow(): Promise<void> {
     event.preventDefault();
     window?.webContents.send('editor:close-requested');
   });
-  window.on('closed', () => { window = null; documents = null; });
+  window.on('closed', () => { window = null; documents = null; void closeConversation().catch(() => {}); });
+  window.webContents.on('render-process-gone', () => { void closeConversation().catch(() => {}); });
   await window.loadFile(pagePath);
 }
 
@@ -137,5 +235,5 @@ void app.whenReady().then(async () => {
   await createWindow();
   if (openingError && window) void dialog.showMessageBox(window, { type: 'error', title: 'Cannot open workflow', message: openingError });
 });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => { void closeConversation().finally(() => { if (process.platform !== 'darwin') app.quit(); }).catch(() => {}); });
 app.on('activate', () => { if (!window) void createWindow(); });
