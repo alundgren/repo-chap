@@ -19,3 +19,18 @@ input,select{font:inherit;color:inherit;background:var(--field);border:1px solid
 .fixture-authoring{margin:28px 0}.fixture-authoring .controls{margin:12px 0}.fixture-authoring input{min-width:0;max-width:100%}#simulation-result table{width:100%;table-layout:fixed;border-collapse:collapse}#simulation-result td,#simulation-result th{text-align:left;vertical-align:top;overflow-wrap:anywhere;padding:10px;border-bottom:1px solid var(--line)}.authoring-receipts{margin:20px 0}
 
 #authoring-summary,#authoring-activity{overflow-wrap:anywhere}
+
+#trial-view { max-width: 1000px; margin-inline: auto; }
+#trial-view .controls { margin-block: 16px; }
+.trial-fields { display: grid; grid-template-columns: minmax(0, 3fr) minmax(90px, 1fr); gap: 16px; margin-block: 20px; }
+.trial-fields label { display: grid; gap: 6px; }
+.trial-fields input, #trial-profile, #trial-history { width: 100%; min-width: 0; }
+#trial-source-path { flex: 1; min-width: 200px; overflow-wrap: anywhere; }
+#trial-results { margin-top: 32px; }
+.trial-outcome { font-size: 22px; font-weight: 600; }
+.trial-provenance { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 8px 20px; margin-block: 24px; }
+.trial-provenance dt { font-weight: 600; }
+.trial-provenance dd { margin: 0; overflow-wrap: anywhere; }
+#trial-result pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow: auto; }
+#trial-progress, .trial-findings { overflow-wrap: anywhere; }
+@media (max-width: 600px) { .trial-fields, .trial-provenance { grid-template-columns: minmax(0, 1fr); } .trial-provenance dd { margin-bottom: 10px; } }

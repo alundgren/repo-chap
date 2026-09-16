@@ -57,6 +57,7 @@ export function conversationView(bridge: ConversationBridge, perform: (operation
       ruleId: element<HTMLSelectElement>('conversation-rule').value || null,
       markdownPaths: [...element('conversation-markdown').querySelectorAll<HTMLInputElement>('input:checked')].map(input => input.value),
       includeSimulation: element<HTMLInputElement>('conversation-simulation').checked,
+      includeLiveTrial: element<HTMLInputElement>('conversation-live-trial').checked,
     };
   }
   async function send(): Promise<void> {

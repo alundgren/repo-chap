@@ -58,6 +58,7 @@ export interface ConversationContextSelection {
   ruleId: string | null;
   markdownPaths: string[];
   includeSimulation: boolean;
+  includeLiveTrial?: boolean;
 }
 export interface ConversationResult extends EditorResult {
   conversation: ConversationSnapshot | null;

@@ -31,7 +31,7 @@
       </div>
       <p id="read-only" class="notice" hidden></p>
       <div class="editor-bar">
-        <div class="controls" role="group" aria-label="Editor view"><button id="process-tab" aria-pressed="false">Process</button><button id="source-tab" aria-pressed="true">Source</button><button id="simulation-tab" aria-pressed="false">Simulate</button><button id="conversation-tab" aria-pressed="false">Discuss</button></div>
+        <div class="controls" role="group" aria-label="Editor view"><button id="process-tab" aria-pressed="false">Process</button><button id="source-tab" aria-pressed="true">Source</button><button id="simulation-tab" aria-pressed="false">Simulate</button><button id="conversation-tab" aria-pressed="false">Discuss</button><button id="trial-tab" aria-pressed="false">Live trial</button></div>
         <p id="dirty-state" role="status" aria-live="polite">All changes saved</p>
         <div class="controls">
           <button id="reload">Reload file</button>
@@ -42,6 +42,7 @@
           <button id="save" class="primary">Save all</button>
         </div>
       </div>
+      <section id="trial-controls" hidden aria-label="Live trial controls"><div class="conversation-state"><p id="trial-progress" role="status" aria-live="polite"></p><button id="trial-cancel">Cancel trial</button></div></section>
       <section id="conversation-controls" hidden aria-label="Conversation controls">
         <div class="conversation-state"><p id="conversation-status" role="status" aria-live="polite">No provider selected</p><div class="controls"><button id="conversation-cancel" disabled>Cancel turn</button><button id="conversation-fresh" disabled>Fresh session</button></div></div>
         <p id="conversation-failure" class="notice danger" hidden></p>
@@ -84,6 +85,27 @@
         </section>
         <div id="simulation-result" aria-live="polite"></div>
       </section>
+      <section id="trial-view" hidden aria-label="Read-only live trial">
+        <h2>Try this draft on a PR</h2>
+        <p class="notice">Read-only live analysis. Start reads GitHub evidence, reads local Git objects, then calls the selected provider for classification and review. A final GitHub read checks freshness.</p>
+        <p class="secondary">No repair, checks, push, review publication, Slack send or merge runs. The workflow is not saved or activated. Provider usage may be charged to your account.</p>
+        <p id="trial-current-draft" class="path secondary"></p>
+        <div class="trial-fields"><label>GitHub repository<input id="trial-repository" placeholder="reef-labs/paperboat" spellcheck="false" maxlength="256"></label><label>PR number<input id="trial-pr" type="number" min="1" max="2147483647" placeholder="42"></label></div>
+        <div class="controls"><button id="trial-load-profiles">Load provider settings</button><label for="trial-profile">Provider and model</label><select id="trial-profile"><option value="">Choose a provider profile</option></select></div>
+        <div class="controls"><button id="trial-source">Choose local Git source</button><p id="trial-source-path" class="path secondary"></p></div>
+        <p class="secondary">The local repository must contain the PR head, target base and common history. Prepare them with your normal Git tools. This trial never fetches or checks out files.</p>
+        <p id="trial-proposal" class="notice" hidden></p>
+        <div class="controls"><button id="trial-prepare">Prepare proposal</button><button id="trial-start" class="primary">Start read-only trial</button></div>
+        <p id="trial-error" class="notice danger" role="alert" hidden></p>
+        <p id="trial-empty" class="secondary">No retained trial for this workflow. Offline simulation remains available in Simulate.</p>
+        <section id="trial-results" aria-label="Retained live trial" hidden>
+          <label for="trial-history">Retained trial</label><select id="trial-history"></select>
+          <div id="trial-result"></div>
+          <div class="controls"><button id="trial-refresh">Refresh GitHub evidence</button><button id="trial-export">Save as offline fixture</button></div>
+          <p class="secondary">Refresh performs GitHub reads only. Fixture export writes a copy and provenance outside Git. The app retains the latest 10 private trials across workspaces.</p>
+          <p id="trial-exported" class="notice path" hidden></p>
+        </section>
+      </section>
       <section id="conversation-view" hidden aria-label="Workflow conversation">
         <h2>Discuss this workflow</h2>
         <p class="secondary">Use your local CLI login. Sending a question contacts the selected model provider.</p>
@@ -102,7 +124,7 @@
           <p class="secondary">The current workflow JSON is included. Choose its loaded Markdown references below.</p>
           <div id="conversation-markdown"></div><p id="conversation-markdown-empty" class="secondary">No Markdown references are loaded.</p>
           <label class="conversation-choice"><input id="conversation-simulation" type="checkbox" checked><span>Include the latest completed simulation</span></label>
-          <p id="conversation-simulation-detail" class="secondary"></p>
+          <p id="conversation-simulation-detail" class="secondary"></p><label class="conversation-choice"><input id="conversation-live-trial" type="checkbox" checked><span>Include the latest finished live trial and its provenance</span></label>
         </details>
         <p id="conversation-omissions" class="secondary" hidden></p>
         <p id="conversation-empty" class="conversation-empty">Ask why a rule behaves as it does, or discuss a simulation result.</p>

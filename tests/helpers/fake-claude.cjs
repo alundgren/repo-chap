@@ -33,6 +33,7 @@ process.stdin.on('end', () => {
     labels: data.allowedLabels.length ? [{ name: data.allowedLabels[0], reason: 'The value changed.', evidence: [{ path: 'src/value.js', side: 'head', startLine: 1, endLine: 1, explanation: 'Updated value.' }] }] : [],
     uncertain: missing.length > 0 } : { schemaVersion: 1, headSha: data.sources.headSha, baseSha: data.sources.baseSha,
     summary: 'Reviewed the pinned value change.', verdict: missing.length ? 'inconclusive' : 'acceptable', coverage: missing.length ? 'partial' : 'complete', missingEvidence: missing, findings: [] };
+  if (mode === 'findings' && !classify) { result.verdict = 'concerns'; result.findings = [{ id: 'value-boundary', kind: 'reliability', severity: 'medium', confidence: 0.9, title: 'The changed value needs a boundary test', reason: 'The fictional change alters the exported value without a matching boundary test.', evidence: [{ path: 'src/value.js', side: 'head', startLine: 1, endLine: 1, explanation: 'The exported value is now two.' }] }]; }
   if (mode === 'invalid' || mode === 'invalid_then_hang') result = {};
   if (mode === 'citation' && classify) result.labels[0].evidence[0].endLine = 99;
   if (mode === 'wrong_head') result.headSha = 'a'.repeat(40);

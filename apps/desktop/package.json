@@ -11,6 +11,7 @@
   },
   "devDependencies": {
     "@repo-chap/providers": "workspace:*",
+    "@repo-chap/github": "workspace:*",
     "@repo-chap/slack": "workspace:*",
     "@repo-chap/workflow": "workspace:*",
     "electron": "44.4.1",
