@@ -150,6 +150,9 @@ test('actual Electron discusses current drafts and actual simulation evidence th
   assert.notEqual((await f.chat()).conversation!.session!.id, firstSession);
   await page.locator('.conversation-turn details').last().locator('summary').click();
   await page.screenshot({ path: join(proof, 'conversation-02-provider-handoff.png'), fullPage: true });
+  await page.locator('.turn-context').last().scrollIntoViewIfNeeded();
+  await expect(page.locator('.turn-context').last()).toContainText(`Provider session: ${(await f.chat()).conversation!.session!.id}`);
+  await page.screenshot({ path: join(proof, 'conversation-02-session-details.png'), fullPage: true });
   await f.send('claude', 'plain', 'Keep the same Claude session.'); await f.completed();
   assert.ok((await f.calls('claude')).some(call => call.args?.includes('--resume')));
   for (const provider of ['codex', 'claude']) {
@@ -164,6 +167,7 @@ test('actual Electron discusses current drafts and actual simulation evidence th
     await f.electron.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0]!.setBounds(bounds), { width, height });
     await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1));
+    await page.locator('#conversation-history').evaluate(history => { history.scrollTop = history.scrollHeight; });
     await page.screenshot({ path: join(proof, `conversation-05-${name}.png`), fullPage: true });
   }
   await f.electron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ width: 1200, height: 850 }));
