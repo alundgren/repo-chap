@@ -43,14 +43,19 @@ export class GitHubReader {
     if (this.bytes >= 16 * 1024 * 1024) throw new GitHubReadError('limit');
   }
   private async pause(until: number, rateLimited: boolean): Promise<void> {
-    this.check();
-    const delay = Math.max(0, until - this.now());
-    if (until >= this.deadline) throw new GitHubReadError(rateLimited ? 'rate_limit' : 'timeout', new Date(until).toISOString());
-    if (delay) {
-      try { await (this.options.sleep ?? ((ms, signal) => sleep(ms, undefined, { signal })))(delay, this.signal); }
-      catch { throw new GitHubReadError(this.signal?.aborted ? 'cancelled' : 'timeout'); }
+    for (;;) {
+      this.check();
+      const shared = this.options.cooldown?.read() ?? 0;
+      if (shared > until) { until = shared; rateLimited = true; }
+      const delay = Math.max(0, until - this.now());
+      if (until >= this.deadline) throw new GitHubReadError(rateLimited ? 'rate_limit' : 'timeout', new Date(until).toISOString());
+      if (delay) {
+        try { await (this.options.sleep ?? ((ms, signal) => sleep(ms, undefined, { signal })))(delay, this.signal); }
+        catch { throw new GitHubReadError(this.signal?.aborted ? 'cancelled' : 'timeout'); }
+      }
+      this.check();
+      if ((this.options.cooldown?.read() ?? 0) <= until) return;
     }
-    this.check();
   }
   async query(query: string, variables: Record<string, unknown>): Promise<QueryResult> {
     if (!/^query\s/.test(query)) throw new GitHubReadError('invalid_response');
@@ -60,7 +65,10 @@ export class GitHubReader {
       const timeout = AbortSignal.timeout(Math.max(1, Math.min(15_000, this.deadline - this.now())));
       const signal = this.signal ? AbortSignal.any([this.signal, timeout]) : timeout;
       try {
-        const token = await this.credentials.token(signal); this.check(); this.requests++;
+        const token = await this.credentials.token(signal); this.check();
+        // New guidance during credential lookup must wait without consuming a request attempt.
+        if (Math.max(this.retryAt, this.options.cooldown?.read() ?? 0) > this.now()) { attempt--; continue; }
+        this.requests++;
         const response = await (this.options.fetch ?? globalThis.fetch)('https://api.github.com/graphql', {
           method: 'POST', redirect: 'error', signal,
           headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },

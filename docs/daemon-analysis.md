@@ -156,6 +156,9 @@ visited first. All readers obey the installation's persisted server cooldown
 before every query; creating a reader cannot bypass it. Registration and polling
 readers share the same runtime callbacks, including readers created before the
 server returned its guidance.
+If another reader extends the deadline during sleep or credential lookup, the
+waiting reader checks again before sending. It either waits until the new time
+or retains that retry time in a bounded collection failure.
 
 The prior inspection is persisted and supplied on the next poll. First-observed
 head time and original reviewer reaction times therefore survive restarts.

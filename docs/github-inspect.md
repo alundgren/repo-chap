@@ -101,6 +101,9 @@ and `extend` callbacks. A reader checks that shared deadline before each query
 and extends it as soon as it receives server guidance. The daemon persists those
 callbacks in its runtime store, so concurrent registration and polling readers
 share cooldowns even when their individual request allowances are separate.
+Readers check for extensions after sleep and credential lookup, immediately
+before sending. An extension beyond the collection deadline returns the bounded
+failure with the new retry time; a shorter extension waits until it expires.
 
 The initial metadata response records when this process first observed the head.
 It does not infer a push time from commit author or committer dates. A daemon must
