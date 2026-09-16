@@ -11,7 +11,7 @@
     "docs:build": "python3 docs/pr-workflows/build_presentation.py",
     "docs:browser": "node docs/pr-workflows/check-presentation.mjs",
     "browser:install": "playwright install chromium webkit",
-    "build": "pnpm --filter @repo-chap/workflow build && pnpm --filter @repo-chap/github build && pnpm --filter @repo-chap/providers build && pnpm --filter repo-chap build",
+    "build": "pnpm --filter @repo-chap/workflow build && pnpm --filter @repo-chap/github build && pnpm --filter @repo-chap/providers build && pnpm --filter @repo-chap/execution build && pnpm --filter repo-chap build",
     "typecheck": "pnpm build && tsc --noEmit --allowImportingTsExtensions",
     "test": "pnpm build && node --test --test-reporter=dot tests/*.test.ts",
     "check": "pnpm typecheck && pnpm test"
@@ -23,6 +23,7 @@
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "@repo-chap/github": "workspace:*",
-    "@repo-chap/providers": "workspace:*"
+    "@repo-chap/providers": "workspace:*",
+    "@repo-chap/execution": "workspace:*"
   }
 }

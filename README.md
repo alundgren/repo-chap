@@ -4,11 +4,13 @@ Repo Chap looks after trusted teams' repositories. The first release keeps
 GitHub pull requests moving through review, bounded repairs, and readable Slack
 handoffs. People merge.
 
-Status: offline workflow validation and replay are implemented in the
-`repo-chap` CLI. Live execution, Electron, and the daemon remain planned.
+Status: the `repo-chap` CLI supports offline validation/replay, GitHub capture,
+provider analysis and tested local workspace repair. Remote effects, Electron,
+and the daemon remain planned.
 See [workflow commands and shared contracts](docs/workflow-api.md) to build,
 install, validate the supplied example, and replay fictional fixtures.
 
+- [Local workspace repair and recovery](docs/workspace-repair.md)
 - [Product brief](docs/product-brief.md)
 - [Architecture](docs/pr-workflows/architecture.md)
 - [Specification](docs/pr-workflows/specification.md)

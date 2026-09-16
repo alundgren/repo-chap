@@ -78,3 +78,18 @@ Codex. Failure diagnostics name the provider and corrective action. Both provide
 use the same decision status, missing-evidence reporting, cancellation and explicit
 resume behavior. Claude token counters are actual usage; its reported monetary
 cost stays visibly estimated. See [Claude setup and pilot checks](claude-analysis.md).
+
+## Local workspace repair CLI
+
+`workspace` requires an explicit repair action and execution policy alongside
+the capture, provider profile, source repository and private output directory.
+Text output starts with the outcome, then names the pinned head/base, final
+candidate, required-check status and thread decisions. The final line reminds
+the user that the candidate remains local. JSON returns the same result with a
+logical artifact reference; it contains no worker-directory recovery dependency.
+
+No-change exits 0 with its distinct status. Blocked repair or failed checks exit
+6 and retain their reasons. Ctrl-C stops child processes, removes the disposable
+checkout, saves the cancellation result and exits 130. The private attempt
+receipt lets the user recover a result after restart; it never silently repeats
+an unfinished attempt. See [local workspace repair](workspace-repair.md).
