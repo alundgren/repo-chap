@@ -62,6 +62,10 @@ focused initially. Escape cancels confirmations and returns focus to the prior
 control. A cancelled file picker keeps existing drafts. Save failures retain
 drafts and report partial saves when necessary. No force-overwrite control is
 provided; an external edit must be explicitly reloaded before saving.
+Source input is temporarily read-only while reload, discard, open or close is
+pending. Reload and discard show progress until the replacement finishes, then
+editing resumes. Schema errors select their referenced source file, including
+references with JSON Pointer fragments.
 
 The app displays plain source for JSON and Markdown. It does not render Markdown
 HTML or follow links. Simulation, ordered visual editing, chat and live trials

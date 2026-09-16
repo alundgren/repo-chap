@@ -113,6 +113,55 @@ test('actual Electron opens, edits, saves and recovers local workflow sources wi
   await expect(text).toHaveValue('# External edit\n');
   await expect(page.locator('#external')).toBeHidden();
 
+  await electron.evaluate(() => {
+    const fs = process.getBuiltinModule('node:fs/promises');
+    const original = fs.realpath;
+    fs.realpath = (async (...args: Parameters<typeof original>) => {
+      fs.realpath = original;
+      (globalThis as any).desktopReadPending = true;
+      await new Promise<void>(resolve => { (globalThis as any).releaseDesktopRead = resolve; });
+      return original(...args);
+    }) as typeof original;
+  });
+  await page.getByRole('button', { name: 'Reload file', exact: true }).click();
+  await expect.poll(() => electron.evaluate(() => (globalThis as any).desktopReadPending)).toBe(true);
+  await expect(text).toHaveAttribute('readonly', '');
+  await expect(text).toHaveAttribute('aria-busy', 'true');
+  await text.press('x');
+  await expect(text).toHaveValue('# External edit\n');
+  await page.screenshot({ path: join(proof, '10-reload-busy.png'), fullPage: true });
+  await electron.evaluate(() => { (globalThis as any).releaseDesktopRead(); });
+  await expect(text).not.toHaveAttribute('readonly', '');
+  await text.fill('# Typed after reload\n');
+  await expect(page.locator('#dirty-state')).toHaveText('1 unsaved file(s)');
+  const captured = await page.evaluate(async path => (await window.repoChap.current()).snapshot!.files.find(file => file.path === path)!.text, reviewPath);
+  assert.equal(await text.inputValue(), captured);
+  await text.press('End');
+  await text.press('x');
+  await text.press('Control+s');
+  await expect(page.locator('#message')).toHaveText('Saved all changed files.');
+  assert.equal(await readFile(join(root, reviewPath), 'utf8'), '# Typed after reload\nx');
+  assert.equal(await text.inputValue(), '# Typed after reload\nx');
+
+  const schemaPath = 'docs/pr-workflows/schemas/results.schema.json';
+  await page.getByRole('button', { name: schemaPath, exact: true }).first().click();
+  const invalidSchema = JSON.parse(await text.inputValue());
+  invalidSchema.$defs.review.type = 'not-a-json-schema-type';
+  const schemaText = JSON.stringify(invalidSchema, null, 2);
+  await text.fill(schemaText);
+  await expect(page.getByRole('button', { name: 'Save all', exact: true })).toBeDisabled();
+  const schemaError = page.locator('#diagnostics').getByRole('button', { name: schemaPath, exact: true });
+  await expect(schemaError).toBeVisible();
+  await page.getByRole('button', { name: workflowPath, exact: true }).first().click();
+  await schemaError.click();
+  await expect(page.locator('#source-label')).toHaveText(schemaPath);
+  await expect(text).toHaveValue(schemaText);
+  await page.screenshot({ path: join(proof, '11-schema-diagnostic.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Discard changes', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Discard changes', exact: true }).click();
+  await expect(page.locator('#validation-title')).toHaveText('Validation passed');
+  await page.getByRole('button', { name: reviewPath, exact: true }).first().click();
+
   await text.fill('# Keep when chooser cancels\n');
   await expect(page.locator('#dirty-state')).toHaveText('1 unsaved file(s)');
   await electron.evaluate(({ dialog }) => { dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] }); });
@@ -149,7 +198,7 @@ test('actual Electron opens, edits, saves and recovers local workflow sources wi
   assert.equal(await readFile(join(root, workflowPath), 'utf8'), unsupported);
   assert.deepEqual(errors, []);
   assert.deepEqual(requests, []);
-  await writeFile(join(proof, 'result.json'), JSON.stringify({ platform: process.platform, packaged: !!packagedExecutable, launchArguments: electron.process().spawnargs.slice(1), checks: ['native picker integration', 'JSON and Markdown save', 'unknown layout fields and stable IDs', 'invalid source recovery', 'switching retains drafts', 'cancelled close', 'cancelled discard', 'external conflict and reload cancellation', 'cancelled chooser retains drafts', 'laptop and narrow layout', 'keyboard focus', 'unsupported version preserves source', 'isolated renderer', 'offline context, no remote requests'], pageErrors: errors, remoteRequests: requests }, null, 2));
+  await writeFile(join(proof, 'result.json'), JSON.stringify({ platform: process.platform, packaged: !!packagedExecutable, launchArguments: electron.process().spawnargs.slice(1), checks: ['native picker integration', 'JSON and Markdown save', 'unknown layout fields and stable IDs', 'invalid source recovery', 'switching retains drafts', 'cancelled close', 'cancelled discard', 'external conflict and reload cancellation', 'pending reload protects source input and subsequent save', 'referenced schema diagnostic selects source', 'cancelled chooser retains drafts', 'laptop and narrow layout', 'keyboard focus', 'unsupported version preserves source', 'isolated renderer', 'offline context, no remote requests'], pageErrors: errors, remoteRequests: requests }, null, 2));
   await electron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close());
   await electron.close();
 });

@@ -42,8 +42,9 @@ function render(replaceSource = false): void {
   element<HTMLButtonElement>('reload').disabled = false;
   element('source-label').textContent = selected;
   element('file-state').textContent = state.readOnlyReason ? 'Read-only' : file.dirty || unsent.has(selected) ? 'Unsaved' : 'Saved';
-  const readOnly = !!state.readOnlyReason || !!file.error;
+  const readOnly = prompting || !!state.readOnlyReason || !!file.error;
   if (source.readOnly !== readOnly) source.readOnly = readOnly;
+  source.setAttribute('aria-busy', String(prompting));
   if (replaceSource) source.value = unsent.get(selected) ?? file.text;
   element('external').hidden = !file.external;
   element('file-error').hidden = !file.error;
@@ -85,6 +86,8 @@ function render(replaceSource = false): void {
   element('footer-detail').textContent = state.readOnlyReason ? 'Read-only source' : 'Save explicitly · Ctrl/Cmd+S';
   document.title = `${dirty() ? '• ' : ''}${basename(state.workflowPath)} · Repo Chap`;
 }
+
+function setPrompting(value: boolean): void { prompting = value; render(); }
 
 function receive(result: EditorResult, replaceSource = false): boolean {
   if (result.snapshot?.sessionId !== state?.sessionId) { unsent.clear(); selected = result.snapshot?.workflowPath ?? ''; replaceSource = true; }
@@ -160,7 +163,7 @@ async function leave(action: 'open' | 'close'): Promise<'continue' | 'discard' |
 
 async function openWorkflow(kind: OpenKind): Promise<void> {
   if (prompting) return;
-  prompting = true;
+  setPrompting(true);
   try {
     const choice = await leave('open');
     if (choice === 'cancel') return;
@@ -168,7 +171,7 @@ async function openWorkflow(kind: OpenKind): Promise<void> {
       const result = await bridge.open(kind, state ? token() : null, choice === 'discard');
       if (receive(result, true)) say('Workflow opened.');
     });
-  } finally { prompting = false; }
+  } finally { setPrompting(false); }
 }
 element('open-workflow').onclick = () => { void openWorkflow('workflow'); };
 element('open-repository').onclick = () => { void openWorkflow('repository'); };
@@ -176,45 +179,47 @@ element('save').onclick = () => { void save(); };
 element('reload').onclick = () => {
   void (async () => {
     if (prompting || !state) return;
-    prompting = true;
+    setPrompting(true);
     try {
       await queue;
       const path = selected;
       const file = state!.files.find(file => file.path === path)!;
       if ((file.dirty || unsent.has(path)) && await confirm('Reload file from disk?', `This replaces your unsaved changes to ${path} with the current disk version.`, [{ id: 'reload', label: 'Reload from disk', style: 'danger' }, { id: 'cancel', label: 'Cancel' }]) !== 'reload') return;
       await enqueue(async () => {
+        say('Reloading file…');
         const result = await bridge.reload(token(), path);
         if (!result.error) unsent.delete(path);
         if (receive(result, true)) say('File reloaded from disk. Other drafts have been kept.');
       });
-    } finally { prompting = false; }
+    } finally { setPrompting(false); }
   })();
 };
 element('discard').onclick = () => {
   void (async () => {
     if (prompting || !state) return;
-    prompting = true;
+    setPrompting(true);
     try {
       await queue;
       const path = selected;
       if (await confirm('Discard changes to this file?', `This restores the last loaded or saved text of ${path}. External disk changes are loaded only when you choose Reload file.`, [{ id: 'discard', label: 'Discard changes', style: 'danger' }, { id: 'cancel', label: 'Cancel' }]) !== 'discard') return;
       await enqueue(async () => {
+        say('Discarding changes…');
         const result = await bridge.discard(token(), path);
         if (!result.error) unsent.delete(path);
         if (receive(result, true)) say('Changes to this file discarded.');
       });
-    } finally { prompting = false; }
+    } finally { setPrompting(false); }
   })();
 };
 bridge.onCloseRequested(() => {
   void (async () => {
     if (prompting) return;
-    prompting = true;
+    setPrompting(true);
     try {
       const choice = await leave('close');
       if (choice === 'cancel') return;
       await enqueue(async () => receive(await bridge.close(state ? token() : null, choice === 'discard')));
-    } finally { prompting = false; }
+    } finally { setPrompting(false); }
   })();
 });
 document.addEventListener('keydown', event => {

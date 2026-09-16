@@ -165,6 +165,18 @@ test('missing references are file-specific and reload recovers after the file is
   assert.equal(session.snapshot().diagnostics.length, 0);
 });
 
+test('referenced schema diagnostics preserve their path and select the schema source', async t => {
+  const { session } = await fixture(t);
+  const path = 'docs/pr-workflows/schemas/results.schema.json';
+  const value = JSON.parse(fileText(session, path));
+  value.$defs.review.type = 'not-a-json-schema-type';
+  await session.edit(session.snapshot(), path, JSON.stringify(value));
+  const diagnostic = session.snapshot().diagnostics.find(item => item.code === 'invalid_schema')!;
+  assert.equal(diagnostic.file, path);
+  assert.match(diagnostic.path, /^\.\.\/\.\.\/schemas\/results\.schema\.json#/);
+  await assert.rejects(session.save(session.snapshot()), /validation errors/);
+});
+
 test('removing a missing reference allows a valid save and discarding source restores original references', async t => {
   const { root, session } = await fixture(t);
   const value = JSON.parse(fileText(session, workflowPath));

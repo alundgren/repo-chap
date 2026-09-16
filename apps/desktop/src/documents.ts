@@ -126,6 +126,15 @@ export class DocumentSession {
     } catch { /* Invalid JSON remains editable for repair. */ }
   }
 
+  private diagnosticFile(path: string): string {
+    if (this.files.has(path)) return path;
+    try {
+      const resolved = referencePath(this.workflowPath, path).path;
+      if (this.files.has(resolved)) return resolved;
+    } catch { /* JSON paths and invalid references belong to the workflow source. */ }
+    return this.workflowPath;
+  }
+
   snapshot(): DocumentSnapshot {
     const texts: Record<string, string> = Object.create(null);
     for (const [path, file] of this.files) if (file.saved) texts[path] = file.text;
@@ -134,7 +143,7 @@ export class DocumentSession {
     try { packageDigest = buildPackage(this.workflowPath, texts).digest; }
     catch (error) {
       const items = error instanceof WorkflowError ? error.diagnostics : [{ code: 'validation', path: this.workflowPath, message: message(error) }];
-      diagnostics = items.map(item => ({ ...item, file: this.files.has(item.path) ? item.path : this.workflowPath }));
+      diagnostics = items.map(item => ({ ...item, file: this.diagnosticFile(item.path) }));
     }
     const needed = new Set([this.workflowPath, ...this.references() ?? []]);
     for (const file of this.files.values()) if (file.error && needed.has(file.path)) {
