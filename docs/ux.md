@@ -93,3 +93,19 @@ No-change exits 0 with its distinct status. Blocked repair or failed checks exit
 checkout, saves the cancellation result and exits 130. The private attempt
 receipt lets the user recover a result after restart; it never silently repeats
 an unfinished attempt. See [local workspace repair](workspace-repair.md).
+
+## Daemon CLI
+
+`daemon start` runs in the foreground with a named private state directory.
+Every control command uses that directory's local socket. `status` leads with
+analysis mode, then repository state and each run's reason and wake time.
+`inspect` shows pinned revisions, charges and saved analysis; JSON includes the
+full retained evidence. Empty status names the registration command.
+
+Registration requires an explicit workflow, repository and provider profile.
+Invalid or conflicting registration keeps existing state. Pause and resume name
+a repository; cancel and retry name a run ID copied from status. Pause lets active
+analysis finish. Cancel fences the active worker. Retry retains every limit and
+charge. Exit 7 indicates a failed daemon command with a corrective diagnostic.
+Deferred repair/publication actions are visible stops. No CLI output calls
+analysis success merge permission. See [daemon operation](daemon-analysis.md).

@@ -11,6 +11,9 @@ importers:
       '@playwright/test':
         specifier: 1.62.1
         version: 1.62.1
+      '@repo-chap/daemon':
+        specifier: workspace:*
+        version: link:apps/daemon
       '@repo-chap/execution':
         specifier: workspace:*
         version: link:packages/execution
@@ -20,6 +23,9 @@ importers:
       '@repo-chap/providers':
         specifier: workspace:*
         version: link:packages/providers
+      '@repo-chap/runtime':
+        specifier: workspace:*
+        version: link:packages/runtime
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:packages/workflow
@@ -35,6 +41,9 @@ importers:
 
   apps/cli:
     devDependencies:
+      '@repo-chap/daemon':
+        specifier: workspace:*
+        version: link:../daemon
       '@repo-chap/execution':
         specifier: workspace:*
         version: link:../../packages/execution
@@ -44,6 +53,21 @@ importers:
       '@repo-chap/providers':
         specifier: workspace:*
         version: link:../../packages/providers
+      '@repo-chap/workflow':
+        specifier: workspace:*
+        version: link:../../packages/workflow
+
+  apps/daemon:
+    dependencies:
+      '@repo-chap/github':
+        specifier: workspace:*
+        version: link:../../packages/github
+      '@repo-chap/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      '@repo-chap/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
@@ -71,6 +95,18 @@ importers:
       '@repo-chap/github':
         specifier: workspace:*
         version: link:../github
+      '@repo-chap/workflow':
+        specifier: workspace:*
+        version: link:../workflow
+
+  packages/runtime:
+    dependencies:
+      '@repo-chap/github':
+        specifier: workspace:*
+        version: link:../github
+      '@repo-chap/providers':
+        specifier: workspace:*
+        version: link:../providers
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:../workflow

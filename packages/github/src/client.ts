@@ -27,6 +27,7 @@ export class GitHubReader {
   private bytes = 0;
   private retryAt = 0;
   private rateLimited = true;
+  get nextRequestAt(): number { return this.retryAt; }
   constructor(credentials: CredentialSource, options: ReadOptions = {}) {
     this.credentials = credentials; this.now = options.now ?? Date.now; this.signal = options.signal;
     this.options = { ...options, maxRequests: options.maxRequests ?? 200, maxDurationMs: options.maxDurationMs ?? 120_000, maxResponseBytes: options.maxResponseBytes ?? 2_097_152 };

@@ -5,12 +5,13 @@ GitHub pull requests moving through review, bounded repairs, and readable Slack
 handoffs. People merge.
 
 Status: the `repo-chap` CLI supports offline validation/replay, GitHub capture,
-provider analysis and tested local workspace repair. Remote effects, Electron,
-and the daemon remain planned.
+provider analysis, tested local workspace repair and a private Linux analysis
+daemon. Remote effects and Electron remain planned.
 See [workflow commands and shared contracts](docs/workflow-api.md) to build,
 install, validate the supplied example, and replay fictional fixtures.
 
 - [Local workspace repair and recovery](docs/workspace-repair.md)
+- [Private analysis daemon and recovery](docs/daemon-analysis.md)
 - [Product brief](docs/product-brief.md)
 - [Architecture](docs/pr-workflows/architecture.md)
 - [Specification](docs/pr-workflows/specification.md)
