@@ -11,8 +11,8 @@ import { loadInstallation } from './config.js';
 interface DiagnosticCheck { check: string; ok: boolean; message: string }
 export async function diagnoseInstallation(directory: string, config: string) {
   const account = userInfo(), checks: DiagnosticCheck[] = [];
-  const check = async (name: string, action: () => Promise<string>, failure: string) => {
-    try { checks.push({ check: name, ok: true, message: await action() }); }
+  const check = async (name: string, action: () => Promise<string | Omit<DiagnosticCheck, 'check'>>, failure: string) => {
+    try { const result = await action(); checks.push({ check: name, ...(typeof result === 'string' ? { ok: true, message: result } : result) }); }
     catch { checks.push({ check: name, ok: false, message: failure }); }
   };
   await check('runtime', async () => {
@@ -56,14 +56,21 @@ export async function diagnoseInstallation(directory: string, config: string) {
       }, 'Check the GitHub App installation repository selection, read permissions, outbound access and rate limits.');
       await check(`tooling:${repository}`, async () => {
         const policy = await dependencies.applyPolicy?.(repository);
+        const searchPath = (process.env.PATH ?? '/usr/bin:/bin').split(':'), checkoutChecks: string[] = [];
         for (const command of policy?.execution?.requiredChecks ?? []) {
-          const candidates = isAbsolute(command.executable) ? [command.executable] : (process.env.PATH ?? '').split(':').filter(Boolean).map(path => join(path, command.executable));
+          const absolute = isAbsolute(command.executable);
+          if (!absolute && command.executable.includes('/')) { checkoutChecks.push(command.id); continue; }
+          const candidates = absolute ? [command.executable] : searchPath.filter(path => isAbsolute(path)).map(path => join(path, command.executable));
           let found = false;
           for (const candidate of candidates) try { await access(candidate, constants.X_OK); if ((await stat(candidate)).isFile()) { found = true; break; } } catch {}
-          if (!found) throw new Error();
+          if (!found) {
+            if (!absolute && searchPath.some(path => !isAbsolute(path))) checkoutChecks.push(command.id);
+            else throw new Error();
+          }
         }
+        if (checkoutChecks.length) return { ok: false, message: `Tooling diagnostics are incomplete: checks ${checkoutChecks.join(', ')} depend on checkout-relative executable paths. Verify them inside the retained candidate workspace. Installation diagnostics do not execute repository checks.` };
         return 'Configured check executables are accessible. Repository dependencies and actual check results are verified when the retained candidate runs its checks.';
-      }, 'Install each executable named by this repository execution policy in the service account PATH. Diagnostics do not execute repository checks.');
+      }, 'Check executable permissions and the absolute paths or service account PATH named by this repository execution policy. Diagnostics do not execute repository checks.');
     }
     if (dependencies.slack) await check('slack-configuration', async () => { if (!await dependencies.slack!.token()) throw new Error(); return 'The private Slack token is readable. Workspace binding, delivery permissions and real rendering remain separate checks.'; },
       'Check the Slack token file ownership, mode 0600, nonempty contents and configured workspace. No Slack message was sent.');

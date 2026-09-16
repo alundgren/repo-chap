@@ -74,6 +74,30 @@ test('account diagnostics exercise provider/App access and keep live ownership a
   } finally { await s.cleanup(); }
 });
 
+test('tooling diagnostics check configured executable access and identify unresolved checkout paths without running checks', async () => {
+  const s = await installation(), policyPath = join(s.configRoot, 'policy.json'), executable = join(s.root, 'check'), marker = join(s.root, 'check-ran');
+  try {
+    await writeFile(executable, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)},'unexpected check');\n`, { mode: 0o700 });
+    const policy = { schemaVersion: 1, repository: 'reef-labs/paperboat', capabilities: [], maxRepairsPerLifecycle: 1, maxPushAttempts: 1,
+      execution: { schemaVersion: 1, allowedPaths: ['src'], excludedPaths: [], requiredChecks: [
+        { id: 'private-check', executable, args: [], timeoutMs: 1000, maxOutputBytes: 1024 },
+        { id: 'path-check', executable: 'node', args: [], timeoutMs: 1000, maxOutputBytes: 1024 },
+      ] } };
+    await writeFile(policyPath, JSON.stringify(policy), { mode: 0o600 });
+    const config = JSON.parse(await readFile(s.config, 'utf8')); config.applyPolicies = [policyPath]; await writeFile(s.config, JSON.stringify(config));
+    const diagnose = () => s.command('diagnose', '--state-dir', s.state, '--config', s.config);
+    const passed = await diagnose(); assert.equal(passed.code, 0, JSON.stringify(passed.output));
+    assert.equal(passed.output.checks.find((value: any) => value.check === 'tooling:reef-labs/paperboat').ok, true);
+    await assert.rejects(readFile(marker), { code: 'ENOENT' });
+    await chmod(executable, 0o600); const inaccessible = await diagnose(); assert.equal(inaccessible.code, 7); assert.match(JSON.stringify(inaccessible.output), /permissions/);
+    policy.execution.requiredChecks[0]!.executable = join(s.root, 'missing'); await writeFile(policyPath, JSON.stringify(policy));
+    const missing = await diagnose(); assert.equal(missing.code, 7); assert.equal(missing.output.checks.find((value: any) => value.check === 'tooling:reef-labs/paperboat').ok, false);
+    policy.execution.requiredChecks[0]!.executable = './node'; await writeFile(policyPath, JSON.stringify(policy));
+    const relative = await diagnose(); assert.equal(relative.code, 7); assert.match(JSON.stringify(relative.output), /incomplete.*private-check.*checkout-relative/);
+    await assert.rejects(readFile(marker), { code: 'ENOENT' });
+  } finally { await s.cleanup(); }
+});
+
 test('restored Slack CLI recovery separates logical delivery from historical attempts and never grants sends', async () => {
   const s = await setup(), state = join(s.temporary, 'state'), restored = join(s.temporary, 'restored'), now = Date.now();
   let store = await RuntimeStore.open(state), control: Awaited<ReturnType<typeof serveControl>> | undefined, service: DaemonService | undefined;

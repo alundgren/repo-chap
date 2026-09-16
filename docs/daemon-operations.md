@@ -71,6 +71,12 @@ not open or migrate the runtime through the scheduler, make a model call, run
 repository checks or send Slack messages. Provider entitlement, repository
 dependency installation and Slack permissions need their own actual trials.
 
+Executable paths such as `./scripts/check`, or commands available only through
+relative PATH entries, require a candidate checkout. Diagnostics report that
+tooling check as incomplete with exit 7 and name the affected check IDs. Verify
+those commands in the retained candidate workspace; diagnostics do not search
+for a similarly named executable elsewhere or change the execution policy.
+
 Failure messages name the check and correction without raw provider output or
 credential values. Fix private file ownership/modes, executable paths, login,
 App repository selection or outbound access as indicated. At least 512 MiB free
