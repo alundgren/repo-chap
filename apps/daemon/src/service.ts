@@ -43,6 +43,7 @@ export class DaemonService {
   private cycle: Promise<void> | null = null;
   private slackCycle: Promise<void> | null = null;
   private readonly slackApi?: SlackApi;
+  private slackFailure: { reason: string; retryAt: number } | null = null;
   readonly now: () => number;
   constructor(readonly store: RuntimeStore, private readonly dependencies: DaemonDependencies) {
     this.now = dependencies.now ?? Date.now;
@@ -118,7 +119,12 @@ export class DaemonService {
       }
       this.abortStale(); this.dispatch();
       this.store.slack.supersedeStale(this.now());
-      if (this.slackApi && !this.slackCycle) this.slackCycle = deliverSlack(this.store, this.slackApi, this.now, this.shutdown.signal, async run => (await this.dependencies.profile(this.store.repository(run.repositoryId).profile)).maximumCapabilities.includes('notify.send')).finally(() => { this.slackCycle = null; });
+      if (this.slackApi && !this.slackCycle && (this.slackFailure?.retryAt ?? 0) <= this.now()) {
+        this.slackCycle = deliverSlack(this.store, this.slackApi, this.now, this.shutdown.signal, async run => (await this.dependencies.profile(this.store.repository(run.repositoryId).profile)).maximumCapabilities.includes('notify.send'))
+          .then(() => { this.slackFailure = null; })
+          .catch(() => { this.slackFailure = { reason: 'Slack delivery could not persist its outcome. Inspect private storage and the inbox before reconciling any unknown send.', retryAt: this.now() + this.store.limits.pollSeconds * 1000 }; })
+          .finally(() => { this.slackCycle = null; });
+      }
     } finally { this.polling = false; }
   }
   async poll(repo: RepositoryRecord): Promise<void> {
@@ -282,7 +288,7 @@ export class DaemonService {
   abortStale(): void { for (const active of this.active.values()) if (!this.store.isCurrent(active.claim, this.now()) && !this.store.ownsEffect(active.claim.runId, this.owner, this.now())) active.controller.abort('superseded'); }
   async idle(): Promise<void> { await Promise.all([...this.active.values()].map(value => value.done)); await this.slackCycle; }
   async stop(): Promise<void> { this.stopped = true; this.shutdown.abort(); for (const active of this.active.values()) active.controller.abort(); await this.cycle; await Promise.all(this.sourceReads.values()); await this.idle(); }
-  status(): unknown { return { schemaVersion: 1, mode: this.dependencies.applyPolicy ? 'apply' : 'analysis', slackEnabled: !!this.slackApi, slackDeliveries: this.store.slack.deliveries(), githubRetryAt: this.store.cooldown() || null, limits: this.store.limits, repositories: this.store.repositories(), runs: this.store.runs() }; }
+  status(): unknown { return { schemaVersion: 1, mode: this.dependencies.applyPolicy ? 'apply' : 'analysis', slackEnabled: !!this.slackApi, slackFailure: this.slackFailure, slackDeliveries: this.store.slack.deliveries(), githubRetryAt: this.store.cooldown() || null, limits: this.store.limits, repositories: this.store.repositories(), runs: this.store.runs() }; }
 }
 function waitingWorkflow(workflow: Workflow, run: RunRecord, observation: Observation): Workflow {
   const timing = run.waitTiming;

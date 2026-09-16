@@ -87,6 +87,7 @@ export async function daemonCommand(args: string[]): Promise<void> {
 export function humanResult(command: string, value: unknown): string {
   const data = value as Record<string, any>;
   if (command === 'status') return [`Daemon ${data.mode} mode`, `Slack delivery ${data.slackEnabled ? 'enabled' : 'disabled'}. Use daemon inbox for complete handoffs.`, ...(data.githubRetryAt ? [`GitHub retry after ${new Date(data.githubRetryAt).toISOString()}`] : []),
+    ...(data.slackFailure ? [`${data.slackFailure.reason} Next retry ${new Date(data.slackFailure.retryAt).toISOString()}.`] : []),
     ...(data.slackDeliveries ?? []).filter((item: any) => item.state !== 'confirmed').map((item: any) => `Slack ${item.id}: ${item.state}. ${item.reason}`),
     ...data.repositories.flatMap((repo: any) => repositoryLines(repo)),
     ...data.runs.map((run: any) => `${run.id} PR #${run.number}: ${run.status}. ${run.reason}${run.dueAt ? ` Next wake ${new Date(run.dueAt).toISOString()}.` : ''}`),

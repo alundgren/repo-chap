@@ -221,6 +221,9 @@ text fallback presents the accessible message used by Slack. The links and
 disclosure work with the keyboard, and narrow layouts wrap identifiers and links.
 
 Daemon status identifies pending, failed and unknown delivery. `daemon inbox`
-retains the complete request independently of Slack access. Reconciliation requires
+retains the complete request independently of Slack access. Configuration failures
+name the correction before a send, while an unknown delivery states that Slack may
+have accepted it. Storage failures appear in daemon status with the next processing
+retry time. Reconciliation requires
 a matching receipt or an explicit resend command. Resend help explains possible
 duplicates and retained history. It does not restart analysis or repair.

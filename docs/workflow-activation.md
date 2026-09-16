@@ -101,6 +101,10 @@ Confirmed effects stay confirmed. Planning the same payload, evidence and destin
 after a prompt change finds the same record. Effect handlers validate current inputs before sending a planned effect and
 must reconcile an unknown outcome before another write. Conditional push uses
 the independent effect leases described in [conditional repair and push](conditional-push.md).
+Migration does not authorize remote delivery. Prompt-only migration preserves
+Slack's complete packet, semantic request identity and message receipt when the
+evidence, destination and content remain unchanged. Unknown Slack outcomes still
+require explicit receipt or resend reconciliation.
 
 Provider profile selection and reviewer logins remain operator-controlled inputs.
 The separate repair execution policy is unchanged; source activation does not

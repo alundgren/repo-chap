@@ -35,7 +35,9 @@ To enable delivery, private installation JSON can include:
 This is a fragment of installation settings, not workflow JSON. The token file
 and its parent directory follow the daemon's private-file rules. The operator
 profile must permit `notify.send`. The daemon verifies the token's workspace
-before sending. Public and private channels require the appropriate bot access;
+before sending and rechecks that binding when the token changes. Each delivery uses
+the same in-memory token that passed verification. Public and private channels
+require the appropriate bot access;
 DMs use `conversations.open` with one mapped member ID. The app needs `chat:write`
 and permission to open DMs, normally `im:write`. No inbound listener, Slack
 approval, slash command, message impersonation or merge operation is provided.
@@ -87,7 +89,10 @@ lost response. Persisted deadlines apply across requests and restarts. Calls are
 spaced conservatively and honor `Retry-After`. A known rate rejection permits at
 most three automatic message attempts. Missing access or destination keeps the
 complete request in the inbox. No notification failure calls a provider or repeats
-a repair.
+a repair. A configuration or permission failure before dispatch is rejected with
+no message call. If receipt persistence fails after dispatch, the attempted send
+remains unknown until reconciliation. Unexpected storage failures appear in daemon
+status with a bounded processing delay; that delay never authorizes another send.
 
 ```sh
 repo-chap daemon inbox --state-dir /private/repo-chap/state
@@ -109,5 +114,6 @@ operator decision. Slack account delivery and real client rendering remain
 human pilot checks. Automated adapter tests use fictional responses only.
 
 The implementation follows Slack's [message API](https://docs.slack.dev/reference/methods/chat.postMessage/),
-[conversation API](https://docs.slack.dev/reference/methods/conversations.open/) and
+[conversation API](https://docs.slack.dev/reference/methods/conversations.open/),
+[workspace verification API](https://docs.slack.dev/reference/methods/auth.test/) and
 [message update API](https://docs.slack.dev/reference/methods/chat.update/).

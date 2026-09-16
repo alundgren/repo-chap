@@ -19,7 +19,8 @@ export function previewRoute(config: SlackConfiguration | undefined, outcome: Pa
   const member = authorLogin && users[normalizeLogin(authorLogin)];
   if (outcome === 'needs_author' && member) return { ...result, destination: { kind: 'dm', memberId: member, authorLogin: normalizeLogin(authorLogin!) }, explanation: `Author DM for ${normalizeLogin(authorLogin!)} using member ${member}. The conversation is resolved only on delivery.` };
   const fallback = outcome === 'needs_author', route = fallback ? config.defaultChannel : config.routes[outcome], channel = config.channels[route];
-  const explanation = fallback ? `No Slack member mapping for ${authorLogin ? normalizeLogin(authorLogin) : 'the unknown author'}. Use default channel ${config.defaultChannel}.` : `Configured ${outcome} route: ${route}.`;
+  const labels = { needs_author: 'Author requests', needs_team: 'Team requests', ready_for_human_merge: 'Merge handoffs', blocked_execution: 'Blocked requests' };
+  const explanation = fallback ? `No Slack member mapping for ${authorLogin ? normalizeLogin(authorLogin) : 'the unknown author'}. Use default channel ${config.defaultChannel}.` : `${labels[outcome]} go to ${route}.`;
   if (!channel || !/^[CG][A-Z0-9]+$/.test(channel)) return { ...result, fallback, destination: null, explanation: `${explanation} No usable channel destination. The complete request stays in the CLI inbox.` };
   return { ...result, fallback, destination: { kind: 'channel', channelId: channel, name: route }, explanation };
 }

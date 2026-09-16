@@ -9,6 +9,7 @@ import { loadWorkflow, validateWorkflow } from '@repo-chap/workflow';
 import { memberMappings, previewPacket, previewRoute, previewHtml, validatePacket, type PacketOutcome } from '@repo-chap/slack';
 import { SlackApi, type SlackRateStore } from '@repo-chap/slack/web-api';
 import { decisionPacket, slackConfig } from './helpers/slack-fixture.ts';
+import { build } from 'esbuild';
 
 test('each outcome previews its channel or stable author DM offline with accessible decision evidence', () => {
   const destinations = ['dm', 'channel', 'channel', 'channel'];
@@ -61,6 +62,26 @@ test('superseded rendering removes the old requested action and configured menti
   assert.match(preview.message.text, /Superseded request/); assert.match(preview.message.text, /Do not act/);
   assert.ok(!preview.message.text.includes(decisionPacket.recommendedDecision)); assert.ok(!JSON.stringify(preview.message).includes('<@UROWAN>'));
 });
+test('worst-case escaping, Unicode, links and configured mentions fit the complete message budget', () => {
+  const repeated = '&<>😀*_~`'.repeat(500), ids = Array.from({ length: 10 }, (_, i) => `U${String(i).padStart(30, 'A')}`);
+  for (const char of ['&', '<', '>', '😀', repeated]) {
+    const value = char.repeat(Math.max(1, Math.floor(8000 / char.length)));
+    const packet = { ...decisionPacket, repository: `${'a'.repeat(49)}/${'b'.repeat(50)}`, prNumber: Number.MAX_SAFE_INTEGER,
+      reason: value, recommendedDecision: value, findings: Array(8).fill(value), attemptedFixes: Array(8).fill(value), uncertainty: Array(8).fill(value),
+      checks: Array(8).fill({ name: value, status: 'failed', evidence: value }),
+      evidenceLinks: Array.from({ length: 6 }, () => ({ label: value, url: `https://github.com/reef-labs/paperboat/pull/42#${'a'.repeat(200)}` })) };
+    const preview = previewPacket(packet, { ...slackConfig, mentions: { ready_for_human_merge: ids } });
+    assert.ok(preview.message.text.length <= 4000, `Fallback has ${preview.message.text.length} characters.`);
+    assert.ok(preview.message.blocks.length <= 12);
+    assert.ok(preview.message.blocks.every(block => block.text.text.length <= 3000));
+    assert.match(preview.message.text, /complete request is in the CLI inbox/);
+  }
+});
+test('the public renderer bundles for a browser without delivery or Node runtime dependencies', async () => {
+  const bundle = await build({ stdin: { contents: 'export { previewPacket, previewRoute, previewHtml } from "@repo-chap/slack";', resolveDir: process.cwd() }, bundle: true, platform: 'browser', format: 'esm', write: false, metafile: true, logLevel: 'silent' });
+  assert.ok(Object.keys(bundle.metafile!.inputs).every(path => !path.includes('web-api') && !path.includes('node:')));
+  assert.ok(!bundle.outputFiles[0]!.text.includes('slack.com/api/'));
+});
 test('CLI renders text, JSON and standalone HTML without credentials or network', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'chap-preview-'));
   try {
@@ -107,4 +128,24 @@ test('wrong workspace, malformed acceptance and server failure never become conf
   const s = apiFixture([response({ ok: true, team_id: 'TFOREST' }), response({ ok: true, channel: 'COTHER' }), new Response('', { status: 500 })]);
   await s.api.verify(); s.advance(); const message = previewPacket(decisionPacket, slackConfig).message;
   assert.equal((await s.api.send('CPAPERBOAT', message)).status, 'unknown'); s.advance(); assert.equal((await s.api.send('CPAPERBOAT', message)).status, 'unknown');
+});
+test('token rotation requires workspace verification and a send uses the token that was verified', async () => {
+  let now = 100_000, token = 'fictional-original'; const calls: { method: string; token: string | null }[] = [];
+  const api = new SlackApi({ workspaceId: 'TFOREST', token: async () => token, now: () => now, rates: { read: () => 0, extend: () => {} }, transport: async (url, options) => {
+    const credential = new Headers(options?.headers).get('authorization'), method = String(url).split('/').at(-1)!;
+    calls.push({ method, token: credential });
+    return response(method === 'auth.test' ? { ok: true, team_id: credential === 'Bearer fictional-original' ? 'TFOREST' : 'TOTHER' } : { ok: true, channel: 'CPAPERBOAT', ts: '123456.000001' });
+  } });
+  assert.equal((await api.verify()).status, 'confirmed'); token = 'fictional-replacement'; now += 1500;
+  assert.equal((await api.send('CPAPERBOAT', previewPacket(decisionPacket, slackConfig).message)).status, 'confirmed');
+  assert.equal(calls.at(-1)?.token, 'Bearer fictional-original');
+  assert.equal((await api.verify()).status, 'rejected');
+  await assert.rejects(api.send('CPAPERBOAT', previewPacket(decisionPacket, slackConfig).message), /Verify the installation workspace/);
+  assert.equal(calls.filter(call => call.method === 'chat.postMessage').length, 1);
+});
+test('invalid receipt types and incomplete rejection responses remain unknown', async () => {
+  const s = apiFixture([response({ ok: true, team_id: 'TFOREST' }), response({ ok: true, channel: 'CPAPERBOAT', ts: 123456.000001 }), response({ error: 'not_in_channel' })]);
+  await s.api.verify(); s.advance();
+  assert.equal((await s.api.send('CPAPERBOAT', previewPacket(decisionPacket, slackConfig).message)).status, 'unknown'); s.advance();
+  assert.equal((await s.api.send('CPAPERBOAT', previewPacket(decisionPacket, slackConfig).message)).status, 'unknown');
 });
