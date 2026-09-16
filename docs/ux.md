@@ -89,6 +89,15 @@ JSON with two spaces. Shared validation reports invalid references and action
 paths. Source remains available to repair them; Reset workflow restores every
 source draft to its last loaded or saved text after confirmation.
 
+Typed inspector values become visible unsaved settings immediately. They stay
+editable while incomplete. Apply settings captures them into workflow source;
+Discard settings abandons only unapplied values. Save all, export, simulation,
+and changing views or inspected actions capture accepted values first. An empty
+numeric field stays visible with an error until corrected or discarded. Save
+preserves field focus and the text selection so typing can continue after the
+keyboard shortcut. Open, close and reset confirmations include unapplied
+settings; Cancel retains them.
+
 Changes against saved source compare execution fields, ordered rule IDs and
 referenced text. Layout and JSON formatting are excluded. Export JSON explicitly
 writes a workflow-only copy and names that referenced files were not copied.

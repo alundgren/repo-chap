@@ -21,26 +21,31 @@ function referenceName(path: string): string {
   return [...base.map(() => '..'), ...parts].join('/');
 }
 const token = (): DocumentToken => ({ sessionId: state!.sessionId, revision: state!.revision });
-const dirty = (): boolean => !!state?.files.some(file => file.dirty) || unsent.size > 0;
+const dirty = (): boolean => !!state?.files.some(file => file.dirty) || unsent.size > 0 || process.pending() > 0;
 function say(text: string, error = false): void {
   const message = element('message');
   message.textContent = text;
   message.classList.toggle('danger', error);
 }
-const process = processView(bridge, perform, () => state);
+const process = processView(bridge, perform, () => state, message => { say(message); render(); });
 
-async function perform(operation: () => Promise<EditorResult>, message?: string): Promise<void> {
-  if (prompting || !state) return;
+async function perform(operation: () => Promise<EditorResult>, message?: string, captureInspector = true): Promise<boolean> {
+  if ((prompting && captureInspector) || !state) return false;
+  if (captureInspector && !await process.flush()) return false;
   const previous = document.activeElement as HTMLElement | null;
   const focusId = previous?.id, focusKey = previous?.dataset.focus;
+  const wasPrompting = prompting;
   setPrompting(true);
   say('');
   try {
-    await queue;
-    if (unsent.size) { say('Correct or discard the unaccepted source text before continuing.', true); return; }
-    await enqueue(async () => { if (receive(await operation(), true) && message) say(message); });
+    return await enqueue(async () => {
+      if (unsent.size) { say('Correct or discard the unaccepted source text before continuing.', true); return false; }
+      const ok = receive(await operation(), true);
+      if (ok && message) say(message);
+      return ok;
+    });
   } finally {
-    setPrompting(false);
+    setPrompting(wasPrompting);
     if (focusId) document.getElementById(focusId)?.focus();
     else if (focusKey) [...document.querySelectorAll<HTMLElement>('[data-focus]')].find(item => item.dataset.focus === focusKey)?.focus();
   }
@@ -64,7 +69,8 @@ function render(replaceSource = false): void {
   element('repository-path').textContent = state.repositoryRoot;
   element('read-only').hidden = !state.readOnlyReason;
   element('read-only').textContent = state.readOnlyReason;
-  element('dirty-state').textContent = queuedEdits ? 'Validating draft…' : dirty() ? `${state.files.filter(file => file.dirty || unsent.has(file.path)).length} unsaved file(s)` : 'All changes saved';
+  const dirtyFiles = state.files.filter(file => file.dirty || unsent.has(file.path)).length;
+  element('dirty-state').textContent = queuedEdits ? 'Validating draft…' : dirty() ? [dirtyFiles ? `${dirtyFiles} unsaved file(s)` : '', process.pending() ? `${process.pending()} unsaved action setting(s)` : ''].filter(Boolean).join(' · ') : 'All changes saved';
   element<HTMLButtonElement>('save').disabled = prompting || !!state.readOnlyReason || !dirty() || !!state.diagnostics.length;
   element<HTMLButtonElement>('discard').disabled = !file.dirty && !unsent.has(selected);
   element<HTMLButtonElement>('reload').disabled = false;
@@ -119,7 +125,7 @@ function render(replaceSource = false): void {
 function setPrompting(value: boolean): void { prompting = value; render(); }
 
 function receive(result: EditorResult, replaceSource = false): boolean {
-  if (result.snapshot?.sessionId !== state?.sessionId) { unsent.clear(); selected = result.snapshot?.workflowPath ?? ''; replaceSource = true; }
+  if (result.snapshot?.sessionId !== state?.sessionId) { unsent.clear(); process.discardDrafts(); selected = result.snapshot?.workflowPath ?? ''; replaceSource = true; }
   state = result.snapshot;
   render(replaceSource);
   if (result.error) say(result.error, true);
@@ -169,18 +175,29 @@ async function confirm(title: string, detail: string, choices: { id: string; lab
 }
 
 async function save(): Promise<boolean> {
-  await queue;
-  if (!state) return false;
-  if (unsent.size) { say('Some draft text could not be accepted. Correct it or discard it before saving.', true); return false; }
-  const ok = await enqueue(async () => receive(await bridge.save(token())));
-  if (ok) say('Saved all changed files.');
-  return ok;
+  const focused = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+  const focusId = focused?.id, selectionStart = focused?.selectionStart, selectionEnd = focused?.selectionEnd;
+  const wasPrompting = prompting;
+  setPrompting(true);
+  try {
+    await queue;
+    if (!state || !await process.flush()) return false;
+    if (unsent.size) { say('Some draft text could not be accepted. Correct it or discard it before saving.', true); return false; }
+    const ok = await enqueue(async () => receive(await bridge.save(token())));
+    if (ok) say('Saved all changed files.');
+    return ok;
+  } finally {
+    setPrompting(wasPrompting);
+    const field = focusId ? document.getElementById(focusId) : null;
+    field?.focus();
+    if (selectionStart != null && selectionEnd != null && (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) field.setSelectionRange(selectionStart, selectionEnd);
+  }
 }
 
 async function leave(action: 'open' | 'close'): Promise<'continue' | 'discard' | 'cancel'> {
   await queue;
   if (!dirty()) return 'continue';
-  const paths = state!.files.filter(file => file.dirty || unsent.has(file.path)).map(file => file.path).join('\n');
+  const paths = [...state!.files.filter(file => file.dirty || unsent.has(file.path)).map(file => file.path), ...(process.pending() ? [`Action inspector: ${process.pending()} unsaved setting(s)`] : [])].join('\n');
   const choice = await confirm('Keep your unsaved changes?', `These files have unsaved changes:\n${paths}`, [
     { id: 'save', label: `Save all and ${action}`, style: 'primary', disabled: !!state!.diagnostics.length || !!state!.readOnlyReason || !!unsent.size },
     { id: 'discard', label: `Discard and ${action}`, style: 'danger' },
@@ -205,7 +222,7 @@ async function openWorkflow(kind: OpenKind): Promise<void> {
 element('open-workflow').onclick = () => { void openWorkflow('workflow'); };
 element('open-repository').onclick = () => { void openWorkflow('repository'); };
 element('save').onclick = () => { void save(); };
-for (const name of ['source', 'process', 'simulation'] as const) element(`${name}-tab`).onclick = () => { view = name; render(true); };
+for (const name of ['source', 'process', 'simulation'] as const) element(`${name}-tab`).onclick = () => { void (async () => { if (name !== view && !await process.flush()) return; view = name; render(true); })(); };
 element('export').onclick = () => { void perform(() => bridge.exportWorkflow(token()), 'Workflow JSON copy exported. Referenced files were not copied; keep their relative paths when using it.'); };
 element('reset').onclick = () => {
   void (async () => {
@@ -213,8 +230,8 @@ element('reset').onclick = () => {
     setPrompting(true);
     try {
       await queue;
-      if (await confirm('Reset all workflow drafts?', 'Restore every workflow source file to its last loaded or saved text. Temporary simulation inputs and current disk changes are kept.', [{ id: 'reset', label: 'Reset workflow', style: 'danger' }, { id: 'cancel', label: 'Cancel' }]) !== 'reset') return;
-      await enqueue(async () => { const result = await bridge.reset(token()); if (!result.error) unsent.clear(); if (receive(result, true)) say('Workflow drafts restored to saved source.'); });
+      if (await confirm('Reset all workflow drafts?', 'Discard unapplied action settings and restore every workflow source file to its last loaded or saved text. Temporary simulation inputs and current disk changes are kept.', [{ id: 'reset', label: 'Reset workflow', style: 'danger' }, { id: 'cancel', label: 'Cancel' }]) !== 'reset') return;
+      await enqueue(async () => { const result = await bridge.reset(token()); if (!result.error) { unsent.clear(); process.discardDrafts(); } if (receive(result, true)) say('Workflow drafts restored to saved source.'); });
     } finally { setPrompting(false); }
   })();
 };

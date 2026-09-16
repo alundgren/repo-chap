@@ -64,7 +64,7 @@ test('actual Electron edits priority and timing, replays offline with CLI parity
   await page.locator('#process-tab').click();
   await expect(page.locator('#rules')).toContainText('memory.repairSuppressed = true and (facts.conflict = true or facts.unaddressedReview = true)');
   await page.locator('#action-select').selectOption('wait_review');
-  const wait = page.locator('#setting-reviewWaitSeconds'); await wait.fill('60'); await wait.press('Tab');
+  const wait = page.locator('#setting-reviewWaitSeconds'); await wait.fill('60'); await page.locator('#apply-settings').click();
   await expect.poll(async () => (await snapshot()).workflow!.settings.reviewWaitSeconds).toBe(60);
   const move = page.getByRole('button', { name: 'Move review_to_address up', exact: true }); await move.focus(); await move.press('Enter');
   await expect.poll(async () => (await snapshot()).workflow!.rules.findIndex(rule => rule.id === 'review_to_address')).toBe(workflow.rules.findIndex(rule => rule.id === 'conflict'));
@@ -153,4 +153,56 @@ test('capture approved process reference and actual Electron comparison', { time
     await writeFile(join(proof, 'comparison.html'), '<!doctype html><html lang="en"><meta charset="utf-8"><title>Process comparison</title><style>body{margin:24px;background:#F2EADE;color:#604939;font:16px system-ui}main{display:grid;grid-template-columns:1fr 1fr;gap:24px}img{width:100%}h1{font-size:24px}h2{font-size:18px}</style><h1>Repo Chap ordered process editor</h1><main><section><h2>Approved presentation reference</h2><img src="reference-process.png" alt="Approved process and action inspector concept"></section><section><h2>Actual Electron application</h2><img src="10-process-comparison.png" alt="Actual ordered rule editor and action inspector"></section></main></html>');
     await page.setViewportSize({ width: 1800, height: 1100 }); await page.goto(`file://${join(proof, 'comparison.html')}`); await page.screenshot({ path: join(proof, 'comparison-process.png'), fullPage: true });
   } finally { await browser.close(); }
+});
+
+test('focused inspector drafts participate in save, leave protection, reset, export and simulation', { timeout: 120_000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'repo-chap-inspector-ui-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const original = await loadWorkflow(resolve(workflowPath));
+  for (const file of original.files) { await mkdir(dirname(join(root, file.path)), { recursive: true }); await writeFile(join(root, file.path), file.text); }
+  const env: Record<string, string> = { REPO_CHAP_DESKTOP_DATA: join(root, 'profile') };
+  for (const key of ['PATH', 'DISPLAY', 'HOME', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']) if (process.env[key]) env[key] = process.env[key]!;
+  const electron = await _electron.launch({ executablePath, args: [...(packaged ? [] : [resolve('apps/desktop')]), '--workflow', join(root, workflowPath), '--repo-root', root], env });
+  t.after(async () => { await electron.evaluate(({ BrowserWindow }) => { for (const win of BrowserWindow.getAllWindows()) win.destroy(); }).catch(() => {}); await electron.close().catch(() => {}); });
+  const page = await electron.firstWindow(); await electron.context().setOffline(true);
+  const snapshot = () => page.evaluate(async () => (await window.repoChap.current()).snapshot!);
+  const disk = async () => JSON.parse(await readFile(join(root, workflowPath), 'utf8'));
+  await expect(page.locator('#validation-title')).toHaveText('Validation passed'); await page.locator('#process-tab').click(); await page.locator('#action-select').selectOption('wait_review');
+  const time = page.locator('#setting-reviewWaitSeconds');
+  await time.fill('77'); await expect(page.locator('#dirty-state')).toHaveText('1 unsaved action setting(s)'); await expect(page.locator('#save')).toBeEnabled();
+  await time.press('Control+s'); await expect(page.locator('#message')).toHaveText('Saved all changed files.');
+  assert.equal((await snapshot()).workflow!.settings.reviewWaitSeconds, 77); assert.equal((await disk()).settings.reviewWaitSeconds, 77); await expect(time).toHaveValue('77'); await expect(time).toBeFocused();
+  await time.press('End'); await time.press('8'); await expect(time).toHaveValue('778'); await expect(page.locator('#dirty-state')).toHaveText('1 unsaved action setting(s)');
+  await page.locator('#save').click(); await expect(page.locator('#message')).toHaveText('Saved all changed files.'); assert.equal((await disk()).settings.reviewWaitSeconds, 778); await expect(time).toHaveValue('778');
+  await page.screenshot({ path: join(proof, '12-focused-inspector-saved.png'), fullPage: true });
+  await page.locator('#action-select').selectOption('review'); const prompt = page.locator('#action-prompt'), context = page.locator('#action-context');
+  await prompt.fill('review.md'); await prompt.press('Control+s'); await expect(page.locator('#message')).toHaveText('Saved all changed files.');
+  assert.equal((await snapshot()).workflow!.actions.review!.prompt, 'review.md'); assert.equal((await disk()).actions.review.prompt, 'review.md'); await expect(prompt).toBeFocused(); await expect(prompt).toHaveValue('review.md');
+  await context.fill('review.md\nprompts/review.md'); await context.press('Control+s'); await expect(page.locator('#message')).toHaveText('Saved all changed files.');
+  assert.deepEqual((await snapshot()).workflow!.actions.review!.contextFiles, ['review.md', 'prompts/review.md']); assert.deepEqual((await disk()).actions.review.contextFiles, ['review.md', 'prompts/review.md']); await expect(context).toHaveValue('review.md\nprompts/review.md'); await expect(context).toBeFocused();
+  await page.locator('#action-select').selectOption('wait_review'); await time.fill('91');
+  await electron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close()); await expect(page.getByRole('dialog')).toContainText('Action inspector: 1 unsaved setting(s)'); await page.keyboard.press('Escape'); await expect(time).toHaveValue('91'); await expect(page.locator('#dirty-state')).toHaveText('1 unsaved action setting(s)');
+  await page.locator('#open-workflow').click(); await expect(page.getByRole('dialog')).toContainText('Action inspector: 1 unsaved setting(s)'); await page.keyboard.press('Escape'); await expect(time).toHaveValue('91');
+  await page.locator('#reset').click(); await page.keyboard.press('Escape'); await expect(time).toHaveValue('91');
+  await page.locator('#reset').click(); await page.getByRole('dialog').getByRole('button', { name: 'Reset workflow', exact: true }).click(); await expect(time).toHaveValue('778'); await expect(page.locator('#dirty-state')).toHaveText('All changes saved');
+  await time.fill(''); await time.press('Control+s'); await expect(page.locator('#message')).toContainText('finite number'); await expect(time).toHaveValue(''); await expect(page.locator('#dirty-state')).toHaveText('1 unsaved action setting(s)'); assert.equal((await disk()).settings.reviewWaitSeconds, 778);
+  await page.locator('#action-select').selectOption('review'); await expect(page.locator('#action-select')).toHaveValue('wait_review'); await expect(time).toHaveValue('');
+  await page.screenshot({ path: join(proof, '13-partial-setting-retained.png'), fullPage: true });
+  await page.locator('#discard-settings').click(); await expect(time).toHaveValue('778'); await expect(page.locator('#dirty-state')).toHaveText('All changes saved');
+  const exported = join(root, 'workflow-copy.json'); await electron.evaluate(({ dialog }, path) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: path }); }, exported);
+  await time.fill('88'); await page.locator('#export').click(); await expect(page.locator('#message')).toContainText('Referenced files were not copied');
+  assert.equal(JSON.parse(await readFile(exported, 'utf8')).settings.reviewWaitSeconds, 88); assert.equal((await snapshot()).workflow!.settings.reviewWaitSeconds, 88); assert.equal((await disk()).settings.reviewWaitSeconds, 778);
+  await page.locator('#simulation-tab').click();
+  const pending = JSON.parse(await readFile('fixtures/replay/handoff.json', 'utf8')); pending.observations[0].facts.externalReviewPending = true; pending.observations[0].externalReviewStartedAt = '2026-05-01T11:55:00Z';
+  const fixturePath = join(root, 'pending.json'); await writeFile(fixturePath, JSON.stringify(pending)); await electron.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }); }, fixturePath);
+  await page.locator('#load-fixture').click(); await expect(page.locator('#fixture-name')).toContainText('pending.json');
+  await page.locator('#process-tab').click(); await time.fill('92'); await page.locator('#simulation-tab').click(); await page.locator('#simulate').click(); await expect(page.locator('#message')).toHaveText('Simulation finished. Nothing was sent.');
+  await expect(page.locator('#simulation-result')).toContainText('Next wake 2026-05-01T12:01:32.000Z'); assert.equal((await snapshot()).workflow!.settings.reviewWaitSeconds, 92);
+  await page.locator('#process-tab').click(); await time.fill('93');
+  await electron.evaluate(({ dialog }) => { dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] }); });
+  await page.locator('#open-workflow').click(); await page.getByRole('dialog').getByRole('button', { name: 'Save all and open', exact: true }).click(); await expect(page.getByRole('dialog')).not.toBeVisible(); await expect(time).toHaveValue('93'); await expect(page.locator('#dirty-state')).toHaveText('All changes saved'); assert.equal((await disk()).settings.reviewWaitSeconds, 93);
+  await time.fill('94'); await electron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.close()); await page.getByRole('dialog').getByRole('button', { name: 'Save all and close', exact: true }).click();
+  await expect.poll(async () => (await disk()).settings.reviewWaitSeconds).toBe(94);
+  assert.equal((await loadWorkflow(join(root, workflowPath), { repositoryRoot: root })).workflow.settings.reviewWaitSeconds, 94);
+  await writeFile(join(proof, 'inspector-result.json'), JSON.stringify({ passed: true, packaged: !!packaged, checks: ['focused numeric Ctrl+S and continued typing', 'Save button accepts focused text', 'focused prompt/context Ctrl+S', 'close/open/reset cancel retains pending field', 'reset discards pending field', 'invalid partial value retained and blocks inspector replacement', 'explicit discard', 'export captures pending value without changing original disk', 'simulation uses pending settings', 'save-and-open cancelled picker preserves saved value', 'save-and-close persists pending value', 'reopened package matches saved value'] }, null, 2));
 });

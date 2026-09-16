@@ -16,12 +16,49 @@ function traceNode(trace: ConditionTrace): HTMLElement {
   return item;
 }
 
-export function processView(bridge: EditorBridge, perform: (operation: () => Promise<EditorResult>, message?: string) => Promise<void>, getState: () => DocumentSnapshot | null): { render: (state: DocumentSnapshot, locked: boolean) => void } {
+export function processView(bridge: EditorBridge, perform: (operation: () => Promise<EditorResult>, message?: string, captureInspector?: boolean) => Promise<boolean>, getState: () => DocumentSnapshot | null, changed: (message: string) => void): { render: (state: DocumentSnapshot, locked: boolean) => void; pending: () => number; flush: () => Promise<boolean>; discardDrafts: () => void } {
   let actionId = '';
   let controlsLocked = false;
   let inspectorKey = '', rulesKey = '', resultKey = '';
+  const drafts = new Map<string, VisualEdit>();
+  let flushing: Promise<boolean> | null = null;
+  const notify = (message = ''): void => {
+    const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+    const id = active?.id, start = active?.selectionStart, end = active?.selectionEnd;
+    changed(message);
+    const replacement = id === 'apply-settings' || id === 'discard-settings' ? element('action-select') : id ? document.getElementById(id) : null;
+    if (replacement && replacement !== active) {
+      replacement.focus();
+      if (start != null && end != null && (replacement instanceof HTMLInputElement || replacement instanceof HTMLTextAreaElement)) replacement.setSelectionRange(start, end);
+    }
+  };
+  const discardDrafts = (): void => { drafts.clear(); inspectorKey = ''; };
+  const track = (input: HTMLInputElement | HTMLTextAreaElement, edit: () => VisualEdit): void => {
+    const original = input.value;
+    input.oninput = () => { if (input.value === original) drafts.delete(input.id); else drafts.set(input.id, edit()); notify(); };
+  };
+  function flush(): Promise<boolean> {
+    if (flushing) return flushing;
+    const pending = [...drafts];
+    if (!pending.length) return Promise.resolve(true);
+    flushing = (async () => {
+      for (const [id, edit] of pending) {
+        if (!await perform(() => bridge.visualEdit(getState()!, edit), undefined, false)) return false;
+        if (drafts.get(id) === edit) drafts.delete(id);
+        notify('Action settings staged. Save all writes the workflow.');
+      }
+      return !drafts.size;
+    })().finally(() => { flushing = null; });
+    return flushing;
+  }
   const apply = (edit: VisualEdit): void => { void perform(() => bridge.visualEdit(getState()!, edit), 'Visual change staged. Save all writes the workflow.'); };
-  element<HTMLSelectElement>('action-select').onchange = () => { actionId = element<HTMLSelectElement>('action-select').value; inspectorKey = ''; render(getState()!, controlsLocked); };
+  element<HTMLSelectElement>('action-select').onchange = () => {
+    const next = element<HTMLSelectElement>('action-select').value;
+    element<HTMLSelectElement>('action-select').value = actionId;
+    void (async () => { if (!await flush()) return; actionId = next; inspectorKey = ''; render(getState()!, controlsLocked); })();
+  };
+  element('apply-settings').onclick = () => { void flush(); };
+  element('discard-settings').onclick = () => { discardDrafts(); notify('Unapplied action settings discarded.'); };
   for (const kind of ['fixture', 'packets'] as const) element(`load-${kind}`).onclick = () => { void perform(() => bridge.loadSimulationInput(getState()!, kind), 'Local simulation input loaded.'); };
   element('simulate').onclick = () => { void perform(() => bridge.simulate(getState()!), 'Simulation finished. Nothing was sent.'); };
   element('set-clock').onclick = () => { const now = element<HTMLInputElement>('fake-clock').value; void perform(() => bridge.setClock(getState()!, now), 'Fake time updated. Run simulation to test it.'); };
@@ -34,6 +71,7 @@ export function processView(bridge: EditorBridge, perform: (operation: () => Pro
     element('process-unavailable').hidden = !unavailable;
     element('process-content').hidden = unavailable;
     element('simulation-blocked').hidden = !unavailable;
+    for (const id of ['apply-settings', 'discard-settings']) { element(id).hidden = !drafts.size; element<HTMLButtonElement>(id).disabled = locked; }
     for (const id of ['load-fixture', 'load-packets']) element<HTMLButtonElement>(id).disabled = locked;
     element<HTMLButtonElement>('simulate').disabled = locked || unavailable || !state.simulationInputs.fixture;
     for (const id of ['set-clock', 'reset-fixture']) element<HTMLButtonElement>(id).disabled = locked || !state.simulationInputs.fixture;
@@ -60,7 +98,7 @@ export function processView(bridge: EditorBridge, perform: (operation: () => Pro
           const select = node('button'); select.className = 'rule-select'; select.dataset.focus = `select-${rule.id}`;
           select.disabled = locked;
           select.setAttribute('aria-pressed', String(rule.action === actionId)); select.append(node('strong', `${index + 1}. ${rule.id}`), node('span', conditionText(rule.when), 'secondary'), node('span', `→ ${rule.action}`));
-          select.onclick = () => { actionId = rule.action; inspectorKey = ''; render(getState()!, controlsLocked); };
+          select.onclick = () => { void (async () => { if (!await flush()) return; actionId = rule.action; inspectorKey = ''; render(getState()!, controlsLocked); })(); };
           const controls = node('div', '', 'rule-move');
           for (const [label, offset] of [['up', -1], ['down', 1]] as const) {
             const button = node('button', label === 'up' ? '↑' : '↓'); button.setAttribute('aria-label', `Move ${rule.id} ${label}`); button.dataset.focus = `${label}-${rule.id}`;
@@ -75,9 +113,10 @@ export function processView(bridge: EditorBridge, perform: (operation: () => Pro
       element('otherwise').textContent = `If no rule matches: ${workflow.otherwise}`;
       const select = element<HTMLSelectElement>('action-select');
       const nextInspectorKey = JSON.stringify([state.sessionId, workflow.actions, workflow.settings, actionId]);
-      if (nextInspectorKey !== inspectorKey) {
+      if (nextInspectorKey !== inspectorKey && !drafts.size) {
         select.replaceChildren(...Object.keys(workflow.actions).map(id => { const option = node('option', id); option.value = id; return option; })); select.value = actionId;
         const action = workflow.actions[actionId]!;
+        const inspectedAction = actionId;
         const fields = element('action-fields');
         fields.replaceChildren(node('h2', action.uses), node('p', `${action.execution === 'agent' ? 'Agent action' : 'Built-in action'} · ${action.capabilities.length ? action.capabilities.join(', ') : 'No requested capabilities'}`, 'secondary'));
         const field = (label: string, input: HTMLElement): void => { const wrapper = node('label', label); wrapper.append(input); fields.append(wrapper); };
@@ -87,14 +126,14 @@ export function processView(bridge: EditorBridge, perform: (operation: () => Pro
           input.value = action[key]; input.onchange = () => apply({ kind: 'action', actionId, field: key, value: input.value }); field(label, input);
         }
         if (action.prompt !== undefined) {
-          const input = node('input'); input.value = action.prompt; input.id = 'action-prompt'; input.onchange = () => apply({ kind: 'action', actionId, field: 'prompt', value: input.value }); field('Prompt file', input);
+          const input = node('input'); input.value = action.prompt; input.id = 'action-prompt'; track(input, () => ({ kind: 'action', actionId: inspectedAction, field: 'prompt', value: input.value })); field('Prompt file', input);
           const context = node('textarea'); context.id = 'action-context'; context.value = (action.contextFiles ?? []).join('\n'); context.rows = 3;
-          context.onchange = () => apply({ kind: 'context', actionId, value: context.value.split('\n').map(line => line.trim()).filter(Boolean) }); field('Context files, one path per line', context);
+          track(context, () => ({ kind: 'context', actionId: inspectedAction, value: context.value.split('\n').map(line => line.trim()).filter(Boolean) })); field('Context files, one path per line', context);
         }
         const timing = action.uses === 'control.wait_reviewer' ? ['reviewWaitSeconds', 'reviewDeadlineSeconds'] as const : action.uses === 'control.wait_debounce' ? ['newPrDelaySeconds', 'headDebounceSeconds'] as const : [];
         const timingLabels = { reviewWaitSeconds: 'Reviewer recheck, seconds', reviewDeadlineSeconds: 'Reviewer deadline, seconds', newPrDelaySeconds: 'New PR delay, seconds', headDebounceSeconds: 'Head debounce, seconds' };
-        for (const key of timing) { const input = node('input'); input.type = 'number'; input.min = '0'; input.step = '1'; input.id = `setting-${key}`; input.value = String(workflow.settings[key]); input.onchange = () => apply({ kind: 'setting', field: key, value: input.valueAsNumber }); field(timingLabels[key], input); }
-        fields.append(node('p', 'Changes update workflow JSON and use shared validation. Save explicitly. IDs and requested permissions stay visible in source.', 'secondary'));
+        for (const key of timing) { const input = node('input'); input.type = 'number'; input.min = '0'; input.step = '1'; input.id = `setting-${key}`; input.value = String(workflow.settings[key]); track(input, () => ({ kind: 'setting', field: key, value: input.valueAsNumber })); field(timingLabels[key], input); }
+        fields.append(node('p', 'Apply settings or Save all to capture typed values. Switching views also captures them. Shared validation checks the workflow JSON.', 'secondary'));
         inspectorKey = nextInspectorKey;
       }
       for (const control of element('process-content').querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input,select,textarea')) control.disabled = locked || unavailable;
@@ -147,5 +186,5 @@ export function processView(bridge: EditorBridge, perform: (operation: () => Pro
       area.append(slack);
     }
   }
-  return { render };
+  return { render, pending: () => drafts.size, flush, discardDrafts };
 }

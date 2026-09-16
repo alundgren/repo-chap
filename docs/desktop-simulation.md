@@ -60,6 +60,25 @@ bytes, rather than treating Save all or a layout edit as a new execution input.
 The tested token remains visible even when later equivalent source has a newer
 document revision. Invalid workflow source always makes a prior result stale.
 
+The renderer also owns raw inspector text while a person types. An incomplete
+number cannot yet be represented in authoritative workflow JSON. These values
+immediately count as unsaved settings and enable Save all. `processView` exposes
+`pending()`, `flush()` and `discardDrafts()` to the renderer. `flush()` sends each
+accepted field through the existing token-checked `visualEdit` and retains any
+rejected input. Apply settings calls it explicitly. Discard settings discards
+only raw values that have not entered the document.
+
+Renderer `perform` captures pending inspector edits before export, simulation
+or other workflow actions. `save` captures them before disk writes and retains
+focus and selection. View/action selection captures them before replacing the
+inspector. `leave` includes them in save/discard/cancel protection, and workflow
+reset clears them only after confirmation and a successful document reset.
+The internal capture-disabled `perform` call belongs only to `flush`, to avoid
+recursion. Future context or authoring operations must use the normal capture
+path and wait for the renderer queue before reading `DocumentSnapshot`; a main
+process snapshot alone cannot include an unfinished human field. No assistant
+operations or general patch/undo API are introduced here.
+
 Temporary fixture and packet inputs live only in the current document session.
 Save all writes workflow JSON and its referenced files. Reset workflow affects
 those source buffers; Reset fixture affects the loaded fixture. Opening another
