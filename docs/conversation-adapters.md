@@ -26,11 +26,25 @@ The pinned `default_mode_request_user_input` capability enables questions during
 ordinary conversation; without it this CLI rejects the question tool internally.
 
 The host disables shell, browser, image, application, plugin, hook, skill search,
-memory, delegation and other unrelated execution tools. It disables each
-configured MCP server before creating the conversation thread, including names
-containing dots. An unreadable transport configuration fails visibly before the
-question is sent. Native Codex login remains
-in its normal provider directory. No credentials are copied into the workflow.
+memory and delegation features. It lists available skills and disables their
+paths for the thread, then disables each configured MCP server, including names
+containing dots. Unreadable skill or transport configuration fails visibly before
+the question is sent. Project AGENTS loading has a zero-byte limit. This pinned
+version loads global AGENTS separately, so nonempty or unverifiable
+`instructionSources` rejects startup before dispatch. Recovery uses an
+instruction-free `CODEX_HOME` with ordinary native CLI login; the app neither
+edits global instructions nor copies credentials.
+
+The real selected model can still advertise native `apply_patch`; this version
+has no supported exclusion control for it. Read-only sandbox permissions and
+`approvalPolicy: never` deny native writes. A denied patch is absent from normal
+app-server events, so after clean exit the adapter audits the CLI's private
+JSONL transcript before granting success or resume. The audit binds session,
+CLI version, working directory and current turn start/context/completion. Native
+tool calls produce an unsupported-operation error, retaining any answer text.
+Missing, truncated, incompatible or ambiguous evidence also requires a fresh
+session. This is a version-pinned compatibility check, not mutation authority;
+future authoring must use registered application operations.
 
 Claude uses `2.1.236 (Claude Code)` with bidirectional `stream-json`, partial
 messages, explicit session IDs and `--resume`. The host supplies a short system
@@ -92,6 +106,10 @@ clean process exit before the host reports a reusable session. Claude can emit
 its result before flushing the native transcript. If the process does not finish
 cleanly, the answer remains visible and the host reports that a fresh session is
 required. Cancellation and timeouts still terminate the owned process group.
+The Codex transcript audit has a two-second deadline, a 32 MiB read ceiling,
+100,000 records and the same 512 KiB per-record bound. It rejects changing files,
+symlinks and non-regular files. Those audit limits do not configure native
+transcript retention; exceeding them makes this session non-reusable.
 
 ## Desktop session ownership
 
@@ -148,6 +166,7 @@ not establish model quality, real account entitlement, a real charge or native
 macOS operation. Those checks belong to the personal pilot.
 
 Protocol references are the [Codex app-server documentation](https://learn.chatgpt.com/docs/app-server),
+the [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference),
 the [Claude programmatic guide](https://code.claude.com/docs/en/headless), and
 the [Claude MCP guide](https://code.claude.com/docs/en/mcp). The pinned installed
 binaries and local protocol receipts determine the behavior supported here.

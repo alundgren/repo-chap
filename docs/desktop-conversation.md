@@ -16,6 +16,13 @@ desktop reads the chosen file into memory; it does not write it or save the
 choice in the workflow. Settings reload does not change the current conversation
 until you select **Use profile**.
 
+Codex discussion requires an instruction-free provider home. If startup reports
+ambient instructions, create a separate private directory, use ordinary
+`CODEX_HOME=/absolute/private/directory codex login`, then launch Repo Chap with
+that same `CODEX_HOME`. Keep AGENTS customization out of this directory. The app
+does not remove your existing instructions or copy credentials. Claude uses its
+normal supported login while excluding ambient customization for each turn.
+
 Expand **Context for the next question** to choose a rule and the loaded Markdown
 references to send. The current workflow JSON is always included. The latest
 completed simulation is included by default when available, with its tested
@@ -26,6 +33,10 @@ the editor can capture it. Save all remains the only normal source-save action.
 
 Send or Ctrl/Cmd+Enter submits one question. Follow-ups reuse a native session
 only after the preceding turn completed and the CLI flushed its session state.
+Codex also checks the private native transcript for the current turn. An
+unsupported native operation or unverifiable transcript keeps the answer but
+requires **Fresh session**. Read-only permissions deny native file edits;
+discussion grants no editing authority.
 Each answer names its provider and model; **Context and session** shows the
 captured provenance, digest and native session ID. A displayed session ID during
 streaming does not yet promise that the session can resume.

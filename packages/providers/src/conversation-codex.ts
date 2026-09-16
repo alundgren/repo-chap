@@ -1,6 +1,7 @@
 import { ConversationError, type ConversationQuestion, type ConversationSessionIdentity } from './conversation-types.js';
 import { record } from './conversation-process.js';
 import type { ConversationRuntime } from './conversation.js';
+import { auditCodexTranscript, nativeOperationFailure } from './conversation-codex-transcript.js';
 
 const disabledFeatures = ['shell_tool', 'unified_exec', 'apps', 'plugins', 'hooks', 'multi_agent', 'multi_agent_v2', 'code_mode', 'code_mode_only', 'code_mode_host', 'view_image', 'image_generation', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'memories', 'skill_search', 'skill_mcp_dependency_install', 'goals', 'sleep_tool', 'tool_suggest', 'worktrees'];
 
@@ -13,7 +14,7 @@ export async function runCodexConversation(runtime: ConversationRuntime): Promis
   const model = record(catalog) && Array.isArray(catalog.models) ? catalog.models.find(value => record(value) && value.slug === request.profile.model) : undefined;
   const effort = request.profile.effort ?? model?.default_reasoning_level;
   if (!record(model) || !Array.isArray(model.supported_reasoning_levels) || !model.supported_reasoning_levels.some(level => record(level) && level.effort === effort)) throw new ConversationError('settings', 'The installed Codex catalog does not support the selected model and effort. Choose a supported profile.');
-  const options = { 'web_search': 'disabled', 'project_doc_max_bytes': 16384, 'features.skip_host_skill_discovery': true, 'features.default_mode_request_user_input': true, ...Object.fromEntries(disabledFeatures.map(name => [`features.${name}`, false])) };
+  const options = { 'web_search': 'disabled', 'project_doc_max_bytes': 0, 'features.skip_host_skill_discovery': true, 'features.default_mode_request_user_input': true, ...Object.fromEntries(disabledFeatures.map(name => [`features.${name}`, false])) };
   const peer = runtime.spawn(['app-server', '--stdio', '--strict-config', ...Object.entries(options).flatMap(([key, value]) => ['--config', `${key}=${JSON.stringify(value)}`])]);
   let session: ConversationSessionIdentity | undefined, turnId: string | undefined;
   let complete!: (session: ConversationSessionIdentity) => void;
@@ -53,6 +54,7 @@ export async function runCodexConversation(runtime: ConversationRuntime): Promis
     if (!session || params.threadId !== session.id) return;
     if (message.method === 'turn/started' && record(params.turn)) turnId = params.turn.id;
     if (turnId && params.turnId && params.turnId !== turnId) return;
+    if (['item/started', 'item/completed'].includes(message.method) && record(params.item) && params.item.type === 'fileChange') throw nativeOperationFailure();
     if (message.method === 'item/agentMessage/delta') {
       if (typeof params.delta !== 'string') throw new ConversationError('protocol', 'Codex returned an invalid text event.');
       emit({ type: 'text', text: params.delta });
@@ -80,18 +82,26 @@ export async function runCodexConversation(runtime: ConversationRuntime): Promis
       if (!record(value) || typeof value.command !== 'string' && typeof value.url !== 'string') throw new ConversationError('settings', 'Cannot disable an unsupported Codex MCP configuration.');
       return [name, { enabled: false, ...(typeof value.command === 'string' ? { command: value.command } : { url: value.url }) }];
     }));
-    const config = { ...options, mcp_servers: disabledMcp };
+    const skills = await peer.request('skills/list', { cwds: [request.workingDirectory], forceReload: true });
+    if (!Array.isArray(skills.data) || skills.data.length !== 1 || !record(skills.data[0]) || skills.data[0].cwd !== request.workingDirectory || !Array.isArray(skills.data[0].skills) || !Array.isArray(skills.data[0].errors) || skills.data[0].errors.length) throw new ConversationError('settings', 'Cannot verify Codex skill configuration. Repair the local skill configuration before discussing this workflow.');
+    const disabledSkills = skills.data[0].skills.map((skill: unknown) => {
+      if (!record(skill) || typeof skill.path !== 'string' || !skill.path.startsWith('/') || skill.path.length > 4096) throw new ConversationError('settings', 'Cannot disable an unsupported Codex skill configuration.');
+      return { path: skill.path, enabled: false };
+    });
+    const config = { ...options, mcp_servers: disabledMcp, skills: { config: disabledSkills } };
     const common = { model: request.profile.model, cwd: request.workingDirectory, approvalPolicy: 'never', sandbox: 'read-only', config, developerInstructions: runtime.instruction };
     const thread = request.session
       ? await peer.request('thread/resume', { ...common, threadId: request.session.id, excludeTurns: true })
       : await peer.request('thread/start', { ...common, allowProviderModelFallback: false, ephemeral: false, dynamicTools: (request.tools ?? []).map(({ name, description, inputSchema }) => ({ type: 'function', name, description, inputSchema })) });
     if (thread.model !== request.profile.model) throw new ConversationError('settings', 'Codex changed the requested model. The conversation has stopped without sending the question.');
+    if (!Array.isArray(thread.instructionSources) || thread.instructionSources.length) throw new ConversationError('settings', 'Codex has ambient instructions enabled. Start Repo Chap with a separate instruction-free CODEX_HOME and log in there with the local Codex CLI. Your question has not been sent.');
     session = runtime.identify(thread.thread?.id); emit({ type: 'session', session });
     const turn = await peer.request('turn/start', { threadId: session.id, model: request.profile.model, effort, input: [{ type: 'text', text: runtime.input, text_elements: [] }] });
     if (!record(turn.turn) || typeof turn.turn.id !== 'string') throw new ConversationError('protocol', 'Codex did not start a supported turn.');
     turnId ??= turn.turn.id;
     const finished = await Promise.race([completed, peer.closed]);
     await peer.finishInput();
+    await auditCodexTranscript(thread.thread?.path, finished.id, turnId!, request.workingDirectory, (request.tools ?? []).map(tool => tool.name), runtime.signal);
     return finished;
   } finally { runtime.signal.removeEventListener('abort', cancel); }
 }

@@ -37,6 +37,10 @@ for (const provider of ['codex', 'claude'] as const) {
       if (provider === 'codex') {
         assert(calls.some(call => call.message?.method === 'thread/resume' && call.message.params.threadId === first.session.id));
         assert(calls.some(call => call.message?.method === 'thread/start' && call.message.params.config.mcp_servers['ambient.with.dot'].enabled === false));
+        for (const call of calls.filter(call => ['thread/start', 'thread/resume'].includes(call.message?.method))) {
+          assert.equal(call.message.params.config.project_doc_max_bytes, 0);
+          assert.deepEqual(call.message.params.config.skills.config, [{ path: '/fictional/ambient-skill/SKILL.md', enabled: false }]);
+        }
       } else {
         assert(calls.some(call => call.args?.includes('--resume') && call.args.includes(first.session.id)));
         assert(calls.some(call => call.toolResult?.result.content[0].text === 'actual test revision 2; waiting'));
@@ -112,6 +116,50 @@ for (const provider of ['codex', 'claude'] as const) {
     } finally { await f.cleanup(); }
   });
 }
+
+test('Codex refuses an unverified skill configuration before creating a conversation', async () => {
+  const f = await setup('codex', 'skills-error');
+  try {
+    const result = await runConversationTurn(f.request);
+    assert.equal(result.status, 'error'); if (result.status === 'error') assert.equal(result.code, 'settings');
+    assert(!(await f.calls()).some(call => ['thread/start', 'turn/start'].includes(call.message?.method)));
+    assert(!f.events.some(event => event.type === 'completed'));
+  } finally { await f.cleanup(); }
+});
+
+for (const mode of ['native-edit', 'native-denial']) test(`Codex surfaces ${mode} without a reusable completion`, async () => {
+  const f = await setup('codex', mode);
+  try {
+    const result = await runConversationTurn(f.request);
+    assert.equal(result.status, 'error'); if (result.status === 'error') {
+      assert.equal(result.code, 'unsupported');
+      assert.match(result.message, /native operation/);
+      assert(!('session' in result));
+    }
+    assert(!f.events.some(event => event.type === 'completed'));
+  } finally { await f.cleanup(); }
+});
+
+test('Codex rejects ambient instructions before sending the question', async () => {
+  const f = await setup('codex', 'ambient-instructions');
+  try {
+    const result = await runConversationTurn(f.request);
+    assert.equal(result.status, 'error'); if (result.status === 'error') assert.equal(result.code, 'settings');
+    assert(!(await f.calls()).some(call => call.message?.method === 'turn/start'));
+    assert(!f.events.some(event => event.type === 'completed'));
+  } finally { await f.cleanup(); }
+});
+
+for (const mode of ['missing', 'truncated', 'session', 'version', 'turn', 'incomplete', 'ambiguous', 'oversize']) test(`Codex keeps the answer without resume when transcript evidence is ${mode}`, async () => {
+  const f = await setup('codex', `audit-${mode}`);
+  try {
+    const result = await runConversationTurn(f.request);
+    assert.equal(result.status, 'error'); if (result.status === 'error') assert.equal(result.code, 'session');
+    assert(f.events.some(event => event.type === 'text'));
+    assert(!f.events.some(event => event.type === 'completed'));
+    assert(!('session' in result));
+  } finally { await f.cleanup(); }
+});
 
 test('Claude local-tool approval denial returns the supported protocol response', async () => {
   const f = await setup('claude', 'approval');

@@ -14,13 +14,26 @@ if (args.includes('--help')) {
 }
 if (args.includes('--bundled')) { send({ models: [{ slug: 'fictional-model', default_reasoning_level: 'medium', supported_reasoning_levels: [{ effort: 'medium' }] }] }); process.exit(); }
 const session = provider === 'codex' ? 'fictional-session' : 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const transcript = require('node:path').join(process.cwd(), 'provider-transcript.jsonl');
+const writeTranscript = () => {
+  if (mode === 'audit-missing') return;
+  const item = (type, payload) => ({ type, payload });
+  const lines = [item('session_meta', { id: mode === 'audit-session' ? 'other-session' : session, session_id: session, cwd: process.cwd(), cli_version: mode === 'audit-version' ? '0.999.0' : '0.154.0' }),
+    item('event_msg', { type: 'task_started', turn_id: 'turn-1' }), item('turn_context', { turn_id: mode === 'audit-turn' ? 'other-turn' : 'turn-1', cwd: process.cwd() })];
+  if (mode === 'native-denial') lines.push(item('response_item', { type: 'custom_tool_call', name: 'apply_patch', input: 'fictional denied edit' }));
+  lines.push(item('response_item', { type: 'message', role: 'assistant', content: [] }));
+  if (mode !== 'audit-incomplete') lines.push(item('event_msg', { type: 'task_complete', turn_id: 'turn-1' }));
+  if (mode === 'audit-ambiguous') lines.push(item('event_msg', { type: 'task_started', turn_id: 'other-turn' }));
+  fs.writeFileSync(transcript, lines.map(value => JSON.stringify(value)).join('\n') + (mode === 'audit-truncated' ? '' : '\n'), { mode: 0o600 });
+  if (mode === 'audit-oversize') fs.truncateSync(transcript, 33 * 1024 * 1024);
+};
 const notify = (method, params) => send({ method, params: { threadId: session, turnId: 'turn-1', ...params } });
 let pending;
 const text = value => provider === 'codex' ? notify('item/agentMessage/delta', { delta: value }) : send({ type: 'stream_event', session_id: session, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: value } } });
 const finish = () => {
   if (mode === 'burst') for (let i = 0; i < 6000; i++) text('x');
   text('The waiting rule uses the recorded test clock.');
-  if (provider === 'codex') notify('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+  if (provider === 'codex') { writeTranscript(); notify('turn/completed', { turn: { id: 'turn-1', status: 'completed' } }); }
   else send({ type: 'result', subtype: 'success', is_error: false, session_id: session, permission_denials: [] });
   if (mode === 'unfinished-session') setInterval(() => {}, 1000);
 };
@@ -34,6 +47,7 @@ const run = async () => {
   }
   if (mode === 'stream') { text('A partial answer about this workflow. '); setTimeout(finish, 800); return; }
   if (mode === 'long') { text('Long fictional answer. '.repeat(8000)); finish(); return; }
+  if (mode === 'native-edit') { notify('item/started', { item: { id: 'native-file-1', type: 'fileChange', status: 'inProgress', changes: [] } }); finish(); return; }
   if (mode === 'input' || mode === 'unsupported-input' || mode === 'approval') {
     pending = 'input';
     if (provider === 'codex') send({ id: 77, method: mode === 'unsupported-input' ? 'item/commandExecution/requestApproval' : 'item/tool/requestUserInput', params: { threadId: session, turnId: 'turn-1', isBlocking: true, questions: [{ id: 'scope', header: 'Scope', question: 'Which rule?', isOther: true, options: [{ label: 'Waiting', description: 'Use the waiting rule.' }] }] } });
@@ -62,7 +76,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (message.method === 'initialize') respond({ userAgent: 'fictional-codex' });
     if (message.method === 'account/read') respond({ requiresOpenaiAuth: true, account: mode === 'login' ? null : { type: 'chatgpt' } });
     if (message.method === 'config/read') respond({ config: { mcp_servers: { 'ambient.with.dot': { enabled: true, url: 'https://example.invalid/mcp' } } }, origins: {} });
-    if (message.method === 'thread/start' || message.method === 'thread/resume') respond({ thread: { id: session }, model: 'fictional-model' });
+    if (message.method === 'skills/list') respond({ data: [{ cwd: message.params.cwds[0], skills: [{ path: '/fictional/ambient-skill/SKILL.md', enabled: true }], errors: mode === 'skills-error' ? [{ message: 'Cannot read a fictional skill.' }] : [] }] });
+    if (message.method === 'thread/start' || message.method === 'thread/resume') respond({ thread: { id: session, path: transcript }, model: 'fictional-model', instructionSources: mode === 'ambient-instructions' ? ['/fictional/AGENTS.md'] : [] });
     if (message.method === 'turn/start') { respond({ turn: { id: 'turn-1' } }); notify('turn/started', { turn: { id: 'turn-1' } }); void run(); }
     if ((message.id === 77 || message.id === 78) && pending) { pending = null; finish(); }
   } else {
