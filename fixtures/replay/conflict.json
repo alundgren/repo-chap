@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "now": "2026-05-01T12:00:00Z",
+  "observations": [
+    {
+      "facts": {
+        "lifecycle": "open",
+        "draft": false,
+        "evidenceComplete": true,
+        "young": false,
+        "headDebouncing": false,
+        "conflict": true,
+        "unaddressedReview": false,
+        "externalReviewPending": false
+      },
+      "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "evidenceDigest": "fictional-evidence-1"
+    }
+  ],
+  "control": {
+    "memory": {
+      "classificationCurrent": true,
+      "reviewCurrent": true,
+      "packetCurrent": false,
+      "repairSuppressed": false
+    },
+    "review": {
+      "verdict": "acceptable",
+      "coverage": "complete"
+    },
+    "classification": {
+      "uncertain": false
+    }
+  },
+  "results": {
+    "resolve_conflict": [
+      {
+        "status": "success",
+        "payload": {
+          "schemaVersion": 1,
+          "expectedHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "candidateSha": "cccccccccccccccccccccccccccccccccccccccc",
+          "summary": "Add the missing ownership check and its regression test.",
+          "changedPaths": [
+            "src/records/get-record.ts",
+            "src/records/get-record.test.ts"
+          ],
+          "threads": [
+            {
+              "threadId": "THREAD_EXAMPLE_1",
+              "disposition": "addressed",
+              "response": "The handler now rejects a record owned by a different user.",
+              "evidenceRefs": [
+                "candidate:src/records/get-record.ts:18",
+                "test:ownership-check"
+              ]
+            }
+          ],
+          "suggestedChecks": [
+            "ownership-check",
+            "typecheck"
+          ],
+          "notesMarkdown": "# Working notes\n\nAdded the ownership guard. The host still needs to run required checks and confirm a conditional push before resolving the thread.\n",
+          "outcome": "candidate"
+        }
+      }
+    ],
+    "validate_candidate": [
+      {
+        "status": "success"
+      }
+    ],
+    "push_candidate": [
+      {
+        "status": "success"
+      }
+    ],
+    "resolve_threads": [
+      {
+        "status": "success"
+      }
+    ]
+  }
+}

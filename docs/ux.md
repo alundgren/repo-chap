@@ -28,3 +28,16 @@ Implementation should record its actual desktop UI choices here as components
 ship. The existing browser check verifies navigation, editing, invalid input,
 reset, export, offline operation, and laptop/narrow layouts. Generated browser
 evidence stays outside Git.
+
+## Offline CLI
+
+The CLI supports `validate` and `replay`. Human output names the selected rule,
+explains earlier rejections, lists proposed actions, and gives the stop reason
+and next wake time. `--json` returns the same decisions in a versioned format.
+Validation failures name the affected file or JSON path and the correction.
+
+A replay that waits, blocks, or needs another stub still exits successfully.
+The user asked to explain a workflow, so these are simulation results rather
+than command failures. JSON includes an explicit status; human output starts
+with that status. Missing results identify the exact fixture key to supply.
+Commands print help without requiring repository access or credentials.

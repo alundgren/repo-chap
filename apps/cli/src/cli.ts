@@ -1,0 +1,74 @@
+#!/usr/bin/env node
+import { loadWorkflow, parseFixture, parseJson, readFixtureText, replay, WorkflowError, type ReplayResult, type ConditionTrace } from '@repo-chap/workflow';
+
+const help = `repo-chap validates and replays repository workflows offline.
+
+Usage:
+  repo-chap validate <workflow.json> [--repo-root <directory>] [--json]
+  repo-chap replay <workflow.json> --fixture <fixture.json> [--repo-root <directory>] [--json]
+
+Replay uses supplied observations, results, control state, and time.
+It never runs providers, commands, or remote effects. Humans merge.
+
+Exit codes: 0 valid or replay completed, 2 invalid workflow/package,
+3 invalid fixture, 64 invalid command, 70 unexpected internal failure.
+A simulated wait, block, or missing stub is a successful replay with exit 0.
+`;
+function conditionReason(trace: ConditionTrace): string {
+  return trace.children?.length ? trace.children.map(conditionReason).join(' ') : trace.reason;
+}
+function humanReplay(result: ReplayResult): string {
+  const lines = [`Replay ${result.status}`, `Package ${result.packageDigest}`, `Clock ${result.now}`];
+  for (const decision of result.decisions) {
+    for (const rule of decision.rules) lines.push(`Rule ${rule.id}: ${rule.condition.value}${rule.selected ? ' (selected)' : ' (rejected)'}. ${conditionReason(rule.condition)}`);
+    lines.push(`Action ${decision.actionId}${decision.ruleId === null ? ' (fallback)' : ''}`);
+  }
+  for (const action of result.actions) lines.push(`${action.actionId}: ${action.status}. ${action.reason}`);
+  for (const effect of result.proposedEffects) lines.push(`Proposed ${effect.uses}${effect.outcome ? `: ${effect.outcome} to ${effect.destination}` : ''}`);
+  lines.push(result.reason);
+  if (result.nextWakeAt) lines.push(`Next wake ${result.nextWakeAt}`);
+  return `${lines.join('\n')}\n`;
+}
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  if (args.length === 0 || args.includes('--help') || args.includes('-h')) { process.stdout.write(help); return; }
+  const json = args.includes('--json');
+  let phase = 64;
+  try {
+    const command = args.shift();
+    const file = args.shift();
+    if (!['validate', 'replay'].includes(command ?? '') || !file || file.startsWith('-')) throw new Error('Use validate or replay followed by a workflow path. See --help.');
+    let repositoryRoot: string | undefined, fixture: string | undefined;
+    const seen = new Set<string>();
+    while (args.length) {
+      const option = args.shift()!;
+      if (seen.has(option)) throw new Error(`Repeated option: ${option}`);
+      seen.add(option);
+      if (option === '--json') continue;
+      if (option !== '--repo-root' && option !== '--fixture') throw new Error(`Unknown option: ${option}. See --help.`);
+      const value = args.shift();
+      if (!value || value.startsWith('-')) throw new Error(`${option} requires a value.`);
+      if (option === '--repo-root') repositoryRoot = value; else fixture = value;
+    }
+    if (command === 'replay' && !fixture) throw new Error('Replay requires --fixture <fixture.json>.');
+    if (command === 'validate' && fixture) throw new Error('--fixture is only used with replay.');
+    phase = 2;
+    const pkg = await loadWorkflow(file, { repositoryRoot });
+    if (command === 'validate') {
+      const result = { schemaVersion: 1, valid: true, workflowId: pkg.workflow.id, packageDigest: pkg.digest, files: pkg.files.map(f => ({ path: f.path, digest: f.digest })) };
+      process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : `Valid ${pkg.workflow.id}\nPackage ${pkg.digest}\nPinned ${pkg.files.length} files.\n`);
+    } else {
+      phase = 3;
+      const result = replay(pkg, parseFixture(parseJson(await readFixtureText(fixture!), fixture!)));
+      process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : humanReplay(result));
+    }
+  } catch (error) {
+    const diagnostics = error instanceof WorkflowError ? error.diagnostics : [{ code: phase === 64 ? 'usage' : 'internal', path: '', message: error instanceof Error ? error.message : String(error) }];
+    const exitCode = error instanceof WorkflowError || phase === 64 ? phase : 70;
+    const result = { schemaVersion: 1, valid: false, exitCode, diagnostics };
+    if (json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    else process.stderr.write(`${diagnostics.map(d => `${d.code}${d.path ? ` ${d.path}` : ''}: ${d.message}`).join('\n')}\n`);
+    process.exitCode = exitCode;
+  }
+}
+await main();
