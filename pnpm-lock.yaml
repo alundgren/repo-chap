@@ -11,6 +11,9 @@ importers:
       '@playwright/test':
         specifier: 1.62.1
         version: 1.62.1
+      '@repo-chap/github':
+        specifier: workspace:*
+        version: link:packages/github
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:packages/workflow
@@ -26,9 +29,18 @@ importers:
 
   apps/cli:
     devDependencies:
+      '@repo-chap/github':
+        specifier: workspace:*
+        version: link:../../packages/github
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
+
+  packages/github:
+    dependencies:
+      '@repo-chap/workflow':
+        specifier: workspace:*
+        version: link:../workflow
 
   packages/workflow:
     dependencies:
