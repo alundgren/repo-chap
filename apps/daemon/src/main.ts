@@ -7,7 +7,7 @@ if (!directory || !config || extra) {
 } else {
   try {
     const daemon = await startDaemon(directory, config);
-    process.stdout.write('Repo Chap daemon started in analysis mode.\n');
+    process.stdout.write(`Repo Chap daemon started in ${(daemon.service.status() as { mode: string }).mode} mode.\n`);
     const stop = () => { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); void daemon.stop().catch(() => { process.exitCode = 7; }); };
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
   } catch { process.stderr.write('Cannot start the daemon. Check the private state directory and installation settings.\n'); process.exitCode = 7; }

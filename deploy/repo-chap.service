@@ -1,0 +1,29 @@
+[Unit]
+Description=Repo Chap private repository daemon
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=repo-chap
+Group=repo-chap
+UMask=0077
+WorkingDirectory=/var/lib/repo-chap
+Environment=HOME=/var/lib/repo-chap-home
+Environment=PATH=/opt/repo-chap/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/repo-chap/current/repo-chap daemon start --state-dir /var/lib/repo-chap --config /etc/repo-chap/installation.json
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=45
+KillMode=control-group
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/repo-chap /var/lib/repo-chap-home
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

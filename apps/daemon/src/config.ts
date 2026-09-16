@@ -28,12 +28,12 @@ export async function readSlackInstallation(path: string): Promise<NonNullable<D
     return slackSettings(config.slack);
   } catch (error) { if (error instanceof RuntimeError) throw error; throw new RuntimeError('Cannot read the private Slack installation JSON.'); }
 }
-export async function loadInstallation(path: string, directory: string): Promise<{ dependencies: DaemonDependencies; limits: RuntimeLimits }> {
+export async function loadInstallation(path: string, directory: string): Promise<{ dependencies: DaemonDependencies; limits: Partial<RuntimeLimits>; profileNames: string[]; policyRepositories: string[] }> {
   try {
     const config = JSON.parse(await privateText(path)) as { schemaVersion: number; app: { appId: string; installationId: number; privateKeyFile: string }; providerConfig: string; limits?: Partial<RuntimeLimits>; applyPolicies?: string[]; slack?: { enabled: true; workspaceId: string; tokenFile: string } };
     if (config.schemaVersion !== 1 || !config.app || Object.keys(config).some(key => !['schemaVersion', 'app', 'providerConfig', 'limits', 'applyPolicies', 'slack'].includes(key)) ||
       Object.keys(config.app).some(key => !['appId', 'installationId', 'privateKeyFile'].includes(key)) || typeof config.app.appId !== 'string' || !isAbsolute(config.providerConfig)) throw new RuntimeError('Unsupported daemon installation configuration.');
-    await privateText(config.providerConfig);
+    const profiles = JSON.parse(await privateText(config.providerConfig)) as { profiles?: Record<string, unknown> };
     const slack = config.slack === undefined ? undefined : slackSettings(config.slack);
     const app = { appId: config.app.appId, installationId: config.app.installationId, privateKey: await privateText(config.app.privateKeyFile) }, credentials = installationCredentials(app);
     const policies = new Map<string, string>();
@@ -43,7 +43,8 @@ export async function loadInstallation(path: string, directory: string): Promise
       const key = policy.repository.toLowerCase();
       if (policies.has(key)) throw new RuntimeError('Configure only one private apply policy per repository.'); policies.set(key, file);
     }
-    return { limits: validateLimits(config.limits), dependencies: { directory, credentials, profile: name => readProfile(config.providerConfig, name),
+    validateLimits(config.limits);
+    return { limits: config.limits ?? {}, profileNames: Object.keys(profiles.profiles ?? {}), policyRepositories: [...policies.keys()], dependencies: { directory, credentials, profile: name => readProfile(config.providerConfig, name),
       ...(policies.size ? {
         applyPolicy: async (repository: string): Promise<ApplyPolicy | null> => {
           const file = policies.get(repository.toLowerCase()); if (!file) return null;

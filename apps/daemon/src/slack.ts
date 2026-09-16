@@ -6,13 +6,14 @@ import type { RuntimeStore, RunRecord, EffectLease } from '@repo-chap/runtime';
 export { packetForRun } from './packet.js';
 
 export async function deliverSlack(store: RuntimeStore, api: SlackApi, now: () => number, signal: AbortSignal, permitted: (run: RunRecord) => Promise<boolean>, selected: (run: RunRecord) => boolean = () => true): Promise<void> {
+  if (store.recovery().paused) return;
   store.slack.recover(now()); store.slack.supersedeStale(now());
   for (const pending of store.slack.pending(now())) {
     if (signal.aborted) return;
     let lease: EffectLease | null = null;
     try {
       const request = store.slack.request(pending.requestId), run = store.run(pending.runId);
-      if (!selected(run) || store.repository(run.repositoryId).paused) continue;
+      if (!selected(run) || store.recovery().paused || store.repository(run.repositoryId).paused) continue;
       if (!await permitted(run)) { store.slack.prepare(pending.id, { status: 'rejected', reason: 'Current operator permissions do not allow Slack delivery. The complete request stays in the CLI inbox.' }, now()); continue; }
       const preview = await store.artifacts.get<PacketPreview>(pending.operation === 'supersede' ? request.supersededPreview : request.preview);
       if (preview.route.workspaceId !== api.workspaceId || !preview.route.destination) { store.slack.prepare(pending.id, { status: 'rejected', reason: 'No configured Slack destination matches this installation. The complete request stays in the CLI inbox.' }, now()); continue; }

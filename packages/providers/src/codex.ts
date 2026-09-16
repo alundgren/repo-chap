@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { parseJson } from '@repo-chap/workflow';
 import { prepareCaptureDirectory } from '@repo-chap/github';
 import type { ProcessResult } from './process.js';
-import { object, processOutcome, runAction, type ProviderTransport } from './runner.js';
-import type { Outcome, ProviderRequest, ProviderResult, Usage } from './types.js';
+import { object, processOutcome, runAction, type ProviderTransport, type Invoke } from './runner.js';
+import type { Outcome, ProviderProfile, ProviderRequest, ProviderResult, Usage } from './types.js';
 
 function decode(result: ProcessResult): { payload: unknown; session?: string; usage: Usage['actual']; failed: boolean } {
   let text: string | undefined, session: string | undefined, usage: Usage['actual'] = null, completed = false, failed = false;
@@ -43,12 +43,7 @@ function decode(result: ProcessResult): { payload: unknown; session?: string; us
   return { payload, session, usage, failed: false };
 }
 
-const codex: ProviderTransport = {
-  provider: 'codex', label: 'Codex', maxInputBytes: 16 * 1024 * 1024,
-  resultInstruction: 'Return an object with exactly one string field, resultJson. That string must contain the JSON result satisfying both full action contracts below.',
-  validSession: id => /^[a-zA-Z0-9_-]{1,128}$/.test(id), decode,
-  async prepare(request, invoke) {
-    const { profile } = request;
+export async function probeCodex(profile: ProviderProfile, invoke: Invoke) {
     let version: string | undefined;
     const end = (outcome: Outcome, diagnostic: string) => ({ outcome, diagnostic, version });
     const probe = async (args: string[], bytes = 128 * 1024) => invoke(args, bytes);
@@ -77,6 +72,18 @@ const codex: ProviderTransport = {
       if (!effectiveEffort || !Array.isArray(model.supported_reasoning_levels) || !model.supported_reasoning_levels.some(level => object(level) && level.effort === effectiveEffort))
         return end('blocked', 'The installed Codex catalog does not support the requested effort for this model. Choose a supported profile setting.');
     } catch { return end('blocked', 'The installed Codex returned an unreadable model catalog. Update Codex.'); }
+    return { version: versionText, effectiveEffort };
+}
+
+const codex: ProviderTransport = {
+  provider: 'codex', label: 'Codex', maxInputBytes: 16 * 1024 * 1024,
+  resultInstruction: 'Return an object with exactly one string field, resultJson. That string must contain the JSON result satisfying both full action contracts below.',
+  validSession: id => /^[a-zA-Z0-9_-]{1,128}$/.test(id), decode,
+  async prepare(request, invoke) {
+    const { profile } = request;
+    const checked = await probeCodex(profile, invoke);
+    if ('outcome' in checked) return checked;
+    const { version: versionText, effectiveEffort } = checked;
     const artifacts = await prepareCaptureDirectory(request.artifactDirectory);
     const schemaPath = join(artifacts, `schema-${randomUUID()}.json`);
     await writeFile(schemaPath, JSON.stringify({ type: 'object', properties: { resultJson: { type: 'string' } }, required: ['resultJson'], additionalProperties: false }), { flag: 'wx', mode: 0o600 });
@@ -84,7 +91,7 @@ const codex: ProviderTransport = {
       version: versionText,
       identity: { effectiveEffort, authHome: process.env.CODEX_HOME ?? process.env.HOME ?? '', userConfig: 'ignored' },
       canResume: async () => {
-        const resume = await probe(['exec', 'resume', '--help']);
+        const resume = await invoke(['exec', 'resume', '--help'], 128 * 1024);
         return !processOutcome(resume) && ['--json', '--output-schema'].every(flag => resume.stdout.toString().includes(flag));
       },
       run: (input, session) => invoke(['--ask-for-approval', 'never', 'exec', '--strict-config', '--ignore-user-config', '--model', profile.model,

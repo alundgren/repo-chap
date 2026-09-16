@@ -71,7 +71,8 @@ export class RuntimeStore {
     });
   }
   static async open(directory: string, input: Partial<RuntimeLimits> = {}): Promise<RuntimeStore> {
-    const limits = validateLimits(input), root = await prepareCaptureDirectory(directory), file = join(root, 'runtime.sqlite');
+    let limits = validateLimits(input);
+    const root = await prepareCaptureDirectory(directory), file = join(root, 'runtime.sqlite');
     try { const handle = await open(file, 'wx', 0o600); await handle.close(); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     for (const path of [file, `${file}-wal`, `${file}-shm`]) {
@@ -82,6 +83,13 @@ export class RuntimeStore {
     let migrationOwner: string | undefined;
     try {
       if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='metadata'").get()) {
+        const retained = db.prepare("SELECT value FROM metadata WHERE key='restore_limits'").get();
+        if (retained) {
+          const saved = validateLimits(JSON.parse(String(retained.value)));
+          const recovery = db.prepare("SELECT value FROM metadata WHERE key='restore_recovery'").get();
+          if (recovery && JSON.parse(String(recovery.value)).paused && Object.entries(input).some(([key, value]) => saved[key as keyof RuntimeLimits] !== value)) throw new RuntimeError('Restored state requires the backed-up installation limits. Omit changed settings or copy manifest.limits into the private installation configuration before starting. Deliberate limit changes are available after recovery is released.');
+          limits = validateLimits({ ...saved, ...input });
+        }
         const version = db.prepare("SELECT value FROM metadata WHERE key='schema'").get();
         if (version && ['1', '2', '3'].includes(String(version.value))) migrationOwner = claimProcess(db);
       }
@@ -102,15 +110,21 @@ export class RuntimeStore {
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   claimDaemon(): string {
-    return claimProcess(this.db);
+    const token = claimProcess(this.db);
+    try {
+      this.db.prepare("INSERT INTO metadata VALUES ('installation_limits',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(json(this.limits));
+      this.db.prepare("UPDATE metadata SET value=? WHERE key='restore_limits'").run(json(this.limits)); return token;
+    }
+    catch (error) { releaseProcess(this.db, token); throw error; }
   }
   releaseDaemon(token: string): void {
     releaseProcess(this.db, token);
   }
-  recovery(): { paused: boolean; restoredAt: number | null; reconciledAt: number | null; unknownEffects: number } {
+  recovery(): { paused: boolean; restoredAt: number | null; reconciledAt: number | null; unknownEffects: number; historicalUnknownAttempts: number } {
     const row = this.db.prepare("SELECT value FROM metadata WHERE key='restore_recovery'").get();
     const saved = row ? JSON.parse(String(row.value)) : { paused: false, restoredAt: null, reconciledAt: null };
-    return { ...saved, unknownEffects: Number(this.db.prepare("SELECT COUNT(*) AS count FROM effects WHERE state IN ('sending','unknown')").get()!.count) };
+    return { ...saved, unknownEffects: Number(this.db.prepare("SELECT COUNT(*) AS count FROM effects WHERE state IN ('sending','unknown')").get()!.count),
+      historicalUnknownAttempts: Number(this.db.prepare("SELECT COUNT(*) AS count FROM effect_attempts JOIN effects ON effects.id=effect_id WHERE effect_attempts.state='unknown' AND effects.state NOT IN ('sending','unknown')").get()!.count) };
   }
   prepareRestoredState(now: number): void {
     this.transaction(() => {
@@ -125,6 +139,7 @@ export class RuntimeStore {
       this.db.prepare("DELETE FROM metadata WHERE key='daemon_owner'").run();
       this.db.prepare("INSERT INTO metadata VALUES ('restore_recovery',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
         .run(json({ paused: true, restoredAt: now, reconciledAt: null }));
+      this.db.prepare("INSERT INTO metadata VALUES ('restore_limits',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(json(this.limits));
     });
   }
   recordRecoveryReconciliation(now: number): void {

@@ -42,6 +42,7 @@ export class DaemonService {
   private readonly shutdown = new AbortController();
   private cycle: Promise<void> | null = null;
   private slackCycle: Promise<void> | null = null;
+  private reconciliation: Promise<void> | null = null;
   private readonly slackApi?: SlackApi;
   private slackFailure: { reason: string; retryAt: number } | null = null;
   readonly now: () => number;
@@ -108,10 +109,7 @@ export class DaemonService {
   private async runCycle(): Promise<void> {
     this.polling = true;
     try {
-      this.store.recover(this.now()); this.abortStale();
-      await reconcilePendingPushes(this.store, this.dependencies, this.now, this.shutdown.signal);
-      await reconcilePendingThreads(this.store, this.dependencies, () => this.reader(), this.now);
-      await reconcilePendingPublications(this.store, this.dependencies, this.now, this.shutdown.signal);
+      await this.reconcileEffects(); this.abortStale();
       for (const repo of this.store.repositories().sort((a, b) => a.nextPollAt - b.nextPollAt)) {
         if (this.dependencies.target && repo.name.toLowerCase() !== this.dependencies.target.repository.toLowerCase()) continue;
         if (this.stopped || this.store.cooldown() > this.now()) break;
@@ -119,13 +117,25 @@ export class DaemonService {
       }
       this.abortStale(); this.dispatch();
       this.store.slack.supersedeStale(this.now());
-      if (this.slackApi && !this.dependencies.planOnly && !this.slackCycle && (this.slackFailure?.retryAt ?? 0) <= this.now()) {
+      if (this.slackApi && !this.store.recovery().paused && !this.dependencies.planOnly && !this.slackCycle && (this.slackFailure?.retryAt ?? 0) <= this.now()) {
         this.slackCycle = deliverSlack(this.store, this.slackApi, this.now, this.shutdown.signal, run => this.slackPermitted(run), run => !this.dependencies.target || run.number === this.dependencies.target.number && this.store.repository(run.repositoryId).name.toLowerCase() === this.dependencies.target.repository.toLowerCase())
           .then(() => { this.slackFailure = null; })
           .catch(() => { this.slackFailure = { reason: 'Slack delivery could not persist its outcome. Inspect private storage and the inbox before reconciling any unknown send.', retryAt: this.now() + this.store.limits.pollSeconds * 1000 }; })
           .finally(() => { this.slackCycle = null; });
       }
     } finally { this.polling = false; }
+  }
+  private reconcileEffects(): Promise<void> {
+    if (!this.reconciliation) this.reconciliation = (async () => {
+      this.store.recover(this.now());
+      await reconcilePendingPushes(this.store, this.dependencies, this.now, this.shutdown.signal);
+      await reconcilePendingThreads(this.store, this.dependencies, () => this.reader(), this.now);
+      await reconcilePendingPublications(this.store, this.dependencies, this.now, this.shutdown.signal);
+    })().finally(() => { this.reconciliation = null; });
+    return this.reconciliation;
+  }
+  async reconcile(): Promise<ReturnType<RuntimeStore['recovery']>> {
+    await this.reconcileEffects(); this.store.recordRecoveryReconciliation(this.now()); return this.store.recovery();
   }
   private async slackPermitted(run: RunRecord): Promise<boolean> {
     const repo = this.store.repository(run.repositoryId), target = this.dependencies.target;
@@ -141,7 +151,7 @@ export class DaemonService {
     const reader = this.reader(), next = () => this.now() + this.store.limits.pollSeconds * 1000;
     try {
       await this.pollSource(repo); repo = this.store.repository(repo.id);
-      if (repo.paused || !repo.package || this.store.cooldown() > this.now()) { this.store.pollFinished(repo.id, Math.max(next(), this.store.cooldown()), repo.diagnostic); return; }
+      if (repo.paused || this.store.recovery().paused || !repo.package || this.store.cooldown() > this.now()) { this.store.pollFinished(repo.id, Math.max(next(), this.store.cooldown()), repo.diagnostic); return; }
       const listing = await listOpenPullRequests(reader, repo.name);
       let diagnostic = listing.coverage.status === 'complete' ? null : listing.coverage.failure?.message ?? 'PR listing is incomplete.';
       if (listing.repository && listing.repository.id !== repo.id) throw new RuntimeError('Repository identity changed; registration must be inspected.');
@@ -318,8 +328,8 @@ export class DaemonService {
   }
   abortStale(): void { for (const active of this.active.values()) if (!this.store.isCurrent(active.claim, this.now()) && !this.store.ownsEffect(active.claim.runId, this.owner, this.now())) active.controller.abort('superseded'); }
   async idle(): Promise<void> { await Promise.all([...this.active.values()].map(value => value.done)); await this.slackCycle; }
-  async stop(): Promise<void> { this.stopped = true; this.shutdown.abort(); for (const active of this.active.values()) active.controller.abort(); await this.cycle; await Promise.all(this.sourceReads.values()); await this.idle(); }
-  status(): unknown { return { schemaVersion: 1, mode: this.dependencies.applyPolicy ? 'apply' : 'analysis', slackEnabled: !!this.slackApi, slackFailure: this.slackFailure, slackDeliveries: this.store.slack.deliveries(), githubRetryAt: this.store.cooldown() || null, limits: this.store.limits, repositories: this.store.repositories(), runs: this.store.runs() }; }
+  async stop(): Promise<void> { this.stopped = true; this.shutdown.abort(); for (const active of this.active.values()) active.controller.abort(); await this.cycle; await this.reconciliation; await Promise.all(this.sourceReads.values()); await this.idle(); }
+  status(): unknown { return { schemaVersion: 1, mode: this.dependencies.applyPolicy ? 'apply' : 'analysis', recovery: this.store.recovery(), slackEnabled: !!this.slackApi, slackFailure: this.slackFailure, slackDeliveries: this.store.slack.deliveries(), githubRetryAt: this.store.cooldown() || null, limits: this.store.limits, repositories: this.store.repositories(), runs: this.store.runs() }; }
 }
 function waitingWorkflow(workflow: Workflow, run: RunRecord, observation: Observation): Workflow {
   const timing = run.waitTiming;

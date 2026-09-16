@@ -349,3 +349,18 @@ request and confirmed Slack receipt. When identical evidence returns, the same
 message remains available. If an earlier decision becomes current after a proven
 input change, the inbox reopens that request and Slack reuses its known message.
 Interrupted cleanup remains explicitly unknown until reconciled.
+
+## Service diagnostics and restored state
+
+CLI diagnostics name the invoking account and show each passed or failed check
+with a concrete correction. JSON retains the same check list and aggregate `ok`.
+The command reports capability/login checks separately from model entitlement;
+raw provider authentication output is never displayed.
+
+Backup names its completed destination and reminds the operator that private
+configuration/authentication need separate recovery. Restore names the new state
+directory and immediately explains the paused startup, reconciliation and release
+commands. Status distinguishes the installation recovery pause from repository
+pause and source activation hold, and separates unresolved logical effects from
+historical unknown attempts. `--keep-unknown` explains that unrelated work may
+resume without granting a resend. No desktop control is added.
