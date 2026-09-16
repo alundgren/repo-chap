@@ -45,7 +45,7 @@ policy/profile, effect ownership and retained limits. Revocation, cancellation,
 pause and migration prevent later sends that have not passed that check.
 Already sent requests can have unknown outcomes.
 
-GitHub's [`resolveReviewThread` input](https://docs.github.com/en/graphql/reference/pulls#resolvereviewthreadinput)
+GitHub's [`resolveReviewThread` input](https://docs.github.com/en/graphql/reference/pulls#input-object-resolvereviewthreadinput)
 has a thread ID, optional client mutation ID and optional Copilot resolution
 reason. It has no expected-head or expected-content condition. GitHub cannot
 atomically reject a concurrent head or comment change between the final read
