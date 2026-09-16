@@ -53,6 +53,9 @@ importers:
       '@repo-chap/providers':
         specifier: workspace:*
         version: link:../../packages/providers
+      '@repo-chap/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow

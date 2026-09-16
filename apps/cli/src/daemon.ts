@@ -80,13 +80,14 @@ export async function daemonCommand(args: string[]): Promise<void> {
     if (json) process.stdout.write(`${JSON.stringify({ schemaVersion: 1, ok: false, error: message })}\n`); else process.stderr.write(`${message}\n`);
   }
 }
-function humanResult(command: string, value: unknown): string {
+export function humanResult(command: string, value: unknown): string {
   const data = value as Record<string, any>;
   if (command === 'status') return [`Daemon ${data.mode} mode`, ...(data.githubRetryAt ? [`GitHub retry after ${new Date(data.githubRetryAt).toISOString()}`] : []),
     ...data.repositories.flatMap((repo: any) => repositoryLines(repo)),
     ...data.runs.map((run: any) => `${run.id} PR #${run.number}: ${run.status}. ${run.reason}${run.dueAt ? ` Next wake ${new Date(run.dueAt).toISOString()}.` : ''}`),
     ...(data.repositories.length ? [] : ['No repositories registered. Use daemon register.'])].join('\n') + '\n';
   if (command === 'inspect') return [`Run ${data.run.id}: ${data.run.status}`, data.run.reason, `Head ${data.run.headSha ?? 'unknown'}`, `Package ${data.run.packageDigest}`, `Run workflow version ${data.version.id}; source ${data.version.sourceRevision ?? 'explicit local package'}`,
+    ...(data.run.dueAt ? [`Next wake ${new Date(data.run.dueAt).toISOString()}`] : []),
     `Migration checkpoints ${data.migrations.length}`,
     `Attempts ${data.attempts.length}; reservations ${data.reservations.reduce((sum: number, entry: any) => sum + entry.units, 0)} cost units; operator retries ${data.run.retries}`,
     ...data.results.map((note: any) => { const result = note.result.repair ?? note.result.provider ?? note.result; return `${note.result.job.actionId}: ${result.status ?? result.outcome}. ${result.diagnostic}`; }),

@@ -1,5 +1,6 @@
 # Conditional repair and push
 
+Local CLI apply and daemon apply share durable repair, check and push handlers.
 The daemon starts in analysis mode unless its private installation config lists
 apply policy files. Each policy names one repository and the capabilities the
 operator permits there. Repository workflow edits cannot grant this permission.
@@ -51,8 +52,60 @@ The App must have Contents write permission for push. Inspection still requests
 its original read-only token. `installationPushCredentials` requests a separate
 token with Contents write, pull-request read and the named repository. It checks
 the returned Contents permission. `localPushCredentials` is the explicit local
-credential entry point for callers with an apply policy. Neither credential
+credential entry point used by CLI apply. Neither credential
 factory supplies policy approval.
+
+## Local CLI apply
+
+Local apply uses `GH_TOKEN`, `GITHUB_TOKEN`, or the current `gh` login. The account
+must be able to read the repository and push its PR branch. It does not require
+GitHub App installation settings. Keep policy and provider files private with
+mode 0600 outside Git, and use a separate persistent state directory from the
+daemon. The same policy contract above applies.
+
+Prepare the repair and checks, then inspect its planned push without a remote write:
+
+```sh
+repo-chap apply ./team-pr/workflow.json --repo reef-labs/paperboat --pr 42 \
+  --provider-config /private/repo-chap/providers.json --profile pilot \
+  --policy /private/repo-chap/paperboat-apply.json \
+  --state-dir /private/repo-chap/local-state --plan
+```
+
+The command prints the retained run ID, exact candidate and planned effect.
+Only the selected repository and PR can dispatch, even when other eligible PRs
+exist. `--plan` performs live GitHub reads, provider repair and local required
+checks, but makes no remote writes. It is different from offline `apply inspect`.
+Run the same command without `--plan` to continue from that saved candidate.
+Planned effects print before dispatch. There is no per-tool prompt within the
+private policy's bounds.
+
+The command executes immediately due work until it waits, blocks or reaches its
+step limit, then exits. Rerun after its displayed next wake time. Every invocation
+must reuse the same state directory to preserve lifetime limits across bot heads.
+Changing the workflow files does not silently replace a retained run's pinned
+package; the immutable registration rejects that change. Keep the original
+workflow files when resuming that local registration. Rerunning apply never
+implies permission to migrate an existing run.
+
+```sh
+repo-chap apply inspect <run-id> --state-dir /private/repo-chap/local-state
+repo-chap apply reconcile <run-id> --state-dir /private/repo-chap/local-state --json
+```
+
+`inspect` works offline without credentials, a provider or a running daemon.
+`reconcile` uses local read credentials to inspect unknown pushes. It cannot
+start a repair or send a push. It recovers dead send ownership and confirms an
+already accepted candidate, including a process killed after Git accepted the
+commit. Unknown reads retain their bounded retry time. An unexpected or missing
+remote head stays unknown for inspection.
+
+After a temporary failure before sending, rerun the full apply command with
+`--retry` to request a bounded retry of the saved action. A resumed push reloads
+policy and fresh PR evidence and reuses the exact validated candidate, without
+another model repair. Unknown effects cannot resend until reconciliation finds
+the expected old head. Limits, reservations and individual send attempts survive
+every restart. Ctrl-C stops active work; humans still merge.
 
 ## What the operator sees
 
@@ -71,6 +124,12 @@ A temporary inspection failure pauses dispatch while retaining the candidate.
 When identical complete evidence returns, the daemon resumes its saved check or
 push action. A changed head, base or other captured evidence invalidates those
 prerequisites.
+
+A failed credential lookup or unavailable final PR read before sending records
+a retryable rejection. The daemon schedules the next attempt after its poll delay;
+an explicit bounded retry can run sooner. Invalid candidates and stale target
+validation remain rejected. Temporary service failure does not require another
+repair, and every later send still repeats current authorization.
 
 Pause stops new dispatch and prevents an in-flight push from passing its final
 authorization check. A push already sent can still have an unknown outcome.

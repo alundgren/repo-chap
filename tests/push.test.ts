@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import { dirname, join, resolve } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { generateKeyPairSync } from 'node:crypto';
 import { canonicalJson, digest, buildPackage } from '@repo-chap/workflow';
@@ -83,6 +83,20 @@ test('credential retrieval finishes before the final target and authorization ch
     assert.equal(git(s.remote, 'rev-parse', s.request.targetRef), s.head);
   } finally { await s.cleanup(); }
 });
+test('temporary credential and final-read failures permit bounded retry of the same tested candidate', async () => {
+  const s = await prepared();
+  try {
+    for (const unavailable of ['credentials', 'target']) {
+      const receipt = await conditionalPush(s.request, {
+        transport: unavailable === 'credentials' ? { ...s.transport, push: async () => { throw new Error('Temporary credential service failure'); } } : s.transport,
+        readTarget: async () => { if (unavailable === 'target') throw new Error('Temporary GitHub read failure'); return s.target; }, authorize: () => true,
+      });
+      assert.equal(receipt.status, 'rejected'); assert.equal(receipt.retryable, true); assert.equal(git(s.remote, 'rev-parse', s.request.targetRef), s.head);
+    }
+    assert.equal((await conditionalPush(s.request, { transport: s.transport, readTarget: async () => s.target, authorize: () => true })).status, 'confirmed');
+    assert.equal(git(s.remote, 'rev-parse', s.request.targetRef), s.request.candidateSha);
+  } finally { await s.cleanup(); }
+});
 
 async function daemonFixture(mode = 'valid', maxRepairs = 2) {
   const s = await repairFixture('codex', mode), remotePath = await bare(s), directory = join(s.temporary, 'state');
@@ -145,6 +159,77 @@ test('effect failure retries the same candidate within send bounds without anoth
     await s.restart(); await s.tick(); assert.equal(s.sends, 2); await s.tick();
     const run = s.store.runs()[0]!; assert.equal(run.status, 'blocked'); assert.match(run.reason, /effect attempt limit/); assert.equal(s.jobs.length, 1);
     assert.equal(s.store.effectAttempts(s.store.effects(run.id)[0]!.id).length, 2); assert.equal(s.store.inspect(run.id).reservations.length, 1);
+  } finally { await s.cleanup(); }
+});
+test('daemon retries a temporary pre-send credential failure after restart without another provider reservation', async () => {
+  const s = await daemonFixture();
+  try {
+    const original = s.dependencies.pushTransport; let unavailable = true;
+    s.dependencies.pushTransport = async (...args) => { const transport = await original(...args); return { ...transport, push: async (...pushArgs) => {
+      if (unavailable) throw new Error('Temporary credential service failure'); return transport.push(...pushArgs);
+    } }; };
+    await s.tick(); await s.tick(); await s.tick();
+    const run = s.store.runs()[0]!, effect = s.store.effects(run.id)[0]!;
+    assert.equal(effect.state, 'rejected'); assert.equal((effect.receipt as { retryable: boolean }).retryable, true);
+    assert.equal(s.store.run(run.id).status, 'waiting'); assert.equal(s.sends, 0);
+    unavailable = false; await s.restart(); s.store.retry(run.id, Date.now()); await s.tick();
+    assert.equal(s.store.effects(run.id)[0]!.state, 'confirmed'); assert.equal(s.sends, 1); assert.equal(s.jobs.length, 1);
+    assert.equal(s.store.inspect(run.id).reservations.length, 1); assert.equal(s.store.effectAttempts(effect.id).length, 2);
+  } finally { await s.cleanup(); }
+});
+
+async function localCliFixture() {
+  const s = await daemonFixture('valid', 1), workflowRoot = join(s.temporary, 'workflow'), state = join(s.temporary, 'local-state');
+  for (const file of s.pkg.files) { const path = join(workflowRoot, file.path); await mkdir(dirname(path), { recursive: true }); await writeFile(path, file.text); }
+  const policy = join(s.temporary, 'apply.json'), fixture = join(s.temporary, 'cli-fixture.json'), requests = join(s.temporary, 'requests.jsonl');
+  await writeFile(policy, JSON.stringify(s.policy), { mode: 0o600 });
+  const args = ['apply', join(workflowRoot, s.pkg.workflowPath), '--repo-root', workflowRoot, '--repo', s.policy.repository, '--pr', '42', '--state-dir', state,
+    '--policy', policy, '--provider-config', s.settings, '--profile', 'pilot'];
+  const mode = async (value?: string) => writeFile(fixture, JSON.stringify({ inspection: s.inspection, remote: s.remotePath, requests, mode: value }), { mode: 0o600 });
+  await mode();
+  const run = (command: string[], token = 'fictional-local-token') => {
+    const child = spawnSync(process.execPath, ['--import', resolve('tests/helpers/apply-cli-preload.ts'), resolve('apps/cli/dist/cli.js'), ...command], {
+      env: { ...process.env, GH_TOKEN: token, GITHUB_TOKEN: '', REPO_CHAP_APPLY_FIXTURE: fixture }, encoding: 'utf8', timeout: 45_000,
+    });
+    return { ...child, value: child.stdout?.startsWith('{') ? JSON.parse(child.stdout) : null };
+  };
+  const calls = async () => (await readFile(s.log, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv.includes('exec') && !argv.includes('--help')).length;
+  return { ...s, state, policy, requests, args, mode, run, calls };
+}
+test('actual local apply command plans only the selected PR, inspects offline and recovers a crash without replacement repair', async () => {
+  const s = await localCliFixture();
+  try {
+    const planned = s.run([...s.args, '--plan', '--json']); assert.equal(planned.status, 0, planned.stderr || planned.stdout);
+    const id = planned.value.run.id, candidate = planned.value.run.repair.candidateSha, effect = planned.value.effects[0];
+    assert.equal(effect.state, 'planned'); assert.equal(planned.value.effectAttempts.length, 0); assert.equal(await s.calls(), 1);
+    assert.equal(git(s.remotePath, 'rev-parse', 'refs/heads/update'), s.head);
+    const requests = (await readFile(s.requests, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    assert.ok(requests.some(value => value.number === 42)); assert.ok(requests.every(value => value.number === undefined || value.number === 42));
+    const state = await RuntimeStore.open(s.state); assert.deepEqual(state.runs().map(run => run.number), [42]); state.close();
+    const printed = s.run([...s.args, '--plan']); assert.equal(printed.status, 0, printed.stderr || printed.stdout); assert.match(printed.stdout, /Planned github.push_candidate/);
+    await s.mode('offline'); const offline = s.run(['apply', 'inspect', id, '--state-dir', s.state, '--json'], '');
+    assert.equal(offline.status, 0, offline.stderr || offline.stdout); assert.equal(offline.value.effects[0].id, effect.id); assert.equal(await s.calls(), 1);
+    await rm(s.repository, { recursive: true });
+    await s.mode('crash'); const crashed = s.run([...s.args, '--json']); assert.equal(crashed.signal, 'SIGKILL', crashed.stderr || crashed.stdout);
+    assert.equal(git(s.remotePath, 'rev-parse', 'refs/heads/update'), candidate); assert.equal(await s.calls(), 1);
+    await s.mode(); const reconciled = s.run(['apply', 'reconcile', id, '--state-dir', s.state, '--json']); assert.equal(reconciled.status, 0, reconciled.stderr || reconciled.stdout);
+    assert.equal(reconciled.value.effects[0].state, 'confirmed'); assert.equal(reconciled.value.effects[0].id, effect.id);
+    assert.equal(reconciled.value.effectAttempts.length, 1); assert.equal(reconciled.value.reservations.length, 1); assert.equal(await s.calls(), 1);
+    const limited = s.run([...s.args, '--json']); assert.equal(limited.status, 8, limited.stderr || limited.stdout);
+    assert.match(limited.value.run.reason, /repair.*limit|Repair.*limit/); assert.equal(await s.calls(), 1);
+    assert.equal(git(s.remotePath, 'rev-parse', 'refs/heads/update'), candidate);
+  } finally { await s.cleanup(); }
+});
+test('actual local apply retry recovers a temporary final read with the saved candidate and retained send bounds', async () => {
+  const s = await localCliFixture();
+  try {
+    await s.mode('read_failure'); const failed = s.run([...s.args, '--json']);
+    assert.equal(failed.value.effects[0].state, 'rejected', failed.stderr || failed.stdout); assert.equal(failed.value.effects[0].receipt.retryable, true);
+    const candidate = failed.value.run.repair.candidateSha; assert.equal(git(s.remotePath, 'rev-parse', 'refs/heads/update'), s.head); assert.equal(await s.calls(), 1);
+    await s.mode(); const retried = s.run([...s.args, '--retry', '--json']);
+    assert.equal(retried.value.effects[0].state, 'confirmed', retried.stderr || retried.stdout); assert.equal(retried.value.effectAttempts.length, 2);
+    assert.equal(retried.value.effects[0].id, failed.value.effects[0].id); assert.equal(git(s.remotePath, 'rev-parse', 'refs/heads/update'), candidate);
+    assert.equal(retried.value.reservations.length, 1); assert.equal(await s.calls(), 1);
   } finally { await s.cleanup(); }
 });
 test('SIGKILL after Git acceptance before receipt persistence confirms the one existing commit on restart', async () => {

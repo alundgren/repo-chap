@@ -138,3 +138,18 @@ A failed push keeps its tested candidate. Bounded retry returns to the push
 action and retains charges. Unknown outcomes stay visible and require read-only
 reconciliation; another or missing remote commit names the need for inspection.
 Repair and send limits explicitly ask for a human decision. No mode offers merge.
+
+### Local apply commands
+
+Local apply names one repository and PR, uses local gh/PAT credentials and shares
+the daemon's durable repair and push handlers. `--plan` performs live reads,
+provider repair and local checks, then retains and prints a tested candidate
+and planned push without remote writes. Repeating the command without that
+flag resumes the saved work. Every planned push prints before dispatch.
+
+`apply inspect` works offline and shows the same candidate, limits, next wake and
+effect receipts as daemon inspect. `apply reconcile` performs only remote reads
+for unknown outcomes and never starts a provider or sends. `--retry` requests a
+bounded retry of the retained failed action; the output keeps previous charges
+and send attempts visible. Local commands stop when work waits or blocks and
+explain when to rerun using the same private state directory.

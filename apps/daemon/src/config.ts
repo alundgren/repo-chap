@@ -3,7 +3,7 @@ import { open } from 'node:fs/promises';
 import { isAbsolute, dirname } from 'node:path';
 import { installationCredentials, installationPushCredentials, prepareCaptureDirectory } from '@repo-chap/github';
 import { readProfile } from '@repo-chap/providers';
-import { RuntimeError, validateLimits, validateApplyPolicy, type ApplyPolicy, type RuntimeLimits } from '@repo-chap/runtime';
+import { RuntimeError, validateLimits, readApplyPolicy, type ApplyPolicy, type RuntimeLimits } from '@repo-chap/runtime';
 import type { DaemonDependencies } from './service.js';
 
 async function privateText(path: string): Promise<string> {
@@ -26,7 +26,7 @@ export async function loadInstallation(path: string, directory: string): Promise
     const policies = new Map<string, string>();
     if (config.applyPolicies !== undefined && (!Array.isArray(config.applyPolicies) || config.applyPolicies.length > 500)) throw new RuntimeError('applyPolicies must list up to 500 private policy files.');
     for (const file of config.applyPolicies ?? []) {
-      const policy = JSON.parse(await privateText(file)); validateApplyPolicy(policy);
+      const policy = await readApplyPolicy(file);
       const key = policy.repository.toLowerCase();
       if (policies.has(key)) throw new RuntimeError('Configure only one private apply policy per repository.'); policies.set(key, file);
     }
@@ -34,7 +34,7 @@ export async function loadInstallation(path: string, directory: string): Promise
       ...(policies.size ? {
         applyPolicy: async (repository: string): Promise<ApplyPolicy | null> => {
           const file = policies.get(repository.toLowerCase()); if (!file) return null;
-          const policy = JSON.parse(await privateText(file)); validateApplyPolicy(policy);
+          const policy = await readApplyPolicy(file);
           if (policy.repository.toLowerCase() !== repository.toLowerCase()) throw new RuntimeError('A private apply policy changed its repository. Restart after inspecting the installation settings.');
           return policy;
         },

@@ -615,13 +615,13 @@ export class RuntimeStore {
     return this.db.prepare('SELECT * FROM effect_attempts WHERE effect_id=? ORDER BY token').all(id).map(row => ({ effectId: String(row.effect_id), token: Number(row.token),
       startedAt: Number(row.started_at), finishedAt: row.finished_at === null ? null : Number(row.finished_at), state: row.state as EffectState, receipt: row.receipt ? JSON.parse(String(row.receipt)) : null }));
   }
-  wakeAfterEffect(id: string, now: number): void {
+  wakeAfterEffect(id: string, now: number, dueAt = now): void {
     this.transaction(() => {
       const row = this.db.prepare('SELECT run_id FROM effects WHERE id=?').get(id);
       if (!row) return;
       const run = this.run(String(row.run_id)), effect = this.effects(run.id).find(value => value.id === id)!;
       if (run.owner || ['closed', 'cancelled'].includes(run.status) || effect.evidenceKey !== run.evidenceKey) return;
-      run.status = 'ready'; run.dueAt = now; run.reason = 'Remote effect receipt updated. Inspect before continuing.'; this.saveRun(run);
+      run.status = dueAt > now ? 'waiting' : 'ready'; run.dueAt = dueAt; run.reason = 'Remote effect receipt updated. Inspect before continuing.'; this.saveRun(run);
     });
   }
   inspect(runId: string): { run: RunRecord; version: WorkflowVersion; migrations: MigrationRecord[]; attempts: unknown[]; reservations: unknown[]; notes: unknown[]; effects: EffectRecord[]; effectAttempts: EffectAttempt[] } {

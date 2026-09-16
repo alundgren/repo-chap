@@ -4,7 +4,7 @@ import { controlDecision, currentFacts, evaluate, hasCompleteEvidence, WorkflowE
 import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions, type PushCredentials, type PushTransport } from '@repo-chap/github';
 import { ExecutionError, validateTestedCandidate, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
 import type { ProviderProfile, SourceBundle } from '@repo-chap/providers';
-import { RuntimeError, RuntimeStore, StaleObservationError, requireApplyPolicy, applyPolicyDigest, type ApplyPolicy, type RepairAttemptJob, type RepairAttemptResult, type AnalysisJob, type AnalysisResult, type Claim, type Registration, type RepositoryRecord, type RunRecord, type SourceRegistration } from '@repo-chap/runtime';
+import { RuntimeError, RuntimeStore, StaleObservationError, requireApplyPolicy, applyPolicyDigest, type ApplyPolicy, type EffectRecord, type RepairAttemptJob, type RepairAttemptResult, type AnalysisJob, type AnalysisResult, type Claim, type Registration, type RepositoryRecord, type RunRecord, type SourceRegistration } from '@repo-chap/runtime';
 import { executeAnalysis, fetchSources, executeRepair, fetchRepairSources, profileDigest } from './worker.js';
 import { dispatchCandidatePush, reconcilePendingPushes } from './push.js';
 import { fetchWorkflowCommit } from './source.js';
@@ -19,6 +19,9 @@ export interface DaemonDependencies {
   repairSources?: (repository: string, inspection: Inspection, signal: AbortSignal) => Promise<ExecutionArtifact>;
   repair?: (job: RepairAttemptJob, profile: ProviderProfile, signal: AbortSignal, isCurrent: () => boolean) => Promise<RepairAttemptResult>;
   pushTransport?: (repository: string, checkout: string, signal: AbortSignal) => Promise<PushTransport>;
+  target?: { repository: string; number: number };
+  planOnly?: boolean;
+  onPlannedEffect?: (effect: EffectRecord) => void | Promise<void>;
   execute?: (job: AnalysisJob, profile: ProviderProfile, signal: AbortSignal, isCurrent: () => boolean) => Promise<AnalysisResult>;
 }
 export class DaemonService {
@@ -92,6 +95,7 @@ export class DaemonService {
       this.store.recover(this.now()); this.abortStale();
       await reconcilePendingPushes(this.store, this.dependencies, this.now, this.shutdown.signal);
       for (const repo of this.store.repositories().sort((a, b) => a.nextPollAt - b.nextPollAt)) {
+        if (this.dependencies.target && repo.name.toLowerCase() !== this.dependencies.target.repository.toLowerCase()) continue;
         if (this.stopped || this.store.cooldown() > this.now()) break;
         if (repo.nextPollAt <= this.now()) await this.poll(repo);
       }
@@ -108,7 +112,7 @@ export class DaemonService {
       let diagnostic = listing.coverage.status === 'complete' ? null : listing.coverage.failure?.message ?? 'PR listing is incomplete.';
       if (listing.repository && listing.repository.id !== repo.id) throw new RuntimeError('Repository identity changed; registration must be inspected.');
       this.store.cooldown(Math.max(reader.nextRequestAt, Date.parse(listing.coverage.failure?.retryAt ?? '') || 0));
-      const known = this.store.runs(repo.id), ordered = [...new Set([...listing.numbers, ...known.filter(run => run.status !== 'closed').map(run => run.number)])].sort((a, b) => a - b);
+      const known = this.store.runs(repo.id), ordered = this.dependencies.target ? [this.dependencies.target.number] : [...new Set([...listing.numbers, ...known.filter(run => run.status !== 'closed').map(run => run.number)])].sort((a, b) => a - b);
       const after = this.store.repository(repo.id).lastPolledPr ?? 0, numbers = [...ordered.filter(number => number > after), ...ordered.filter(number => number <= after)];
       for (const number of numbers) {
         if (this.stopped || this.store.cooldown() > this.now()) break;
@@ -133,13 +137,15 @@ export class DaemonService {
       this.store.pollFinished(repo.id, Math.max(next(), this.store.cooldown()), diagnostic);
     } catch {
       this.store.cooldown(reader.nextRequestAt);
-      for (const run of this.store.runs(repo.id)) if (run.status !== 'closed') this.store.unavailable(run.id, 'Repository polling failed. Check GitHub App access and retained evidence.', Math.max(next(), this.store.cooldown()));
+      for (const run of this.store.runs(repo.id)) if (run.status !== 'closed' && (!this.dependencies.target || run.number === this.dependencies.target.number)) this.store.unavailable(run.id, 'Repository polling failed. Check GitHub access and retained evidence.', Math.max(next(), this.store.cooldown()));
       this.store.pollFinished(repo.id, Math.max(next(), this.store.cooldown()), 'Repository polling failed. Check GitHub App access and private artifact storage.');
     }
   }
   dispatch(): void {
     if (this.stopped) return;
     for (const run of this.store.runs()) {
+      const target = this.dependencies.target;
+      if (target && (run.number !== target.number || this.store.repository(run.repositoryId).name.toLowerCase() !== target.repository.toLowerCase())) continue;
       if (this.active.has(run.id)) continue;
       const claim = this.store.claim(run.id, this.owner, this.now(), this.store.limits.maxAttemptSeconds);
       if (!claim) continue;

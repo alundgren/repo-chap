@@ -24,6 +24,8 @@ export async function dispatchCandidatePush(store: RuntimeStore, claim: Claim, a
   if (effect.state === 'confirmed') { park('ready', 'The tested commit is confirmed. Refresh current PR evidence.', now(), action.onSuccess); return; }
   if (['sending', 'unknown'].includes(effect.state)) { park('blocked', 'Push outcome is unknown or still sending. Inspect its receipt; reconciliation must finish before another write.', null); return; }
   if (effect.state === 'rejected' && !(effect.receipt as PushReceipt | null)?.retryable) { park('blocked', (effect.receipt as PushReceipt | null)?.reason ?? 'The planned push was rejected as stale. Inspect current evidence.', null); return; }
+  await dependencies.onPlannedEffect?.(effect);
+  if (dependencies.planOnly) { park('waiting', 'Planned push retained locally. Run apply without --plan to authorize dispatch using the current private policy.', now()); return; }
   const authorize = async () => {
     const policy = requireApplyPolicy(await dependencies.applyPolicy?.(repo.name) ?? null, repo.name, ['pr.push', 'checks.run']);
     const profile = await dependencies.profile(repo.profile), current = store.run(run.id);
@@ -50,7 +52,8 @@ export async function dispatchCandidatePush(store: RuntimeStore, claim: Claim, a
       authorize: async () => { await authorize(); return store.effectCurrent(lease, now()) && !signal.aborted; },
     });
     if (receipt.status === 'unknown') receipt.reconcileAfter = now();
-    if (store.finishEffect(lease, receipt.status, receipt, now())) store.wakeAfterEffect(id, now());
+    if (store.finishEffect(lease, receipt.status, receipt, now())) store.wakeAfterEffect(id, now(),
+      receipt.status === 'rejected' && receipt.retryable && receipt.observedSha === null ? now() + store.limits.pollSeconds * 1000 : now());
   } finally { await rm(checkout, { recursive: true, force: true }); }
 }
 async function requiredCredentials(dependencies: DaemonDependencies, repository: string) {
@@ -60,6 +63,8 @@ async function requiredCredentials(dependencies: DaemonDependencies, repository:
 export async function reconcilePendingPushes(store: RuntimeStore, dependencies: DaemonDependencies, now: () => number, signal: AbortSignal): Promise<void> {
   if (store.cooldown() > now()) return;
   for (const run of store.runs()) for (const effect of store.effects(run.id)) {
+    const target = dependencies.target;
+    if (target && (run.number !== target.number || store.repository(run.repositoryId).name.toLowerCase() !== target.repository.toLowerCase())) continue;
     if (effect.kind !== 'github.push_candidate' || effect.state !== 'unknown' || ((effect.receipt as PushReceipt | null)?.reconcileAfter ?? 0) > now()) continue;
     let directory: string | undefined;
     try {

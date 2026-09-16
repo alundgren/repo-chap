@@ -83,17 +83,21 @@ export async function conditionalPush(input: PushRequest, options: {
     return receipt(request, 'rejected', null, false, error instanceof PushError ? error.message : 'Cannot validate the current push target and tested object. Refresh evidence and inspect the retained candidate.');
   }
   let outcome: 'accepted' | 'rejected' | 'unknown';
-  let sending = false, rejection = 'Cannot validate current permissions or the remote target. No push was sent.';
+  let sending = false, retryable = true, rejection = 'Cannot obtain push credentials or validate the remote target. No push was sent; retry within the retained bounds after access recovers.';
   try {
     outcome = await options.transport.push(request.targetRef, request.expectedHeadSha, request.candidateSha, async () => {
       try {
         validatePushTarget(request, await options.readTarget());
         if (!await options.authorize()) throw new PushError('Push ownership, policy, checks or remaining limits changed before dispatch.');
         sending = true; return true;
-      } catch (error) { rejection = error instanceof PushError ? error.message : 'Cannot validate the current PR evidence and apply policy. No push was sent.'; return false; }
+      } catch (error) {
+        retryable = !(error instanceof PushError);
+        rejection = error instanceof PushError ? error.message : 'Cannot read current PR evidence or apply policy. No push was sent; retry within the retained bounds after access recovers.';
+        return false;
+      }
     });
   } catch { outcome = 'unknown'; }
-  if (!sending) return receipt(request, 'rejected', null, false, rejection);
+  if (!sending) return receipt(request, 'rejected', null, retryable, rejection);
   return outcome === 'accepted' ? receipt(request, 'confirmed', request.candidateSha, false, 'The exact tested commit was accepted by the PR branch.') :
     receipt(request, 'unknown', null, false, 'The Git push outcome needs remote-ref reconciliation before another write.');
 }

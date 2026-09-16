@@ -4,6 +4,7 @@ import { serveControl } from './control.js';
 import { loadInstallation } from './config.js';
 
 export { DaemonService, type DaemonDependencies } from './service.js';
+export { runLocalApply, inspectLocalApply, type LocalApplyOptions } from './local.js';
 export { executeAnalysis, fetchSources, executeRepair, fetchRepairSources, profileDigest } from './worker.js';
 export { readWorkflowCommit, fetchWorkflowCommit } from './source.js';
 export { requestControl, serveControl, handleControl, type ControlRequest, type ControlResponse } from './control.js';
