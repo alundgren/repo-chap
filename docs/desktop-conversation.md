@@ -11,7 +11,7 @@ Use the same version-1 settings format as [Codex analysis](codex-analysis.md) or
 [Claude analysis](claude-analysis.md). The file must be owned by you, private
 (mode 0600), outside Git, and contain 1–32 named profiles. Every profile needs an
 explicit provider and model. `maximumCapabilities: []` is sufficient for ordinary
-discussion because it registers no editing, simulation or trial tools. The
+discussion because app-owned draft editing and offline tests grant no live workflow capabilities. The
 desktop reads the chosen file into memory; it does not write it or save the
 choice in the workflow. Settings reload does not change the current conversation
 until you select **Use profile**.
@@ -37,7 +37,7 @@ only after the preceding turn completed and the CLI flushed its session state.
 Codex also checks the private native transcript for the current turn. An
 unsupported native operation or unverifiable transcript keeps the answer but
 requires **Fresh session**. Read-only permissions deny native file edits;
-discussion grants no editing authority.
+native tools have no editing authority. App-owned typed tools stage visible drafts.
 Each answer names its provider and model; **Context and session** shows the
 captured provenance, digest and native session ID. A displayed session ID during
 streaming does not yet promise that the session can resume.
@@ -96,9 +96,9 @@ provider transcripts have independent retention behavior and are not governed
 by those application display limits. See [adapter contracts](conversation-adapters.md)
 for protocol, tool, input, session and process bounds.
 
-This capture grants no later document mutation authority. Future authoring tools
-must check the current document revision again, use shared document/test
-operations, and return actual receipts. Assistant text and conversational excerpts
+This capture grants no later document mutation authority. The authoring tools
+check the current document revision again, capture ongoing human input, use shared
+document/test operations, and return actual receipts. See [authoring and tests](desktop-authoring.md). Assistant text and conversational excerpts
 cannot establish a saved revision, passing test, live trial or daemon activation.
 
 ## Verification

@@ -20,7 +20,7 @@ const writeTranscript = () => {
   const item = (type, payload) => ({ type, payload });
   const lines = [item('session_meta', { id: mode === 'audit-session' ? 'other-session' : session, session_id: session, cwd: process.cwd(), cli_version: mode === 'audit-version' ? '0.999.0' : '0.154.0' }),
     item('event_msg', { type: 'task_started', turn_id: 'turn-1' }), item('turn_context', { turn_id: mode === 'audit-turn' ? 'other-turn' : 'turn-1', cwd: process.cwd() })];
-  if (mode === 'native-denial') lines.push(item('response_item', { type: 'custom_tool_call', name: 'apply_patch', input: 'fictional denied edit' }));
+  if (mode === 'native-denial' || mode === 'author-native-denial') lines.push(item('response_item', { type: 'custom_tool_call', name: 'apply_patch', input: 'fictional denied edit' }));
   lines.push(item('response_item', { type: 'message', role: 'assistant', content: [] }));
   if (mode !== 'audit-incomplete') lines.push(item('event_msg', { type: 'task_complete', turn_id: 'turn-1' }));
   if (mode === 'audit-ambiguous') lines.push(item('event_msg', { type: 'task_started', turn_id: 'other-turn' }));
@@ -29,6 +29,43 @@ const writeTranscript = () => {
 };
 const notify = (method, params) => send({ method, params: { threadId: session, turnId: 'turn-1', ...params } });
 let pending;
+let currentInput = '';
+const authoringReplies = new Map();
+const authoring = async () => {
+  const plan = JSON.parse(fs.readFileSync(global.fixture.planFile, 'utf8'));
+  const context = JSON.parse(currentInput.split('Current immutable workflow context:\n')[1].split('\n\nQuestion:\n')[0].split('\n\nEarlier visible conversation excerpt.')[0]);
+  const initial = context.document.token;
+  let token = initial;
+  const requests = [], results = [];
+  const config = provider === 'claude' ? JSON.parse(option('--mcp-config')).mcpServers.repo_chap : null;
+  const rpc = async (id, method, params) => {
+    const response = await fetch(config.url, { method: 'POST', headers: { ...config.headers, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
+    return response.json();
+  };
+  if (config) { await rpc(0, 'initialize', { protocolVersion: '2025-03-26' }); save({ tools: await rpc(1, 'tools/list', {}) }); }
+  text('I will use the typed authoring operations. ');
+  for (let index = 0; index < plan.steps.length; index++) {
+    const step = plan.steps[index];
+    if (step.gate) { save({ waitingForStep: index }); while (!fs.existsSync(step.gate)) await new Promise(resolve => setTimeout(resolve, 50)); }
+    if (step.delayMs) { save({ waitingForStep: index }); await new Promise(resolve => setTimeout(resolve, step.delayMs)); }
+    const operation = step.duplicateOf !== undefined ? requests[step.duplicateOf] : { operationId: `${plan.id}-${index}`, expected: step.stale ? initial : token, action: step.action };
+    requests.push(operation);
+    let response;
+    if (provider === 'codex') {
+      const id = 1000 + index;
+      const waiting = new Promise(resolve => authoringReplies.set(id, resolve));
+      send({ id, method: 'item/tool/call', params: { threadId: session, turnId: 'turn-1', callId: `author-${index}`, tool: 'author', arguments: operation } });
+      response = await waiting;
+      response = response.result.contentItems[0].text;
+    } else response = (await rpc(1000 + index, 'tools/call', { name: 'author', arguments: operation })).result.content[0].text;
+    const result = JSON.parse(response); results.push(result); save({ authoringResult: result, step: index });
+    if (result.context) token = result.context.token;
+    if (result.data?.comparison) text(`The actual offline test ${result.data.comparison.passed ? 'passed' : 'failed'}: ${JSON.stringify(result.data.comparison.checks)}. `);
+  }
+  save({ authoringDone: true, results: results.length });
+  if (mode === 'author-cancel') { text('The edits are applied; this fictional provider is waiting.'); setInterval(() => {}, 1000); return; }
+  finish();
+};
 const text = value => provider === 'codex' ? notify('item/agentMessage/delta', { delta: value }) : send({ type: 'stream_event', session_id: session, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: value } } });
 const finish = () => {
   if (mode === 'burst') for (let i = 0; i < 6000; i++) text('x');
@@ -38,6 +75,7 @@ const finish = () => {
   if (mode === 'unfinished-session') setInterval(() => {}, 1000);
 };
 const run = async () => {
+  if (mode.startsWith('author')) { await authoring(); return; }
   if (mode === 'exit') { process.exit(1); return; }
   if (mode === 'malformed') { process.stdout.write('invalid json\n'); return; }
   if (mode === 'flood') { process.stdout.write('x'.repeat(2 * 1024 * 1024)); return; }
@@ -71,6 +109,7 @@ const run = async () => {
 };
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const message = JSON.parse(line); save({ message });
+  if (authoringReplies.has(message.id)) { authoringReplies.get(message.id)(message); authoringReplies.delete(message.id); return; }
   if (provider === 'codex') {
     const respond = result => send({ id: message.id, result });
     if (message.method === 'initialize') respond({ userAgent: 'fictional-codex' });
@@ -78,11 +117,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (message.method === 'config/read') respond({ config: { instructions: mode === 'base-instructions' ? 'Fictional ambient instructions.' : null, model_instructions_file: mode === 'base-instructions-file' ? '/fictional/base-instructions.md' : null, mcp_servers: { 'ambient.with.dot': { enabled: true, url: 'https://example.invalid/mcp' } } }, origins: {} });
     if (message.method === 'skills/list') respond({ data: [{ cwd: message.params.cwds[0], skills: [{ path: '/fictional/ambient-skill/SKILL.md', enabled: true }], errors: mode === 'skills-error' ? [{ message: 'Cannot read a fictional skill.' }] : [] }] });
     if (message.method === 'thread/start' || message.method === 'thread/resume') respond({ thread: { id: session, path: transcript }, model: 'fictional-model', instructionSources: mode === 'ambient-instructions' ? ['/fictional/AGENTS.md'] : [] });
-    if (message.method === 'turn/start') { respond({ turn: { id: 'turn-1' } }); notify('turn/started', { turn: { id: 'turn-1' } }); void run(); }
+    if (message.method === 'turn/start') { currentInput = message.params.input[0].text; respond({ turn: { id: 'turn-1' } }); notify('turn/started', { turn: { id: 'turn-1' } }); void run(); }
     if ((message.id === 77 || message.id === 78) && pending) { pending = null; finish(); }
   } else {
     if (message.type === 'control_request' && message.request.subtype === 'initialize') send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: { account: { tokenSource: mode === 'login' ? 'none' : 'oauth', apiKeySource: 'none' } } } });
-    if (message.type === 'user') { send({ type: 'system', subtype: 'init', session_id: session, tools: ['AskUserQuestion', ...(noTools ? [] : ['mcp__repo_chap__read_context'])], mcp_servers: [{ name: 'repo_chap', status: 'connected' }] }); void run(); }
+    if (message.type === 'user') { currentInput = message.message.content; send({ type: 'system', subtype: 'init', session_id: session, tools: ['AskUserQuestion', ...(mode.startsWith('author') ? ['mcp__repo_chap__author'] : noTools ? [] : ['mcp__repo_chap__read_context'])], mcp_servers: [{ name: 'repo_chap', status: 'connected' }] }); void run(); }
     if (message.type === 'control_response' && pending) { pending = null; finish(); }
   }
 });

@@ -108,7 +108,7 @@ Simulate loads an explicitly chosen local fixture and optional complete decision
 packet JSON. Fake time can change temporarily and Reset fixture restores the
 loaded input. The input JSON, including ordered action stubs, is inspectable.
 These inputs are not saved by Save all and are not added to the repository.
-General fixture authoring remains a later task.
+The separate Test fixtures controls now create and open repository fixture documents for source editing and explicit saving. Temporary captured inputs keep their existing behavior.
 
 The result leads with its stop reason and wake time, then shows selected and
 rejected earlier rules, unknown conditions, proposed effects and consumed fixture
@@ -176,6 +176,33 @@ transition waits for owned process cleanup before replacing the document.
 These controls keep the existing warm-paper palette and local Plex fonts.
 Discussion is at most 1000px wide; profile controls and the composer stack on
 narrow windows, paths and answers wrap, and the page needs no horizontal scroll.
+
+## Desktop authoring operations
+
+Discuss now permits typed source, Markdown and fixture edits and actual offline
+fixture tests. Save all remains explicit. A compact status above the task views
+names files changed by authoring operations, including after cancellation or
+provider failure. The expandable Authoring operations list retains host receipts
+and distinguishes unconfirmed display from a rejected or applied mutation.
+Assistant prose remains plain text and cannot run an operation.
+
+Undo draft operation sits beside Save all and restores one accepted operation,
+including multi-file changes. The receipt disclosure explains its session limits
+and reset on Save, Reload, Discard or Reset. Broken JSON stays in Source with
+shared diagnostics and a working Undo action. Source file buttons distinguish
+Test fixture from Referenced file while keeping the same unsaved markers.
+
+Simulate keeps temporary captured inputs and adds a separate Test fixtures task.
+Create opens the new unsaved JSON in Source. Open test fixture chooses an explicit
+repository file. Run offline test shows actual pass/fail before the existing
+rule trace, followed by a four-column expected/actual table. On narrow windows
+its cells wrap so none of the compared values is hidden. The existing local
+palette, type, keyboard focus and source editing controls apply unchanged.
+
+Each tool operation captures ongoing human input. An incomplete inspector field
+stays focused and visible if capture rejects; accepted earlier fields are kept.
+The conversation controls remain reachable while capture is blocked. A test or
+edit completion never changes the task view or steals the person's selection.
 
 ## Offline CLI
 

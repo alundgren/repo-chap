@@ -16,7 +16,7 @@ function traceNode(trace: ConditionTrace): HTMLElement {
   return item;
 }
 
-export function processView(bridge: EditorBridge, perform: (operation: () => Promise<EditorResult>, message?: string, captureInspector?: boolean) => Promise<boolean>, getState: () => DocumentSnapshot | null, changed: (message: string) => void): { render: (state: DocumentSnapshot, locked: boolean) => void; pending: () => number; flush: () => Promise<boolean>; discardDrafts: () => void } {
+export function processView(bridge: EditorBridge, perform: (operation: () => Promise<EditorResult>, message?: string, captureInspector?: boolean) => Promise<boolean>, getState: () => DocumentSnapshot | null, changed: (message: string) => void): { render: (state: DocumentSnapshot, locked: boolean) => void; pending: () => number; pendingValues: () => { field: string; value: string }[]; flush: () => Promise<boolean>; discardDrafts: () => void } {
   let actionId = '';
   let controlsLocked = false;
   let inspectorKey = '', rulesKey = '', resultKey = '';
@@ -61,12 +61,22 @@ export function processView(bridge: EditorBridge, perform: (operation: () => Pro
   element('apply-settings').onclick = () => { void flush(); };
   element('discard-settings').onclick = () => { discardDrafts(); notify('Unapplied action settings discarded.'); };
   for (const kind of ['fixture', 'packets'] as const) element(`load-${kind}`).onclick = () => { void perform(() => bridge.loadSimulationInput(getState()!, kind), 'Local simulation input loaded.'); };
+  element('open-test-fixture').onclick = () => { void perform(() => bridge.openTestFixture(getState()!), 'Test fixture opened. Its source and expectations are editable.'); };
+  element('run-test').onclick = () => { void perform(() => bridge.author({ operationId: crypto.randomUUID(), expected: { sessionId: getState()!.sessionId, revision: getState()!.revision }, action: { kind: 'test', fixturePath: element<HTMLSelectElement>('test-fixture').value } }), 'Offline test finished. Read the actual comparison below.'); };
   element('simulate').onclick = () => { void perform(() => bridge.simulate(getState()!), 'Simulation finished. Nothing was sent.'); };
   element('set-clock').onclick = () => { const now = element<HTMLInputElement>('fake-clock').value; void perform(() => bridge.setClock(getState()!, now), 'Fake time updated. Run simulation to test it.'); };
   element('reset-fixture').onclick = () => { void perform(() => bridge.resetSimulationInput(getState()!, 'fixture'), 'Fixture restored to its loaded text.'); };
 
   function render(state: DocumentSnapshot, locked: boolean): void {
     controlsLocked = locked;
+    const fixtureSelect = element<HTMLSelectElement>('test-fixture');
+    const fixtures = state.files.filter(file => file.kind === 'fixture');
+    const selectedFixture = fixtureSelect.value;
+    fixtureSelect.replaceChildren(...fixtures.map(file => { const option = node('option', file.path + (file.dirty ? ' · Unsaved' : '')); option.value = file.path; return option; }));
+    if (fixtures.some(file => file.path === selectedFixture)) fixtureSelect.value = selectedFixture;
+    for (const id of ['create-fixture', 'open-test-fixture', 'new-fixture-path']) element<HTMLButtonElement>(id).disabled = locked;
+    element<HTMLButtonElement>('run-test').disabled = locked || !fixtures.length || !!state.diagnostics.length;
+    fixtureSelect.disabled = locked || !fixtures.length;
     const workflow = state.workflow;
     const unavailable = !workflow || !!state.readOnlyReason;
     element('process-unavailable').hidden = !unavailable;
@@ -146,6 +156,14 @@ export function processView(bridge: EditorBridge, perform: (operation: () => Pro
       area.replaceChildren();
       if (!record) { area.append(node('p', 'Load a fixture, then run simulation to see the chosen rule and proposed effects.', 'notice')); return; }
       const result = record.result;
+      if (record.comparison) {
+        area.append(node('h2', `Offline test ${record.comparison.passed ? 'passed' : 'failed'}`), node('p', `${record.fixturePath} · Fixture ${record.fixtureDigest}`, 'secondary path'));
+        if (['needs_result', 'needs_observation'].includes(result.status)) area.append(node('p', 'Test inputs are incomplete. Supply the missing stub or observation before this test can pass.', 'notice'));
+        const table = node('table'); table.setAttribute('aria-label', 'Expected and actual outcomes');
+        const header = node('tr'); for (const label of ['Check', 'Expected', 'Actual', 'Result']) header.append(node('th', label)); table.append(header);
+        for (const check of record.comparison.checks) { const row = node('tr'); for (const value of [check.field, JSON.stringify(check.expected), JSON.stringify(check.actual), check.passed ? 'Passed' : 'Failed']) row.append(node('td', value)); table.append(row); }
+        area.append(table);
+      }
       area.append(node('p', state.simulationCurrent ? 'Current for these execution inputs.' : 'Stale result. The workflow or simulation inputs changed. Run again.', state.simulationCurrent ? 'success' : 'notice'));
       area.append(node('h2', `${result.status.replaceAll('_', ' ')} · ${result.reason}`), node('p', `Fake time ${result.now}${result.nextWakeAt ? ` · Next wake ${result.nextWakeAt}` : ''}`));
       area.append(node('p', `Tested document revision ${record.token.revision} · Package ${record.packageDigest}`, 'secondary path'));
@@ -187,5 +205,5 @@ export function processView(bridge: EditorBridge, perform: (operation: () => Pro
       area.append(slack);
     }
   }
-  return { render, pending: () => drafts.size, flush, discardDrafts };
+  return { render, pending: () => drafts.size, pendingValues: () => [...drafts].map(([field, draft]) => ({ field, value: draft.value })), flush, discardDrafts };
 }

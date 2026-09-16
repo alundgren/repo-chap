@@ -36,6 +36,7 @@
         <div class="controls">
           <button id="reload">Reload file</button>
           <button id="discard" class="danger">Discard changes</button>
+          <button id="undo">Undo draft operation</button>
           <button id="reset" class="danger">Reset workflow</button>
           <button id="export">Export JSON</button>
           <button id="save" class="primary">Save all</button>
@@ -47,6 +48,7 @@
         <p id="conversation-recovery" class="notice" hidden>Start a fresh session to continue. Earlier messages stay visible.</p>
       </section>
       <p id="conversation-error" class="notice danger" role="alert" hidden></p>
+      <p id="authoring-summary" class="notice" hidden></p>
       <section id="conversation-input" aria-label="Provider input request" hidden></section>
       <section id="process-view" hidden aria-label="Ordered process">
         <p id="process-unavailable" class="notice" hidden>Repair the source or reset the workflow to use visual editing.</p>
@@ -75,6 +77,11 @@
         <details><summary>Inspect fixture and action stubs</summary><pre id="fixture-preview"></pre></details>
         <details><summary>Inspect complete decision packet input</summary><pre id="packets-preview"></pre></details>
         <p id="simulation-blocked" class="notice" hidden>Fix the workflow validation errors in Source, or reset the workflow, before running simulation or exporting JSON.</p>
+        <section class="fixture-authoring" aria-label="Authored tests">
+          <h2>Test fixtures</h2><p class="secondary">Create or open a repository fixture, edit its JSON and expectations in Source, then run the draft. Save all writes fixture changes explicitly.</p>
+          <div class="controls"><label for="new-fixture-path">New fixture path</label><input id="new-fixture-path" value="test-fixture.json" spellcheck="false"><button id="create-fixture">Create test fixture</button><button id="open-test-fixture">Open test fixture</button></div>
+          <div class="controls"><label for="test-fixture">Fixture to test</label><select id="test-fixture"></select><button id="run-test">Run offline test</button></div>
+        </section>
         <div id="simulation-result" aria-live="polite"></div>
       </section>
       <section id="conversation-view" hidden aria-label="Workflow conversation">
@@ -105,8 +112,9 @@
           <textarea id="conversation-question" rows="3" placeholder="Why is this rule waiting?" aria-describedby="conversation-compose-help"></textarea>
           <div class="controls"><button id="conversation-send" class="primary" disabled>Send question</button><p id="conversation-compose-help" class="secondary">Ctrl/Cmd+Enter to send · 16 KiB maximum</p></div>
         </div>
-        <p class="secondary conversation-history-help">Discussion only. Source edits and simulation remain your explicit actions. Visible history lasts until you leave this workflow or close the app.</p>
+        <p class="secondary conversation-history-help">The assistant can stage visible source and fixture edits and run offline tests. Save all remains explicit. It cannot start a live trial or send remote effects. Visible history lasts until you leave this workflow or close the app.</p>
       </section>
+      <details class="authoring-receipts"><summary>Authoring operations</summary><p class="secondary">Applied edits remain here after cancellation or provider failure. Undo reverses the latest draft operation. Save, reload, discard and reset start a new undo history.</p><div id="authoring-activity" aria-live="polite"></div></details>
       <details class="changes"><summary id="changes-title">Changes against saved source</summary><p id="changes-note" class="secondary"></p><ul id="semantic-changes"></ul></details>
       <section class="validation" aria-label="Validation">
         <div class="validation-heading"><h2 id="validation-title">Validation</h2><span id="revision" class="secondary"></span></div>

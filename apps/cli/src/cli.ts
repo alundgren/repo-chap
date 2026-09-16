@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { loadWorkflow, parseFixture, parseJson, readFixtureText, replay, WorkflowError, type ReplayResult, type ConditionTrace } from '@repo-chap/workflow';
+import { loadWorkflow, parseFixture, parseJson, readFixtureText, replay, compareReplay, WorkflowError, type ReplayResult, type ConditionTrace } from '@repo-chap/workflow';
 import { CaptureError, GitHubReadError, validateTarget } from '@repo-chap/github';
 import { inspectCommand } from './inspect.js';
 import { analyzeCommand } from './analyze.js';
@@ -107,11 +107,13 @@ async function main(): Promise<void> {
       await analyzeCommand(pkg, profile!, { capture: inspectOptions['--capture']!, sourceRepository: inspectOptions['--source-repo']!, directory: inspectOptions['--output-dir']!, resume: inspectOptions['--resume'], json });
     } else {
       phase = 3;
-      const result = replay(pkg, parseFixture(parseJson(await readFixtureText(fixture!), fixture!)));
+      const inputFixture = parseFixture(parseJson(await readFixtureText(fixture!), fixture!));
+      const result = replay(pkg, inputFixture);
+      const comparison = inputFixture.expected ? compareReplay(result, inputFixture.expected) : undefined;
       const packetFile = inspectOptions['--packet'];
       const input = packetFile ? parseJson(await readFixtureText(packetFile), packetFile) : undefined;
       const handoffs = input === undefined ? undefined : previewReplayHandoffs(result, (Array.isArray(input) ? input : [input]).map(validatePacket), pkg.workflow.slack);
-      process.stdout.write(json ? `${JSON.stringify({ ...result, ...(handoffs ? { handoffs } : {}) }, null, 2)}\n` : humanReplay(result) + (handoffs?.map(item => `\nLocal Slack preview. Simulation sent nothing.\n${item.preview.route.explanation}\n\n${item.preview.message.text}\n`).join('') ?? ''));
+      process.stdout.write(json ? `${JSON.stringify({ ...result, ...(comparison ? { comparison } : {}), ...(handoffs ? { handoffs } : {}) }, null, 2)}\n` : humanReplay(result) + (comparison ? `Expectations ${comparison.passed ? 'passed' : 'failed'}\n${comparison.checks.map(check => `${check.field}: expected ${JSON.stringify(check.expected)}, actual ${JSON.stringify(check.actual)} (${check.passed ? 'passed' : 'failed'})`).join('\n')}\n` : '') + (handoffs?.map(item => `\nLocal Slack preview. Simulation sent nothing.\n${item.preview.route.explanation}\n\n${item.preview.message.text}\n`).join('') ?? ''));
     }
   } catch (error) {
     const diagnostics = error instanceof WorkflowError ? error.diagnostics : [{ code: error instanceof GitHubReadError ? error.failure.code : error instanceof ExecutionError ? 'execution' : error instanceof CaptureError ? 'capture' : phase === 64 ? 'usage' : 'internal', path: '', message: error instanceof Error ? error.message : String(error) }];

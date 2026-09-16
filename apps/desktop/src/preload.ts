@@ -4,6 +4,18 @@ import type { ConversationBridge, ConversationSnapshot } from './conversation-pr
 
 const bridge: EditorBridge = {
   current: () => ipcRenderer.invoke('editor:current'),
+  author: operation => ipcRenderer.invoke('editor:author', operation),
+  openTestFixture: token => ipcRenderer.invoke('editor:open-test-fixture', token),
+  undo: token => ipcRenderer.invoke('editor:undo', token),
+  applyAuthoringRequest: (id, token) => ipcRenderer.invoke('editor:apply-authoring', id, token),
+  rejectAuthoringRequest: (id, pending) => ipcRenderer.invoke('conversation:reject-authoring', id, pending),
+  confirmAuthoringOperation: id => ipcRenderer.invoke('conversation:confirm-operation', id),
+  confirmAuthoringDisplay: id => ipcRenderer.invoke('conversation:confirm-authoring', id),
+  onAuthoringRequest: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, id: string): void => callback(id);
+    ipcRenderer.on('authoring:requested', listener);
+    return () => ipcRenderer.removeListener('authoring:requested', listener);
+  },
   open: (kind, token, discard) => ipcRenderer.invoke('editor:open', kind, token, discard),
   edit: (token, path, text) => ipcRenderer.invoke('editor:edit', token, path, text),
   save: token => ipcRenderer.invoke('editor:save', token),

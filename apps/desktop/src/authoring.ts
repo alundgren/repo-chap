@@ -47,6 +47,10 @@ export function editWorkflow(text: string, path: string, edit: VisualEdit): stri
     if (index < 0 || !Number.isInteger(edit.toIndex) || edit.toIndex < 0 || edit.toIndex >= value.rules.length) throw new Error('Choose an existing rule and position.');
     const [rule] = value.rules.splice(index, 1);
     value.rules.splice(edit.toIndex, 0, rule);
+  } else if (edit.kind === 'ruleAction') {
+    const rule = value.rules.find(rule => object(rule) && rule.id === edit.ruleId);
+    if (!object(rule) || !Object.hasOwn(value.actions, edit.actionId)) throw new Error('Choose an existing rule and action.');
+    rule.action = edit.actionId;
   } else if (edit.kind === 'action' || edit.kind === 'context') {
     const action = Object.hasOwn(value.actions, edit.actionId) ? value.actions[edit.actionId] : null;
     if (!object(action)) throw new Error('Choose an existing action.');

@@ -189,3 +189,25 @@ Statuses are `waiting`, `closed`, `blocked`, `needs_observation`, and
 `needs_result`. Handoff effects show the outcome and configured route name.
 Actual Slack member resolution, rendering, delivery, and receipts remain the
 Slack module's responsibility. No simulation result is an execution receipt.
+
+## Explicit replay expectations
+
+Version-1 fixtures may include optional `expected` with required `status`,
+`selectedRuleIds` and `proposedEffects`. Selected IDs include null for fallback
+and keep replay order. Effects keep order and contain `actionId`, `uses` and an
+optional handoff `outcome`. Unknown expectation fields reject through the shared
+schema. Existing fixtures without expectations remain valid replay inputs.
+
+`compareReplay(result, expected)` returns `passed` and exact expected/actual
+checks for those three fields. `needs_result` and `needs_observation` always
+produce `passed: false`, even when the expected status matches. A completed
+replay with declared blocked or waiting behavior can pass its assertions.
+These assertions describe the declared behavior; they do not establish remote
+execution or workflow quality beyond those expectations.
+
+CLI `replay --json` adds `comparison` only when the fixture declares expectations.
+Human output prints each comparison. Exit 0 continues to mean completed replay,
+including a failed expectation; consumers must check `comparison.passed` for test
+success. Desktop authored tests require expectations and use this exact function.
+See [desktop authoring](desktop-authoring.md) for unsaved fixture buffers and
+revision-bound evidence.

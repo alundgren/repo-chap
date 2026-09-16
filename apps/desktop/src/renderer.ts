@@ -31,6 +31,13 @@ function say(text: string, error = false): void {
 }
 const process = processView(bridge, perform, () => state, message => { say(message); render(); });
 const conversation = conversationView(window.repoChapConversation, perform, () => state);
+bridge.onAuthoringRequest(id => {
+  void (async () => {
+    const captured = await perform(() => bridge.applyAuthoringRequest(id, token()));
+    if (captured) await bridge.confirmAuthoringDisplay(id);
+    else await bridge.rejectAuthoringRequest(id, [...process.pendingValues(), ...[...unsent].map(([field, value]) => ({ field, value }))]);
+  })();
+});
 
 async function perform(operation: () => Promise<EditorResult>, message?: string, captureInspector = true): Promise<boolean> {
   if ((prompting && captureInspector) || !state) return false;
@@ -64,6 +71,15 @@ function render(replaceSource = false): void {
   }
   element('reload').hidden = view !== 'source';
   element('discard').hidden = view !== 'source';
+  element<HTMLButtonElement>('undo').disabled = prompting || !state.undoCount;
+  const applied = state.authoringReceipts.filter(receipt => receipt.status === 'applied');
+  element('authoring-summary').hidden = !applied.length;
+  element('authoring-summary').textContent = `${applied.length} authoring operation(s) applied in this session: ${[...new Set(applied.flatMap(receipt => receipt.changedPaths))].join(', ')}. Current drafts and Undo remain available after cancellation or provider failure. See Authoring operations for receipts.`;
+  element('authoring-activity').replaceChildren(...state.authoringReceipts.toReversed().map(receipt => {
+    const item = document.createElement('p');
+    item.textContent = `${receipt.kind}: ${receipt.message} ${receipt.changedPaths.join(', ')}${receipt.display === 'unconfirmed' ? ' · Display unconfirmed' : ''} · Revision ${receipt.after.revision}`;
+    item.className = receipt.status === 'rejected' ? 'notice' : 'secondary'; return item;
+  }));
   element<HTMLButtonElement>('reset').disabled = prompting || !dirty();
   element<HTMLButtonElement>('export').disabled = prompting || queuedEdits > 0 || !!unsent.size || !!state.diagnostics.length || !!state.readOnlyReason;
   if (!state.files.some(file => file.path === selected)) selected = state.workflowPath;
@@ -100,7 +116,7 @@ function render(replaceSource = false): void {
     title.textContent = referenceName(item.path);
     const detail = document.createElement('span');
     detail.className = 'file-kind';
-    detail.textContent = item.error ? 'Cannot read' : item.external ? 'Changed on disk' : item.dirty || unsent.has(item.path) ? 'Unsaved' : item.path === state!.workflowPath ? 'Workflow' : 'Referenced file';
+    detail.textContent = item.error ? 'Cannot read' : item.external ? 'Changed on disk' : item.dirty || unsent.has(item.path) ? 'Unsaved' : item.path === state!.workflowPath ? 'Workflow' : item.kind === 'fixture' ? 'Test fixture' : 'Referenced file';
     button.append(title, detail);
     button.addEventListener('click', () => { selected = item.path; render(true); source.focus(); });
     return button;
@@ -133,6 +149,7 @@ function receive(result: EditorResult, replaceSource = false): boolean {
   if (result.snapshot?.sessionId !== state?.sessionId) { unsent.clear(); process.discardDrafts(); selected = result.snapshot?.workflowPath ?? ''; replaceSource = true; }
   state = result.snapshot;
   render(replaceSource);
+  if (result.authoringOperationId) void bridge.confirmAuthoringOperation(result.authoringOperationId);
   if (result.error) say(result.error, true);
   return !result.error && !result.cancelled;
 }
@@ -231,6 +248,14 @@ async function openWorkflow(kind: OpenKind): Promise<void> {
 }
 element('open-workflow').onclick = () => { void openWorkflow('workflow'); };
 element('open-repository').onclick = () => { void openWorkflow('repository'); };
+element('create-fixture').onclick = () => {
+  const path = element<HTMLInputElement>('new-fixture-path').value;
+  const text = JSON.stringify({ schemaVersion: 1, now: '2026-05-01T12:00:00Z', observations: [{ facts: { lifecycle: 'open', draft: true } }], expected: { status: 'waiting', selectedRuleIds: [], proposedEffects: [] } }, null, 2) + '\n';
+  void (async () => {
+    if (await perform(() => bridge.author({ operationId: crypto.randomUUID(), expected: token(), action: { kind: 'createFixture', path, text } }), 'Fixture staged. Edit its inputs and explicit expectations, then run the offline test.')) { selected = path; view = 'source'; render(true); source.focus(); }
+  })();
+};
+element('undo').onclick = () => { void perform(() => bridge.undo(token()), 'Draft operation undone. Save all remains explicit.'); };
 element('save').onclick = () => { void save(); };
 for (const name of ['source', 'process', 'simulation', 'conversation'] as const) element(`${name}-tab`).onclick = () => { void (async () => { if (name !== view && !await process.flush()) return; view = name; render(true); })(); };
 element('export').onclick = () => { void perform(() => bridge.exportWorkflow(token()), 'Workflow JSON copy exported. Referenced files were not copied; keep their relative paths when using it.'); };

@@ -5,6 +5,8 @@ import { readFixtureText } from '@repo-chap/workflow';
 import { readProfiles } from '@repo-chap/providers';
 import type { ConversationInputAnswer, ProviderProfile } from '@repo-chap/providers';
 import { pathToFileURL } from 'node:url';
+import { AuthoringTools } from './authoring-tools.js';
+import type { AuthoringOperation } from './authoring-protocol.js';
 import { DocumentSession } from './documents.js';
 import { ConversationController } from './conversations.js';
 import { captureConversationContext } from './conversation-context.js';
@@ -17,6 +19,7 @@ let conversation: ConversationController | null = null;
 let conversationDirectory: string | null = null;
 let conversationCleanup = Promise.resolve();
 let profiles: ProviderProfile[] = [];
+const authoring = new AuthoringTools(() => documents, id => window?.webContents.send('authoring:requested', id));
 let allowClose = false;
 let operations = Promise.resolve();
 const pagePath = join(__dirname, 'index.html');
@@ -78,10 +81,11 @@ async function startConversation(profile: ProviderProfile): Promise<void> {
   const parent = join(root, 'conversations');
   await mkdir(parent, { recursive: true, mode: 0o700 });
   if (await realpath(parent) !== parent || await lstat(join(parent, '.git')).catch(() => null)) throw new Error('Keep the private conversation directory outside Git and do not redirect it with a symbolic link.');
+  const source = documents;
   const directory = await mkdtemp(join(parent, 'session-'));
   try {
     conversation = new ConversationController({
-      documentSessionId: documents.sessionId, workingDirectory: directory, profile,
+      documentSessionId: documents.sessionId, workingDirectory: directory, profile, tools: () => authoring.tools(source),
       onChange(snapshot) { if (window && !window.isDestroyed() && documents?.sessionId === snapshot.documentSessionId) window.webContents.send('conversation:changed', snapshot); },
     });
     conversationDirectory = directory;
@@ -130,6 +134,23 @@ function register(name: string, operation: (...args: any[]) => Promise<void | Ed
 }
 
 register('current', current);
+register('author', async (operation: AuthoringOperation) => {
+  if (!documents) throw new Error('Open a workflow first.');
+  const result = await documents.author(operation);
+  return { ...current(), authoringOperationId: operation.operationId, ...(result.receipt.status === 'rejected' ? { error: result.receipt.message } : {}) };
+});
+register('open-test-fixture', async (token: DocumentToken) => {
+  const source = requireDocuments(token);
+  if (!window) return;
+  const choice = await dialog.showOpenDialog(window, { title: 'Open repository test fixture', defaultPath: source.repositoryRoot, properties: ['openFile'], filters: [{ name: 'Fixture JSON', extensions: ['json'] }] });
+  if (choice.canceled || !choice.filePaths[0]) return { ...current(), cancelled: true };
+  await source.openTestFixture(token, choice.filePaths[0]);
+});
+register('undo', (token: DocumentToken) => requireDocuments(token).undo(token));
+register('apply-authoring', async (id: string, token: DocumentToken) => authoring.apply(id, token));
+registerConversation('reject-authoring', (id: string, pending: { field: string; value: string }[]) => authoring.reject(id, pending), false);
+registerConversation('confirm-operation', (id: string) => documents?.confirmDisplay(id), false);
+registerConversation('confirm-authoring', (id: string) => authoring.confirm(id), false);
 register('open', async (kind: OpenKind, token: DocumentToken | null, discard: boolean) => {
   if (!window || (kind !== 'repository' && kind !== 'workflow')) throw new Error('Choose a repository or workflow.');
   if (documents) {

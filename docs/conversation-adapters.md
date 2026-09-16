@@ -74,8 +74,8 @@ The callback receives arguments, a call ID and an abort signal. Its result is
 bounded text plus an optional error flag. The host decides which operations are
 available and validates operation arguments against the document/test contract.
 Registering a tool does not grant access to a filesystem, daemon or external
-service. Ordinary authoring conversation registers no mutation, test-run, live
-trial, publication or activation operation.
+service. The desktop registers its typed author operation for draft edits and offline
+tests. It registers no live trial, publication, save or activation operation.
 
 Codex's user-input requests and Claude's `AskUserQuestion` requests become the
 same typed questions. Claude approvals are supported only for tools already
@@ -120,8 +120,8 @@ active turn and input request. Its caller supplies captured text, a
 `DocumentToken`, and a provenance summary. The caller validates the current
 document and test revisions before capture. The controller checks document
 session identity, copies the supplied values, records a SHA-256 digest of the
-captured text, and never reads files or invents test results. Normal dispatch
-registers no tools. This controller has no document mutation authority.
+captured text, and never reads files or invents test results. The caller supplies optional tools through a callback receiving the captured
+document token. This controller has no document mutation authority.
 
 Renderer snapshots contain the chosen provider, profile and model, attributed
 turns, context revisions, tool activity, pending input and recovery state.
