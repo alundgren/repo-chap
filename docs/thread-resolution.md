@@ -100,6 +100,10 @@ States distinguish eligible, skipped, confirmed, rejected, unknown and stale.
 A stale concern may already be resolved on GitHub and still need attention.
 Later complete observations show reopened or edited concerns without changing
 historical confirmed receipts.
+They also refresh remote state for declined or unrelated concerns without
+changing the original disposition. A later human-resolved declined thread no
+longer counts as remaining work. Unavailable evidence marks current state
+unknown and retains the pending resolution or failure handoff through restart.
 
 CLI output names what was pushed and each thread's outcome. One confirmed
 thread never becomes a claim that the whole review was resolved. The failure

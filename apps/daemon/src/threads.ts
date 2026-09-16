@@ -20,10 +20,17 @@ export async function threadResolutionSummary(store: RuntimeStore, runId: string
   const effects = store.effects(runId), push = effects.find(effect => effect.id === saved.pushEffectId), inspection = await store.artifacts.get<Inspection>(run.inspection);
   const concerns = saved.concerns.map(concern => effectConcern(concern, effects.find(effect => effect.id === concern.effectId)));
   for (const concern of concerns) {
-    if (!concern.effectId) continue;
     if (!run.evidenceAvailable || inspection.status !== 'complete') {
       concern.state = 'unknown'; concern.evidenceCurrent = null; concern.remoteResolved = null;
       concern.reason = 'Current PR evidence is unavailable or incomplete. Earlier receipts remain recorded; inspect after access recovers.'; continue;
+    }
+    if (!concern.effectId) {
+      if (Date.parse(inspection.fixture.now) < (saved.observedAt ?? 0)) continue;
+      const thread = inspection.evidence.threads.items.find(thread => thread.id === concern.threadId);
+      concern.remoteResolved = thread?.resolved ?? null; concern.evidenceCurrent = null;
+      if (!thread) { concern.state = 'unknown'; concern.reason = 'The latest observation cannot find this concern. The original repair disposition remains recorded.'; }
+      else if (thread.resolved) concern.reason += ' The latest observation shows this thread resolved; the retained repair disposition is historical.';
+      continue;
     }
     const effect = effects.find(value => value.id === concern.effectId)!, attempt = store.effectAttempts(effect.id).at(-1);
     if (!attempt?.finishedAt || Date.parse(inspection.fixture.now) < attempt.finishedAt) continue;
@@ -37,7 +44,8 @@ export async function threadResolutionSummary(store: RuntimeStore, runId: string
     }
   }
   for (const thread of inspection.evidence.threads.items) if (!thread.resolved && !concerns.some(concern => concern.threadId === thread.id)) concerns.push({
-    threadId: thread.id, disposition: 'unrelated', effectId: null, state: 'skipped', reason: 'This open concern has no verified addressed decision for the pushed candidate.', remoteResolved: false, evidenceCurrent: null,
+    threadId: thread.id, disposition: 'unrelated', effectId: null, state: run.evidenceAvailable && inspection.status === 'complete' ? 'skipped' : 'unknown',
+    reason: 'This concern has no verified addressed decision for the pushed candidate.', remoteResolved: run.evidenceAvailable && inspection.status === 'complete' ? false : null, evidenceCurrent: null,
   });
   const confirmed = push?.state === 'confirmed';
   return { schemaVersion: 1, candidateSha: saved.repair.candidateSha, pushEffectId: saved.pushEffectId, pushConfirmed: confirmed,

@@ -249,6 +249,38 @@ test('policy revocation and cancellation during credential acquisition prevent t
     } finally { await s.cleanup(); }
   }
 });
+test('temporary evidence loss and restart preserve pending resolution and its single repair reservation', async () => {
+  const s = await runtimeFixture();
+  try {
+    await s.push(); const id = s.store.runs()[0]!.id;
+    await s.service.poll(s.store.repository(s.repo.id)); assert.equal(s.store.run(id).repair, null);
+    const pending = s.store.run(id).nextAction; assert.equal(pending, 'resolve_threads');
+    s.store.unavailable(id, 'Temporary access loss.', Date.now());
+    s.service.dispatch(); await s.service.idle(); assert.equal(s.store.run(id).nextAction, pending); assert.equal(s.sends, 0);
+    await s.restart(); await s.service.poll(s.store.repository(s.repo.id));
+    assert.equal(s.store.run(id).nextAction, pending); await s.tick();
+    assert.equal(s.sends, 1); assert.equal(s.jobs.length, 1); assert.equal(s.store.inspect(id).reservations.length, 1);
+  } finally { await s.cleanup(); }
+});
+test('later human resolution updates skipped concerns while access loss preserves the failure handoff and original decisions', async () => {
+  const s = await runtimeFixture('mixed_threads');
+  try {
+    s.inspection.evidence.threads.items.push({ ...structuredClone(s.inspection.evidence.threads.items[0]!), id: 'THREAD_declined' });
+    await s.push(); await s.tick(); const id = s.store.runs()[0]!.id;
+    await s.service.poll(s.store.repository(s.repo.id)); const continuation = s.store.run(id).nextAction;
+    assert.equal(s.store.run(id).repair, null);
+    s.store.unavailable(id, 'Temporary access loss.', Date.now()); s.service.dispatch(); await s.service.idle();
+    assert.equal(s.store.run(id).nextAction, continuation);
+    const unavailable = await handleControl(s.service, { method: 'inspect', runId: id }) as any;
+    assert.equal(unavailable.threadResolution.concerns[1].remoteResolved, null); assert.equal(unavailable.threadResolution.concerns[1].state, 'unknown');
+    s.inspection.evidence.threads.items[1]!.resolved = true;
+    await s.restart(); await s.service.poll(s.store.repository(s.repo.id));
+    const details = await handleControl(s.service, { method: 'inspect', runId: id }) as any;
+    assert.equal(details.threadResolution.remainingConcerns.length, 0); assert.equal(details.threadResolution.concerns[1].disposition, 'declined');
+    assert.equal(details.threadResolution.concerns[1].remoteResolved, true); assert.equal(details.threadResolution.concerns[1].state, 'skipped');
+    assert.equal(details.threadResolution.concerns[1].effectId, null); assert.equal(s.sends, 1); assert.equal(s.jobs.length, 1); assert.equal(s.store.inspect(id).reservations.length, 1);
+  } finally { await s.cleanup(); }
+});
 test('actual daemon process death after thread acceptance reconciles one receipt with no duplicate write or provider invocation', async () => {
   const s = await runtimeFixture();
   try {

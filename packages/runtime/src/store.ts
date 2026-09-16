@@ -291,10 +291,7 @@ export class RuntimeStore {
           run.evidenceKey = key; run.headSha = pr.headSha; run.baseSha = pr.baseSha;
           run.control = { ...run.control, memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } };
           delete run.control.review; delete run.control.classification; run.repair = null;
-          const resolution = run.threadResolution;
-          const confirmedRepair = resolution && resolution.packageDigest === run.packageDigest && this.effects(run.id).some(effect => effect.id === resolution.pushEffectId && effect.state === 'confirmed');
-          run.nextAction = confirmedRepair && !resolution.completed ? resolution.actionId : confirmedRepair &&
-            resolution.continuation === run.nextAction && !run.nextAction?.startsWith('$') ? run.nextAction : null;
+          run.nextAction = this.threadContinuation(run);
           run.suppression = null; run.steps = 0; run.agents = 0;
           run.failedActions = {}; run.retryAction = null;
           if (run.status !== 'cancelled') { run.status = 'ready'; run.reason = 'Evidence changed.'; run.dueAt = now; }
@@ -311,12 +308,18 @@ export class RuntimeStore {
     if (rejectPlanned) this.db.prepare("UPDATE effects SET state='rejected' WHERE run_id=? AND state='planned'").run(run.id);
     this.fenceEffects(run.id);
   }
+  private threadContinuation(run: RunRecord): string | null {
+    const resolution = run.threadResolution;
+    if (!resolution || resolution.packageDigest !== run.packageDigest || !this.effects(run.id).some(effect => effect.id === resolution.pushEffectId && effect.state === 'confirmed')) return null;
+    if (!resolution.completed) return resolution.actionId;
+    return resolution.continuation === run.nextAction && !run.nextAction?.startsWith('$') ? run.nextAction : null;
+  }
   unavailable(runId: string, reason: string, dueAt: number): void {
     this.transaction(() => {
       const run = this.run(runId); this.invalidate(run, 'superseded', false); run.evidenceAvailable = false;
       run.control.memory = { classificationCurrent: false, reviewCurrent: false, packetCurrent: false };
       delete run.control.review; delete run.control.classification;
-      if (!['cancelled', 'closed'].includes(run.status)) { run.status = 'waiting'; run.reason = reason; run.dueAt = dueAt; if (!run.repair) run.nextAction = null; }
+      if (!['cancelled', 'closed'].includes(run.status)) { run.status = 'waiting'; run.reason = reason; run.dueAt = dueAt; if (!run.repair) run.nextAction = this.threadContinuation(run); }
       this.saveRun(run);
     });
   }
@@ -520,7 +523,7 @@ export class RuntimeStore {
     this.transaction(() => {
       const run = this.requireCurrent(claim, now);
       if (!run.threadResolution || run.threadResolution.packageDigest !== run.packageDigest) throw new RuntimeError('Thread resolution requires the pinned post-push repair.');
-      run.threadResolution.concerns = concerns; run.threadResolution.completed = completed; run.retryAction = run.threadResolution.actionId;
+      run.threadResolution.concerns = concerns; run.threadResolution.completed = completed; run.threadResolution.observedAt = now; run.retryAction = run.threadResolution.actionId;
       run.threadResolution.continuation = continuation;
       this.saveRun(run);
     });

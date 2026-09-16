@@ -169,7 +169,7 @@ export class DaemonService {
     const observation = inspection.fixture.observations[0]!, clock = new Date(this.now()).toISOString(), workflow = waitingWorkflow(pkg.workflow, run, observation);
     const park = (status: RunRecord['status'], reason: string, dueAt: number | null, nextAction: string | null = null, suppress = false) =>
       this.store.park(claim, status, reason, dueAt, run.control, nextAction, this.now(), suppress);
-    if (!run.evidenceAvailable) { park('waiting', 'Current GitHub evidence is unavailable. Check access and wait for a successful poll.', this.now() + this.store.limits.pollSeconds * 1000); return; }
+    if (!run.evidenceAvailable) { park('waiting', 'Current GitHub evidence is unavailable. Check access and wait for a successful poll.', this.now() + this.store.limits.pollSeconds * 1000, run.nextAction); return; }
     if (!this.store.step(claim, this.store.limits.maxImmediateSteps, this.now())) { park('blocked', 'Immediate step limit reached.', null, run.nextAction, true); return; }
     if (run.nextAction?.startsWith('$')) {
       if (run.nextAction === '$observe') { this.store.pollFinished(run.repositoryId, this.now(), null); park('waiting', 'Refresh GitHub evidence before continuing.', this.now() + this.store.limits.pollSeconds * 1000); return; }

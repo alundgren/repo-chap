@@ -59,7 +59,7 @@ export interface ThreadConcern {
   remoteResolved: boolean | null; evidenceCurrent: boolean | null;
 }
 export interface ThreadResolutionProgress {
-  actionId: string; pushEffectId: string; repair: RetainedRepair; packageDigest: string; completed: boolean; concerns: ThreadConcern[]; continuation?: string;
+  actionId: string; pushEffectId: string; repair: RetainedRepair; packageDigest: string; completed: boolean; concerns: ThreadConcern[]; continuation?: string; observedAt?: number;
 }
 export interface Claim { runId: string; owner: string; token: number; until: number; evidenceKey: string; notesRevision: number }
 export interface AnalysisJob {
