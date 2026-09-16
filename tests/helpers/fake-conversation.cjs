@@ -75,7 +75,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     const respond = result => send({ id: message.id, result });
     if (message.method === 'initialize') respond({ userAgent: 'fictional-codex' });
     if (message.method === 'account/read') respond({ requiresOpenaiAuth: true, account: mode === 'login' ? null : { type: 'chatgpt' } });
-    if (message.method === 'config/read') respond({ config: { mcp_servers: { 'ambient.with.dot': { enabled: true, url: 'https://example.invalid/mcp' } } }, origins: {} });
+    if (message.method === 'config/read') respond({ config: { instructions: mode === 'base-instructions' ? 'Fictional ambient instructions.' : null, model_instructions_file: mode === 'base-instructions-file' ? '/fictional/base-instructions.md' : null, mcp_servers: { 'ambient.with.dot': { enabled: true, url: 'https://example.invalid/mcp' } } }, origins: {} });
     if (message.method === 'skills/list') respond({ data: [{ cwd: message.params.cwds[0], skills: [{ path: '/fictional/ambient-skill/SKILL.md', enabled: true }], errors: mode === 'skills-error' ? [{ message: 'Cannot read a fictional skill.' }] : [] }] });
     if (message.method === 'thread/start' || message.method === 'thread/resume') respond({ thread: { id: session, path: transcript }, model: 'fictional-model', instructionSources: mode === 'ambient-instructions' ? ['/fictional/AGENTS.md'] : [] });
     if (message.method === 'turn/start') { respond({ turn: { id: 'turn-1' } }); notify('turn/started', { turn: { id: 'turn-1' } }); void run(); }

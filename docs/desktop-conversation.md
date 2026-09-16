@@ -19,7 +19,8 @@ until you select **Use profile**.
 Codex discussion requires an instruction-free provider home. If startup reports
 ambient instructions, create a separate private directory, use ordinary
 `CODEX_HOME=/absolute/private/directory codex login`, then launch Repo Chap with
-that same `CODEX_HOME`. Keep AGENTS customization out of this directory. The app
+that same `CODEX_HOME`. Keep AGENTS customization out of this directory and leave
+`instructions` and `model_instructions_file` unset in its configuration. The app
 does not remove your existing instructions or copy credentials. Claude uses its
 normal supported login while excluding ambient customization for each turn.
 

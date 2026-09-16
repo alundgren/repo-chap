@@ -133,7 +133,8 @@ provider setup, context choices, attributed conversation history and a question
 field. Provider settings come from an explicitly chosen private JSON file.
 The person selects a named profile whose provider, model and optional effort
 remain visible. Loading settings or choosing a profile makes no model call.
-Codex rejects ambient global instructions before dispatch and explains recovery
+Codex rejects ambient global AGENTS and configured base instructions before
+dispatch and explains recovery
 through a separate instruction-free provider home with native login. The app
 does not alter global files or copy credentials. A native operation or failed
 transcript verification keeps useful answer text, displays the failure and

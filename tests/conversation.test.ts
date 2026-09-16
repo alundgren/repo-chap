@@ -7,8 +7,9 @@ import { conversationLimits, runConversationTurn, type ConversationEvent, type C
 
 async function setup(provider: 'codex' | 'claude', mode = 'valid') {
   const root = await mkdtemp(join(tmpdir(), 'repo-chap-conversation-'));
-  const log = join(root, 'calls.jsonl'), childPid = join(root, 'child.pid'), executable = join(root, 'provider');
-  await writeFile(executable, `#!${process.execPath}\nglobal.fixture=${JSON.stringify({ provider, mode, log, childPid })};require(${JSON.stringify(resolve('tests/helpers/fake-conversation.cjs'))});`, { mode: 0o700 });
+  const log = join(root, 'calls.jsonl'), childPid = join(root, 'child.pid'), executable = join(root, 'provider'), modeFile = join(root, 'provider-mode');
+  await writeFile(modeFile, mode);
+  await writeFile(executable, `#!${process.execPath}\nglobal.fixture=${JSON.stringify({ provider, modeFile, log, childPid })};require(${JSON.stringify(resolve('tests/helpers/fake-conversation.cjs'))});`, { mode: 0o700 });
   const events: ConversationEvent[] = [], inputs: ConversationInputRequest[] = [];
   const request: ConversationTurnRequest = {
     profile: { provider, executable, name: 'authoring', model: 'fictional-model', effort: 'medium', timeoutMs: 5000, maxOutputBytes: 4 * 1024 * 1024, maxAttempts: 1, maximumCapabilities: [] },
@@ -19,7 +20,7 @@ async function setup(provider: 'codex' | 'claude', mode = 'valid') {
       return input.kind === 'approval' ? { decision: 'deny' } : { answers: Object.fromEntries(input.questions.map(question => [question.id, ['Waiting']])) };
     },
   };
-  return { root, request, events, inputs, childPid, calls: async () => (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line)), cleanup: () => rm(root, { recursive: true, force: true }) };
+  return { root, request, events, inputs, childPid, setMode: (value: string) => writeFile(modeFile, value), calls: async () => (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line)), cleanup: () => rm(root, { recursive: true, force: true }) };
 }
 
 for (const provider of ['codex', 'claude'] as const) {
@@ -147,6 +148,22 @@ test('Codex rejects ambient instructions before sending the question', async () 
     assert.equal(result.status, 'error'); if (result.status === 'error') assert.equal(result.code, 'settings');
     assert(!(await f.calls()).some(call => call.message?.method === 'turn/start'));
     assert(!f.events.some(event => event.type === 'completed'));
+  } finally { await f.cleanup(); }
+});
+
+for (const mode of ['base-instructions', 'base-instructions-file']) test(`Codex rejects ${mode} before fresh or resumed dispatch`, async () => {
+  const f = await setup('codex');
+  try {
+    const initial = await runConversationTurn(f.request);
+    assert.equal(initial.status, 'completed'); if (initial.status !== 'completed') return;
+    const initialCalls = (await f.calls()).length;
+    await f.setMode(mode);
+    for (const session of [undefined, initial.session]) {
+      const result = await runConversationTurn({ ...f.request, session });
+      assert.equal(result.status, 'error'); if (result.status === 'error') assert.equal(result.code, 'settings');
+    }
+    assert(!(await f.calls()).slice(initialCalls).some(call => ['thread/start', 'thread/resume', 'turn/start'].includes(call.message?.method)));
+    assert.equal(f.events.filter(event => event.type === 'completed').length, 1);
   } finally { await f.cleanup(); }
 });
 

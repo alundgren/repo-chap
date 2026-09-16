@@ -34,6 +34,8 @@ version loads global AGENTS separately, so nonempty or unverifiable
 `instructionSources` rejects startup before dispatch. Recovery uses an
 instruction-free `CODEX_HOME` with ordinary native CLI login; the app neither
 edits global instructions nor copies credentials.
+Effective `instructions` and `model_instructions_file` overrides also reject
+before fresh or resumed dispatch because AGENTS provenance does not cover them.
 
 The real selected model can still advertise native `apply_patch`; this version
 has no supported exclusion control for it. Read-only sandbox permissions and

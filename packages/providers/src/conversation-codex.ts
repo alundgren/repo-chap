@@ -76,6 +76,7 @@ export async function runCodexConversation(runtime: ConversationRuntime): Promis
     if (account.requiresOpenaiAuth !== false && !record(account.account)) throw new ConversationError('login', 'Codex is not logged in. Use the supported local Codex login, then start fresh.');
     const settings = await peer.request('config/read', { cwd: request.workingDirectory, includeLayers: false });
     if (!record(settings.config)) throw new ConversationError('settings', 'Cannot verify Codex conversation settings.');
+    if (settings.config.instructions != null || settings.config.model_instructions_file != null) throw new ConversationError('settings', 'Codex has custom base instructions enabled. Use an instruction-free CODEX_HOME without instructions or model_instructions_file settings. Your question has not been sent.');
     const mcp = settings.config.mcp_servers ?? {};
     if (!record(mcp)) throw new ConversationError('settings', 'Cannot verify Codex MCP configuration.');
     const disabledMcp = Object.fromEntries(Object.entries(mcp).map(([name, value]) => {
