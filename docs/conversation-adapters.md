@@ -93,6 +93,50 @@ its result before flushing the native transcript. If the process does not finish
 cleanly, the answer remains visible and the host reports that a fresh session is
 required. Cancellation and timeouts still terminate the owned process group.
 
+## Desktop session ownership
+
+`ConversationController` owns one document session's chat history and at most one
+active turn and input request. Its caller supplies captured text, a
+`DocumentToken`, and a provenance summary. The caller validates the current
+document and test revisions before capture. The controller checks document
+session identity, copies the supplied values, records a SHA-256 digest of the
+captured text, and never reads files or invents test results. Normal dispatch
+registers no tools. This controller has no document mutation authority.
+
+Renderer snapshots contain the chosen provider, profile and model, attributed
+turns, context revisions, tool activity, pending input and recovery state.
+Provider bindings, executable paths, process directories and raw protocol
+messages stay in the main process. A turn may display its native session ID
+while streaming, but only the adapter's settled successful result grants resume.
+Cancellation and failure keep partial text and require a fresh session.
+
+Fresh starts retain visible history and exclude it from future provider context.
+Changing provider or settings cancels the current turn, removes the old native
+identity and prepares a separate session with a bounded dialogue excerpt. The
+visible handoff record reports included and omitted turns and any truncation.
+It distinguishes a pending excerpt, one attached to a submitted question, and
+one cleared by a later fresh start or close. Attachment does not claim provider
+delivery. Excerpts retain provider attribution and interrupted-turn status.
+They are conversation context, not evidence of saves, tests or remote effects.
+The newly captured workflow and actual test provenance remain authoritative.
+
+Visible history is in memory, bounded to 40 entries and 256 KiB of serialized
+records. Each displayed answer keeps at most 64 KiB with an explicit truncation
+flag. Handoffs fit within 32 KiB and count omitted turns. The combined current
+context and handoff must still fit the provider's 256 KiB context limit; a failed
+size check starts no provider. Stream updates are coalesced at 50 ms. Input and
+terminal state changes publish immediately. Each turn permits 16 input requests;
+one pending request fits within 256 KiB, and responses fit within 64 KiB.
+Answered input summaries are bounded and mark omitted text.
+
+Closing cancels the turn and clears pending input and native resume identity.
+The host can retain the closed controller's bounded transcript while showing the
+transition, then discard it when leaving the workspace. Visible history does
+not survive workspace disposal or app restart. Native CLI transcript files can
+remain in each provider's private home; the desktop does not rediscover or
+automatically resume them after restart. Neither form of history enters managed
+repository files.
+
 ## Verification limits
 
 Fake executable tests exercise host behavior without credentials or model calls.
