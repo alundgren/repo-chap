@@ -192,7 +192,8 @@ test('declined decisions stay open while the addressed thread resolves and its f
     assert.equal(s.sends, 1); assert.equal(s.inspection.evidence.threads.items[1]!.resolved, false);
     let details = await handleControl(s.service, { method: 'inspect', runId: id }) as any;
     assert.deepEqual(details.threadResolution.concerns.map((c: any) => c.state), ['confirmed', 'skipped']); assert.equal(details.threadResolution.remainingConcerns[0].disposition, 'declined');
-    s.store.pollFinished(s.repo.id, 0, null); await s.tick(); assert.equal(s.jobs.length, 1); assert.equal(s.store.run(id).nextAction, next);
+    s.store.pollFinished(s.repo.id, 0, null); await s.tick(); assert.equal(s.jobs.length, 1); assert.equal(s.store.run(id).nextAction, s.pkg.workflow.actions[next!]!.onSuccess);
+    assert.equal((await s.store.slack.inbox(id)).length, 1);
     details = await handleControl(s.service, { method: 'inspect', runId: id }) as any; assert.equal(details.threadResolution.remainingConcerns.length, 1);
   } finally { await s.cleanup(); }
 });

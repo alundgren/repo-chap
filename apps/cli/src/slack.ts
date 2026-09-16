@@ -2,6 +2,7 @@ import { loadWorkflow, parseJson, readFixtureText } from '@repo-chap/workflow';
 import { previewHtml, previewPacket, validatePacket } from '@repo-chap/slack';
 import { requestControl, type ControlRequest } from '@repo-chap/daemon';
 import { resolve } from 'node:path';
+import { RuntimeStore } from '@repo-chap/runtime';
 
 export const slackHelp = `Preview a Slack handoff without network access, tokens or providers.
 
@@ -43,10 +44,10 @@ may have accepted the message. Mark delivered only with its actual receipt.
 Resend explicitly accepts possible duplicate delivery and retains the prior attempt.
 Neither command reruns analysis or code repairs.
 `;
-export async function slackInboxCommand(command: 'inbox' | 'slack-reconcile', args: string[]): Promise<void> {
+export async function slackInboxCommand(command: 'inbox' | 'slack-reconcile', args: string[], local = false): Promise<void> {
   const json = args.includes('--json');
   try {
-    if (args.includes('--help')) { process.stdout.write(slackInboxHelp); return; }
+    if (args.includes('--help')) { process.stdout.write(local ? slackInboxHelp.replaceAll('daemon ', 'apply ') : slackInboxHelp); return; }
     const id = args[0] && !args[0].startsWith('-') ? args.shift() : undefined;
     const options: Record<string, string> = {}, seen = new Set<string>();
     const allowed = command === 'inbox' ? ['--state-dir', '--json'] : ['--state-dir', '--json', '--delivered', '--resend', '--workspace', '--channel', '--timestamp'];
@@ -65,7 +66,7 @@ export async function slackInboxCommand(command: 'inbox' | 'slack-reconcile', ar
       if (seen.has('--resend') && ['--workspace', '--channel', '--timestamp'].some(key => seen.has(key))) throw new Error('Receipt fields belong to --delivered.');
       request = { method: 'slack-reconcile', deliveryId: id, resolution: seen.has('--resend') ? { action: 'resend' } : { action: 'delivered', receipt: { workspaceId: options['--workspace']!, channelId: options['--channel']!, timestamp: options['--timestamp']! } } };
     }
-    const response = await requestControl(resolve(options['--state-dir']), request);
+    const response = local ? await localSlackControl(resolve(options['--state-dir']), request) : await requestControl(resolve(options['--state-dir']), request);
     if (!response.ok) throw new Error(response.error);
     if (json) { process.stdout.write(JSON.stringify(response, null, 2) + '\n'); return; }
     if (command === 'inbox') {
@@ -84,4 +85,13 @@ export async function slackInboxCommand(command: 'inbox' | 'slack-reconcile', ar
     process.exitCode = 8; const message = error instanceof Error ? error.message : 'Slack inbox command failed.';
     if (json) process.stdout.write(JSON.stringify({ schemaVersion: 1, ok: false, error: message }) + '\n'); else process.stderr.write(message + '\n');
   }
+}
+
+async function localSlackControl(directory: string, request: Extract<ControlRequest, { method: 'inbox' | 'slack-reconcile' }>) {
+  const store = await RuntimeStore.open(directory); let ownership: string | undefined;
+  try {
+    ownership = store.claimDaemon(); store.slack.recover(Date.now());
+    const result = request.method === 'inbox' ? await store.slack.inbox(request.runId) : store.slack.reconcile(request.deliveryId, request.resolution, Date.now());
+    return { ok: true as const, result };
+  } finally { if (ownership) store.releaseDaemon(ownership); store.close(); }
 }

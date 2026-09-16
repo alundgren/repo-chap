@@ -51,6 +51,9 @@ export class SlackApi {
     if (!object(response.value.channel) || !/^D[A-Z0-9]+$/.test(String(response.value.channel.id))) return { status: 'unknown', reason: 'Slack returned no usable DM conversation receipt. Retry conversation lookup before any message send.' };
     return { status: 'confirmed', value: String(response.value.channel.id) };
   }
+  messageRetryAt(channelId: string, update = false): number {
+    return Math.max(0, ...[`${this.workspaceId}:all`, `${this.workspaceId}:${update ? 'chat.update' : 'chat.postMessage'}`, `${this.workspaceId}:channel:${channelId}`].map(key => this.options.rates.read(key)));
+  }
   async send(channelId: string, message: SlackMessage, timestamp?: string, signal?: AbortSignal): Promise<SlackResult<SlackReceipt>> {
     if (!/^[CGD][A-Z0-9]+$/.test(channelId) || timestamp !== undefined && !/^\d{1,20}\.\d{1,10}$/.test(timestamp)) throw new SlackError('Slack delivery requires a channel ID and a valid update timestamp.');
     if (!message.text || message.text.length > 4000 || message.blocks.length > 12 || message.blocks.some(block => block.text.text.length > 3000)) throw new SlackError('Slack message exceeds the bounded renderer limits.');
@@ -67,7 +70,7 @@ export class SlackApi {
     const deferred = (): SlackResult<never> => ({ status: 'deferred', retryAt: blockedUntil(), reason: 'Slack delivery is waiting for the persisted rate limit.' });
     if (blockedUntil() > this.now()) return deferred();
     if (signal?.aborted) return { status: 'rejected', reason: 'Slack delivery was cancelled before dispatch.' };
-    for (const key of keys) this.options.rates.extend(key, this.now() + 1200);
+    for (const key of keys.filter(key => key !== `${this.workspaceId}:all`)) this.options.rates.extend(key, this.now() + 1200);
     try {
       const response = await this.transport(`https://slack.com/api/${method}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify(payload), redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(this.timeoutMs), ...(signal ? [signal] : [])]) });
       if (response.status === 429) {

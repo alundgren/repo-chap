@@ -4,7 +4,7 @@
 without network access or credentials. Its root export has no Node runtime
 imports. Electron can use `previewPacket`, `previewRoute` and `previewHtml` for
 local simulation. The separate `@repo-chap/slack/web-api` export belongs to the
-daemon. A preview is not evidence that Slack accepted or displayed a message.
+host application. A preview is not evidence that Slack accepted or displayed a message.
 
 ## Workflow and installation settings
 
@@ -34,7 +34,8 @@ To enable delivery, private installation JSON can include:
 
 This is a fragment of installation settings, not workflow JSON. The token file
 and its parent directory follow the daemon's private-file rules. The operator
-profile must permit `notify.send`. The daemon verifies the token's workspace
+profile, pinned workflow and private per-repository apply policy must permit
+`notify.send`. Analysis mode retains the local inbox without sending. The daemon verifies the token's workspace
 before sending and rechecks that binding when the token changes. Each delivery uses
 the same in-memory token that passed verification. Public and private channels
 require the appropriate bot access;
@@ -73,7 +74,14 @@ assets or scripts. It does not reproduce the Slack client's own styling.
 
 Slack requests, delivery records, conversation IDs and rate deadlines share the
 private runtime SQLite database. The runtime also records each operation in the
-existing effect outbox. Request identity includes the run, evidence, destination
+existing effect outbox. `claimForEffect` can obtain a short run claim for an
+eligible retained effect even when the workflow has no due action. It shares
+run ownership and installation/repository concurrency checks, then hands ownership
+to `beginEffect`. `releaseEffectClaim` releases only that scheduling claim,
+preserving the parked continuation and per-wake counters. It does not schedule
+or reserve a provider attempt. Slack uses
+`effectCurrent`, `finishEffect` and the runtime's shared lease recovery; releasing
+a provider claim is not evidence that a message send was abandoned. Request identity includes the run, evidence, destination
 and content. Workflow provenance and attempt time do not create another request.
 Identical evidence and content therefore reuse the existing receipt after restart
 or a prompt-only migration.
@@ -104,7 +112,11 @@ repo-chap daemon slack-reconcile <delivery-id> --state-dir /private/repo-chap/st
 
 Use an actual Slack receipt to confirm an unknown send. `--resend` explicitly
 accepts the risk that the earlier message exists. It retains the prior attempt
-and creates a separately authorized operation. Each request permits at most three
+and creates a separately authorized operation. The logical delivery can be
+confirmed by an operator receipt while its original send attempt remains unknown:
+the receipt establishes the message to use, without rewriting what the interrupted
+worker knew. Slack passes `preserveUnknownAttempts` to `reconcileEffect` for these
+operator decisions; existing push/thread reconciliation keeps its current behavior. Each request permits at most three
 explicit resends. An obsolete unknown request can be reconciled, but its old
 decision is never sent again. A delivered obsolete request is marked superseded.
 
@@ -117,3 +129,17 @@ The implementation follows Slack's [message API](https://docs.slack.dev/referenc
 [conversation API](https://docs.slack.dev/reference/methods/conversations.open/),
 [workspace verification API](https://docs.slack.dev/reference/methods/auth.test/) and
 [message update API](https://docs.slack.dev/reference/methods/chat.update/).
+
+## Local apply
+
+Local apply accepts `--slack-config /private/repo-chap/slack.json`. This private
+version-1 JSON file contains `schemaVersion` and the same `slack` object shown
+above. Its token stays outside workflow JSON. The selected private apply policy
+must also permit `notify.send`. The shared daemon service handles the selected
+repository and PR. `--plan` saves the packet and effect without contacting Slack.
+
+`apply inbox [run-id] --state-dir <directory>` reads complete packets without a
+running daemon. `apply slack-reconcile` accepts the same receipt or explicit resend
+options as its daemon counterpart and does not send a message or run a provider.
+Use the same private local state directory as the original apply invocation.
+`apply inspect` and `apply reconcile` retain their offline/read-only distinctions.

@@ -66,7 +66,7 @@ export class RuntimeStore {
         db.prepare("UPDATE effects SET state='unknown' WHERE state='sending'").run();
       }
       db.prepare("INSERT INTO metadata VALUES ('schema','3') ON CONFLICT(key) DO UPDATE SET value='3'").run();
-      return new SlackOutbox(db, this.artifacts, id => this.run(id));
+      return new SlackOutbox(db, this.artifacts, this);
     });
   }
   static async open(directory: string, input: Partial<RuntimeLimits> = {}): Promise<RuntimeStore> {
@@ -81,6 +81,7 @@ export class RuntimeStore {
   }
   close(): void { this.db.close(); }
   private transaction<T>(operation: () => T): T {
+    if (this.db.isTransaction) return operation();
     this.db.exec('BEGIN IMMEDIATE');
     try { const result = operation(); this.db.exec('COMMIT'); return result; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
@@ -380,18 +381,37 @@ export class RuntimeStore {
     });
   }
   claim(runId: string, owner: string, now: number, seconds: number): Claim | null {
+    return this.acquireClaim(runId, owner, now, seconds);
+  }
+  /** Claim an eligible retained effect without scheduling or reserving provider work. */
+  claimForEffect(id: string, owner: string, now: number, seconds: number): Claim | null {
+    const row = this.db.prepare('SELECT run_id FROM effects WHERE id=?').get(id);
+    return row ? this.acquireClaim(String(row.run_id), owner, now, seconds, id) : null;
+  }
+  private acquireClaim(runId: string, owner: string, now: number, seconds: number, effectId?: string): Claim | null {
     if (!Number.isFinite(seconds) || seconds <= 0) throw new RuntimeError('A claim requires a positive bounded duration.');
     this.recover(now);
     return this.transaction(() => {
       const run = this.run(runId), repo = this.repository(run.repositoryId);
-      if (!owner || repo.paused || run.owner || ['cancelled', 'closed'].includes(run.status) || run.dueAt === null || run.dueAt > now) return null;
+      if (!owner || repo.paused || run.owner || ['cancelled', 'closed'].includes(run.status)) return null;
+      if (effectId) {
+        const effect = this.effects(run.id).find(value => value.id === effectId);
+        if (!effect || effect.evidenceKey !== run.evidenceKey || !run.evidenceAvailable || !(effect.state === 'planned' || effect.state === 'rejected' && (effect.receipt as { retryable?: boolean } | null)?.retryable === true)) return null;
+      } else if (run.dueAt === null || run.dueAt > now) return null;
       const sending = new Set(this.db.prepare("SELECT DISTINCT effects.run_id FROM effects JOIN effect_leases ON effects.id=effect_id WHERE effects.state='sending' AND effect_leases.until>?").all(now).map(row => String(row.run_id)));
       if (sending.has(run.id)) return null;
       const active = this.runs().filter(value => value.owner && value.leaseUntil! > now || sending.has(value.id));
       if (active.length >= this.limits.concurrency || active.filter(value => value.repositoryId === repo.id).length >= this.limits.repositoryConcurrency) return null;
       run.token++; run.owner = owner; run.leaseUntil = now + Math.min(seconds, this.limits.maxAttemptSeconds) * 1000;
-      run.status = 'running'; this.saveRun(run);
+      if (!effectId) run.status = 'running'; this.saveRun(run);
       return { runId, owner, token: run.token, until: run.leaseUntil, evidenceKey: run.evidenceKey, notesRevision: run.notesRevision };
+    });
+  }
+  releaseEffectClaim(claim: Claim, now: number): void {
+    this.transaction(() => {
+      const run = this.requireCurrent(claim, now);
+      if (!this.ownsEffect(run.id, claim.owner, now)) throw new RuntimeError('A started effect is required before releasing its scheduling claim.');
+      run.owner = null; run.leaseUntil = null; this.saveRun(run);
     });
   }
   isCurrent(claim: Claim, now: number): boolean {
@@ -698,11 +718,12 @@ export class RuntimeStore {
       this.db.prepare('DELETE FROM effect_leases WHERE effect_id=?').run(lease.effectId); return true;
     });
   }
-  reconcileEffect(id: string, next: 'confirmed' | 'rejected' | 'unknown', receipt: unknown, now: number): boolean {
+  // Operator confirmation can resolve a logical operation while retaining its ambiguous send history.
+  reconcileEffect(id: string, next: 'confirmed' | 'rejected' | 'unknown', receipt: unknown, now: number, preserveUnknownAttempts = false): boolean {
     return this.transaction(() => {
       if (receipt == null) throw new RuntimeError('Reconciliation requires an observed receipt.');
       const changed = this.db.prepare("UPDATE effects SET state=?,receipt=? WHERE id=? AND state='unknown'").run(next, json(receipt), id).changes === 1;
-      if (changed) this.db.prepare("UPDATE effect_attempts SET state=?,receipt=?,finished_at=? WHERE effect_id=? AND state='unknown'").run(next, json(receipt), now, id);
+      if (changed && !preserveUnknownAttempts) this.db.prepare("UPDATE effect_attempts SET state=?,receipt=?,finished_at=? WHERE effect_id=? AND state='unknown'").run(next, json(receipt), now, id);
       return changed;
     });
   }

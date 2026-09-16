@@ -3,30 +3,33 @@ import { canonicalJson, digest } from '@repo-chap/workflow';
 import { previewPacket, validatePacket, type DecisionPacket, type PacketPreview, type SlackConfiguration } from '@repo-chap/slack';
 import { validReceipt, type SlackReceipt, type SlackResult } from '@repo-chap/slack/web-api';
 import { ArtifactStore, RuntimeError } from './artifacts.js';
-import type { ArtifactRef, Claim, EffectRequest, EffectState, RunRecord } from './types.js';
+import type { ArtifactRef, Claim, EffectAttempt, EffectLease, EffectRequest, EffectState } from './types.js';
+import type { RuntimeStore } from './store.js';
 
 export interface SlackRequestRecord {
   id: string; runId: string; evidenceKey: string; headSha: string; destination: string;
   packet: ArtifactRef; preview: ArtifactRef; supersededPreview: ArtifactRef;
   status: 'open' | 'superseded'; receipt: SlackReceipt | null; resends: number;
 }
-export interface SlackDeliveryRecord {
+interface DeliveryData {
   id: string; requestId: string; runId: string; operation: 'post' | 'update' | 'supersede';
-  state: EffectState; channelId: string | null; timestamp: string | null;
-  dueAt: number; owner: string | null; leaseUntil: number | null; reason: string;
-  attempts: { startedAt: number; finishedAt: number | null; status: EffectState | 'rate_limited'; receipt: SlackReceipt | null; reason: string }[];
-  preparationFailures: number;
+  channelId: string | null; timestamp: string | null; dueAt: number; reason: string; preparationFailures: number;
+}
+export interface SlackDeliveryRecord extends DeliveryData {
+  state: EffectState;
+  attempts: (EffectAttempt & { status: EffectState; reason: string })[];
 }
 const json = (value: unknown) => canonicalJson(value);
 const decode = <T>(row: unknown): T => JSON.parse((row as { data: string }).data) as T;
 export class SlackOutbox {
-  constructor(private readonly db: DatabaseSync, private readonly artifacts: ArtifactStore, private readonly run: (id: string) => RunRecord) {
+  constructor(private readonly db: DatabaseSync, private readonly artifacts: ArtifactStore, private readonly store: RuntimeStore) {
     db.exec(`CREATE TABLE IF NOT EXISTS slack_requests (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS slack_deliveries (id TEXT PRIMARY KEY REFERENCES effects(id), request_id TEXT NOT NULL REFERENCES slack_requests(id), data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS slack_rates (key TEXT PRIMARY KEY, until INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS slack_dms (key TEXT PRIMARY KEY, channel_id TEXT NOT NULL);`);
   }
   private transaction<T>(fn: () => T): T {
+    if (this.db.isTransaction) return fn();
     this.db.exec('BEGIN IMMEDIATE');
     try { const value = fn(); this.db.exec('COMMIT'); return value; } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
@@ -38,31 +41,39 @@ export class SlackOutbox {
     if (!row) throw new RuntimeError('Slack request does not exist.'); return decode(row);
   }
   deliveries(runId?: string): SlackDeliveryRecord[] {
-    return this.db.prepare('SELECT slack_deliveries.data,effects.state FROM slack_deliveries JOIN effects USING(id)').all().map(row => ({ ...decode<SlackDeliveryRecord>(row), state: row.state as EffectState })).filter(row => !runId || row.runId === runId);
+    return this.db.prepare('SELECT slack_deliveries.data,effects.state,effects.receipt FROM slack_deliveries JOIN effects USING(id)').all().map(row => {
+      const data = decode<DeliveryData>(row), receipt = row.receipt ? JSON.parse(String(row.receipt)) : null;
+      return { ...data, state: row.state as EffectState, reason: receipt?.reason ?? (row.state === 'unknown' ? 'Slack may have accepted this operation. Reconcile delivery before resending.' : data.reason),
+        attempts: this.store.effectAttempts(data.id).map(attempt => ({ ...attempt, status: attempt.state, reason: (attempt.receipt as { reason?: string } | null)?.reason ?? (attempt.state === 'unknown' ? 'The send outcome is unknown.' : attempt.state) })) };
+    }).filter(row => !runId || row.runId === runId);
   }
   delivery(id: string): SlackDeliveryRecord {
     const found = this.deliveries().find(row => row.id === id); if (!found) throw new RuntimeError('Slack delivery does not exist.'); return found;
   }
   private saveRequest(request: SlackRequestRecord): void { this.db.prepare('INSERT INTO slack_requests VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(request.id, request.runId, json(request)); }
-  private saveDelivery(delivery: SlackDeliveryRecord, receipt: unknown = null): void {
-    this.db.prepare('UPDATE slack_deliveries SET data=? WHERE id=?').run(json(delivery), delivery.id);
-    this.db.prepare('UPDATE effects SET state=?,receipt=COALESCE(?,receipt) WHERE id=?').run(delivery.state, receipt === null ? null : json(receipt), delivery.id);
+  private saveDelivery(delivery: DeliveryData): void {
+    const { id, requestId, runId, operation, channelId, timestamp, dueAt, reason, preparationFailures } = delivery;
+    this.db.prepare('UPDATE slack_deliveries SET data=? WHERE id=?').run(json({ id, requestId, runId, operation, channelId, timestamp, dueAt, reason, preparationFailures }), id);
   }
-  private createDelivery(request: SlackRequestRecord, operation: SlackDeliveryRecord['operation'], now: number, receipt: SlackReceipt | null, authorization: string | null = null): SlackDeliveryRecord {
-    const run = this.run(request.runId);
-    const effect: EffectRequest = { kind: `slack.${operation}`, destination: request.destination, evidenceKey: request.evidenceKey, payload: operation === 'supersede' ? request.supersededPreview : request.preview, expectedRevision: receipt ? `${receipt.channelId}:${receipt.timestamp}` : request.headSha };
+  private rejectUnsent(delivery: SlackDeliveryRecord, reason: string, now: number): void {
+    delivery.reason = reason; this.saveDelivery(delivery);
+    this.db.prepare("UPDATE effects SET state='rejected',receipt=? WHERE id=? AND state IN ('planned','rejected')").run(json({ reason, noMessageSent: true, at: now }), delivery.id);
+  }
+  private createDelivery(request: SlackRequestRecord, operation: DeliveryData['operation'], now: number, receipt: SlackReceipt | null, authorization: string | null = null): SlackDeliveryRecord {
+    const run = this.store.run(request.runId);
+    const effect: EffectRequest = { kind: `slack.${operation}`, destination: request.destination, evidenceKey: operation === 'supersede' ? run.evidenceKey : request.evidenceKey, payload: operation === 'supersede' ? request.supersededPreview : request.preview, expectedRevision: receipt ? `${receipt.channelId}:${receipt.timestamp}` : request.headSha };
     const id = digest(json({ repositoryId: run.repositoryId, runId: run.id, ...effect, ...(authorization ? { authorization } : {}) })).slice(7);
     const prior = this.deliveries().find(delivery => delivery.id === id); if (prior) return prior;
     this.db.prepare("INSERT INTO effects VALUES (?,?,'planned',?,?,NULL)").run(id, run.id, run.token, json(effect));
-    const delivery: SlackDeliveryRecord = { id, requestId: request.id, runId: run.id, operation, state: 'planned', channelId: receipt?.channelId ?? null, timestamp: receipt?.timestamp ?? null, dueAt: now, owner: null, leaseUntil: null, reason: 'Slack delivery is queued.', attempts: [], preparationFailures: 0 };
-    this.db.prepare('INSERT INTO slack_deliveries VALUES (?,?,?)').run(id, request.id, json(delivery)); return delivery;
+    const delivery: DeliveryData = { id, requestId: request.id, runId: run.id, operation, channelId: receipt?.channelId ?? null, timestamp: receipt?.timestamp ?? null, dueAt: now, reason: 'Slack delivery is queued.', preparationFailures: 0 };
+    this.db.prepare('INSERT INTO slack_deliveries VALUES (?,?,?)').run(id, request.id, json(delivery)); return this.delivery(id);
   }
   async queue(claim: Claim, packet: DecisionPacket, configuration: SlackConfiguration | undefined, now: number): Promise<SlackRequestRecord> {
     validatePacket(packet);
     const preview = previewPacket(packet, configuration), packetRef = await this.artifacts.put(packet), previewRef = await this.artifacts.put(preview), supersededRef = await this.artifacts.put(previewPacket(packet, configuration, true));
     return this.transaction(() => {
-      const run = this.run(claim.runId);
-      if (run.token !== claim.token || run.owner !== claim.owner || run.evidenceKey !== claim.evidenceKey || run.notesRevision !== claim.notesRevision || (run.leaseUntil ?? 0) <= now || run.headSha !== packet.headSha) throw new RuntimeError('Slack packet inputs or ownership changed before queuing.');
+      const run = this.store.run(claim.runId);
+      if (!this.store.isCurrent(claim, now) || run.headSha !== packet.headSha) throw new RuntimeError('Slack packet inputs or ownership changed before queuing.');
       const destination = json({ workspaceId: preview.route.workspaceId, destination: preview.route.destination });
       const id = digest(json({ runId: run.id, evidenceKey: run.evidenceKey, destination, packet: packetRef.digest, preview: previewRef.digest })).slice(7);
       const existing = this.requests(run.id).find(request => request.id === id); if (existing) return existing;
@@ -70,7 +81,7 @@ export class SlackOutbox {
       const reuse = prior?.headSha === packet.headSha && prior.destination === destination ? prior.receipt : null;
       if (prior) {
         this.supersede(prior, now, !reuse);
-        if (reuse) for (const cleanup of this.deliveries(run.id).filter(item => item.requestId === prior.id && item.operation === 'supersede' && item.state === 'planned')) { cleanup.state = 'rejected'; cleanup.reason = 'The current packet will replace the earlier message.'; this.saveDelivery(cleanup, { reason: cleanup.reason }); }
+        if (reuse) for (const cleanup of this.deliveries(run.id).filter(item => item.requestId === prior.id && item.operation === 'supersede' && item.state === 'planned')) this.rejectUnsent(cleanup, 'The current packet will replace the earlier message.', now);
       }
       const request: SlackRequestRecord = { id, runId: run.id, evidenceKey: run.evidenceKey, headSha: packet.headSha, destination, packet: packetRef, preview: previewRef, supersededPreview: supersededRef, status: 'open', receipt: reuse ?? null, resends: 0 };
       this.saveRequest(request); this.createDelivery(request, reuse ? 'update' : 'post', now, reuse ?? null); return request;
@@ -79,16 +90,16 @@ export class SlackOutbox {
   private supersede(request: SlackRequestRecord, now: number, remote: boolean): void {
     request.status = 'superseded'; this.saveRequest(request);
     for (const delivery of this.deliveries(request.runId).filter(delivery => delivery.requestId === request.id && delivery.operation !== 'supersede')) {
-      if (delivery.state === 'planned') { delivery.state = 'rejected'; delivery.reason = 'A newer packet superseded this unsent request.'; this.saveDelivery(delivery, { reason: delivery.reason }); }
-      else if (delivery.state === 'sending') { delivery.state = 'unknown'; delivery.reason = 'Inputs changed during Slack delivery. Reconcile the prior send before continuing.'; this.saveDelivery(delivery); }
+      if (delivery.state === 'planned') this.rejectUnsent(delivery, 'A newer packet superseded this unsent request.', now);
     }
     if (remote && request.receipt) this.createDelivery(request, 'supersede', now, request.receipt);
   }
   supersedeStale(now: number): void {
     this.transaction(() => {
-      for (const request of this.requests().filter(request => request.status === 'open')) {
-        const run = this.run(request.runId);
-        if (run.evidenceKey !== request.evidenceKey || run.headSha !== request.headSha || ['closed', 'cancelled'].includes(run.status) || !run.evidenceAvailable) this.supersede(request, now, true);
+      for (const request of this.requests()) {
+        const run = this.store.run(request.runId);
+        if (request.status === 'open' && (run.evidenceKey !== request.evidenceKey || run.headSha !== request.headSha || ['closed', 'cancelled'].includes(run.status) || !run.evidenceAvailable)) this.supersede(request, now, true);
+        else if (request.status === 'superseded' && request.receipt && this.deliveries(run.id).some(value => value.requestId === request.id && value.operation === 'supersede' && value.state === 'rejected')) this.createDelivery(request, 'supersede', now, request.receipt);
       }
     });
   }
@@ -107,69 +118,62 @@ export class SlackOutbox {
   }
   pending(now: number): SlackDeliveryRecord[] {
     const all = this.deliveries();
-    return all.filter(delivery => delivery.state === 'planned' && delivery.dueAt <= now && !all.some(other => other.runId === delivery.runId && ['unknown', 'sending'].includes(other.state))).sort((a, b) => Number(b.operation === 'supersede') - Number(a.operation === 'supersede'));
+    return all.filter(delivery => (delivery.state === 'planned' || delivery.state === 'rejected' && (this.store.effects(delivery.runId).find(effect => effect.id === delivery.id)?.receipt as { retryable?: boolean } | null)?.retryable === true) && delivery.dueAt <= now && delivery.attempts.length < Math.min(3, this.store.limits.maxRetries + 1) && !all.some(other => other.runId === delivery.runId && ['unknown', 'sending'].includes(other.state))).sort((a, b) => Number(b.operation === 'supersede') - Number(a.operation === 'supersede'));
   }
   prepare(id: string, result: Exclude<SlackResult<unknown>, { status: 'confirmed' }>, now: number): void {
     this.transaction(() => {
-      const delivery = this.delivery(id); if (delivery.state !== 'planned') return;
+      const delivery = this.delivery(id); if (!['planned', 'rejected'].includes(delivery.state)) return;
       delivery.reason = result.reason;
-      if (result.status === 'deferred') { delivery.dueAt = result.retryAt; if (result.attempted && ++delivery.preparationFailures >= 3) { delivery.state = 'rejected'; delivery.reason = 'Slack preparation reached its three-call retry limit. The complete request stays in the CLI inbox.'; } }
-      else { delivery.state = 'rejected'; delivery.preparationFailures++; }
-      this.saveDelivery(delivery, delivery.state === 'rejected' ? { reason: delivery.reason, phase: 'preparation', noMessageSent: true, at: now } : null);
+      if (result.status === 'deferred') {
+        delivery.dueAt = result.retryAt;
+        if (result.attempted && ++delivery.preparationFailures >= 3) this.rejectUnsent(delivery, 'Slack preparation reached its three-call retry limit. The complete request stays in the CLI inbox.', now);
+        else this.saveDelivery(delivery);
+      } else { delivery.preparationFailures++; this.rejectUnsent(delivery, delivery.reason, now); }
     });
   }
-  begin(id: string, channelId: string, owner: string, now: number): SlackDeliveryRecord | null {
+  begin(id: string, channelId: string, owner: string, now: number): EffectLease | null {
     return this.transaction(() => {
-      const delivery = this.delivery(id), request = this.request(delivery.requestId), run = this.run(delivery.runId);
-      if (!this.pending(now).some(item => item.id === id) || delivery.attempts.length >= 3 || !owner || !/^[CGD][A-Z0-9]+$/.test(channelId)) return null;
-      if (delivery.operation !== 'supersede' && (request.status !== 'open' || run.evidenceKey !== request.evidenceKey || run.headSha !== request.headSha || !run.evidenceAvailable || ['closed', 'cancelled'].includes(run.status))) return null;
-      delivery.state = 'sending'; delivery.channelId = channelId; delivery.owner = owner; delivery.leaseUntil = now + 30_000;
-      delivery.attempts.push({ startedAt: now, finishedAt: null, status: 'sending', receipt: null, reason: 'Slack call dispatched.' }); this.saveDelivery(delivery); return delivery;
+      const delivery = this.delivery(id), request = this.request(delivery.requestId), run = this.store.run(delivery.runId);
+      if (!this.pending(now).some(item => item.id === id) || !/^[CGD][A-Z0-9]+$/.test(channelId)) return null;
+      if (delivery.operation !== 'supersede' && (request.status !== 'open' || run.evidenceKey !== request.evidenceKey || run.headSha !== request.headSha)) return null;
+      const claim = this.store.claimForEffect(id, owner, now, 30); if (!claim) return null;
+      const lease = this.store.beginEffect(claim, id, 3, now, 30);
+      this.store.releaseEffectClaim(claim, now);
+      delivery.channelId = channelId; delivery.reason = 'Slack call dispatched.'; this.saveDelivery(delivery); return lease;
     });
   }
-  finish(id: string, owner: string, result: SlackResult<SlackReceipt>, now: number): boolean {
+  finish(lease: EffectLease, result: SlackResult<SlackReceipt>, now: number): boolean {
     return this.transaction(() => {
-      const delivery = this.delivery(id);
-      if (delivery.state !== 'sending' || delivery.owner !== owner || (delivery.leaseUntil ?? 0) <= now) return false;
-      const attempt = delivery.attempts.at(-1)!; attempt.finishedAt = now;
-      delivery.owner = null; delivery.leaseUntil = null;
-      if (result.status === 'confirmed') {
-        if (!validReceipt(result.value) || result.value.channelId !== delivery.channelId || delivery.timestamp && result.value.timestamp !== delivery.timestamp) throw new RuntimeError('Slack returned an invalid delivery receipt.');
-        delivery.state = 'confirmed'; delivery.reason = 'Slack delivery confirmed.'; attempt.receipt = result.value;
-        const request = this.request(delivery.requestId); request.receipt = result.value; this.saveRequest(request);
-      } else if (result.status === 'deferred') {
-        if (!result.attempted) delivery.attempts.pop();
-        delivery.state = delivery.attempts.length >= 3 ? 'rejected' : 'planned'; delivery.dueAt = result.retryAt;
-        delivery.reason = delivery.state === 'rejected' ? 'Slack delivery reached its three-call limit. The complete request stays in the CLI inbox.' : result.reason;
-      } else { delivery.state = result.status; delivery.reason = result.reason; }
-      attempt.status = result.status === 'deferred' ? 'rate_limited' : delivery.state; attempt.reason = delivery.reason;
-      this.saveDelivery(delivery, result.status === 'confirmed' ? result.value : result.status === 'unknown' ? null : { reason: delivery.reason, at: now }); return true;
+      const delivery = this.delivery(lease.effectId), request = this.request(delivery.requestId);
+      const reason = result.status === 'confirmed' ? 'Slack delivery confirmed.' : result.reason;
+      if (result.status === 'confirmed' && (!validReceipt(result.value) || result.value.channelId !== delivery.channelId || result.value.workspaceId !== JSON.parse(request.destination).workspaceId || delivery.timestamp && result.value.timestamp !== delivery.timestamp)) throw new RuntimeError('Slack returned an invalid delivery receipt.');
+      const receipt = result.status === 'confirmed' ? { ...result.value, reason } : { reason, retryable: result.status === 'deferred', ...(result.status === 'deferred' ? { retryAt: result.retryAt, noMessageSent: !result.attempted } : {}) };
+      if (!this.store.finishEffect(lease, result.status === 'deferred' ? 'rejected' : result.status, receipt, now)) return false;
+      if (result.status === 'confirmed') { request.receipt = result.value; this.saveRequest(request); }
+      if (result.status === 'deferred') delivery.dueAt = result.retryAt;
+      delivery.reason = reason; this.saveDelivery(delivery); return true;
     });
   }
-  recover(now: number, abandonedProcess = false): void {
-    this.transaction(() => {
-      for (const delivery of this.deliveries()) if (delivery.state === 'unknown' && delivery.attempts.at(-1)?.status === 'sending' || delivery.state === 'sending' && (abandonedProcess || (delivery.leaseUntil ?? 0) <= now)) {
-        delivery.state = 'unknown'; delivery.owner = null; delivery.leaseUntil = null; delivery.reason = 'The daemon stopped before saving a Slack receipt. Reconcile delivery before resending.';
-        const attempt = delivery.attempts.at(-1); if (attempt) { attempt.status = 'unknown'; attempt.finishedAt = now; attempt.reason = delivery.reason; }
-        this.saveDelivery(delivery);
-      }
-    });
-  }
+  recover(now: number): void { this.store.recover(now); }
   reconcile(id: string, resolution: { action: 'delivered'; receipt: SlackReceipt } | { action: 'resend' }, now: number): SlackDeliveryRecord {
     return this.transaction(() => {
       const delivery = this.delivery(id), request = this.request(delivery.requestId);
       if (delivery.state !== 'unknown' && !(delivery.state === 'rejected' && resolution.action === 'resend')) throw new RuntimeError('Only an unknown delivery can be marked delivered; unknown or rejected deliveries can request a bounded resend.');
       if (resolution.action === 'delivered') {
         const receipt = resolution.receipt;
-        const destination = JSON.parse(request.destination) as { workspaceId: string };
-        if (!validReceipt(receipt) || receipt.workspaceId !== destination.workspaceId || delivery.channelId !== receipt.channelId || delivery.timestamp && delivery.timestamp !== receipt.timestamp) throw new RuntimeError('Use a matching workspace, channel and message timestamp receipt.');
-        delivery.state = 'confirmed'; delivery.reason = 'The operator confirmed delivery with a Slack receipt.'; request.receipt = receipt; this.saveRequest(request); this.saveDelivery(delivery, { ...receipt, reconciledAt: now });
+        if (!validReceipt(receipt) || receipt.workspaceId !== JSON.parse(request.destination).workspaceId || delivery.channelId !== receipt.channelId || delivery.timestamp && delivery.timestamp !== receipt.timestamp) throw new RuntimeError('Use a matching workspace, channel and message timestamp receipt.');
+        const reason = 'The operator confirmed delivery with a Slack receipt.';
+        if (!this.store.reconcileEffect(id, 'confirmed', { ...receipt, reason, reconciledAt: now }, now, true)) throw new RuntimeError('The delivery changed before reconciliation.');
+        request.receipt = receipt; this.saveRequest(request);
         if (request.status === 'superseded' && delivery.operation !== 'supersede') this.createDelivery(request, 'supersede', now, receipt);
-        return delivery;
+        return this.delivery(id);
       }
       if (request.resends >= 3) throw new RuntimeError('This request has used its three explicit resends. Retain the request in the inbox and inspect Slack access.');
-      request.resends++; this.saveRequest(request); delivery.state = 'rejected'; delivery.reason = 'The operator authorized a resend and accepted the risk of a duplicate prior delivery.'; this.saveDelivery(delivery, { authorization: 'resend', at: now, priorOutcome: 'unknown_or_rejected' });
-      if (request.status === 'superseded' && delivery.operation !== 'supersede') return delivery;
+      const authorization = { authorization: 'resend', at: now, priorOutcome: delivery.state, reason: 'The operator authorized a resend and accepted the risk of a duplicate prior delivery.' };
+      if (delivery.state === 'unknown') this.store.reconcileEffect(id, 'rejected', authorization, now, true);
+      else this.db.prepare('UPDATE effects SET receipt=? WHERE id=?').run(json(authorization), id);
+      request.resends++; this.saveRequest(request);
+      if (request.status === 'superseded' && delivery.operation !== 'supersede') return this.delivery(id);
       return this.createDelivery(request, delivery.operation, now, delivery.timestamp && delivery.channelId ? { workspaceId: JSON.parse(request.destination).workspaceId, channelId: delivery.channelId, timestamp: delivery.timestamp } : null, `${delivery.id}:resend:${request.resends}`);
     });
   }

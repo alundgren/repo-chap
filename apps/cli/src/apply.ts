@@ -3,15 +3,17 @@ import { loadWorkflow, WorkflowError } from '@repo-chap/workflow';
 import { localCredentials, localPushCredentials, localPullRequestWriteCredentials, localPublicationCredentials, validateTarget, GitHubReadError } from '@repo-chap/github';
 import { readProfile, ProviderConfigurationError } from '@repo-chap/providers';
 import { readApplyPolicy, requireApplyPolicy, RuntimeError } from '@repo-chap/runtime';
-import { runLocalApply, inspectLocalApply } from '@repo-chap/daemon';
+import { runLocalApply, inspectLocalApply, readSlackInstallation } from '@repo-chap/daemon';
 import { humanResult } from './daemon.js';
+import { slackInboxCommand } from './slack.js';
 
 export const applyHelp = `Local apply uses GH_TOKEN, GITHUB_TOKEN, or your gh login. It runs immediately due work for one PR and retains every attempt and effect in private state.
 
-  repo-chap apply <workflow.json> --repo <owner/name> --pr <number> --state-dir <private-directory> --provider-config <private-settings.json> --profile <name> --policy <private-apply-policy.json> [--plan] [--retry] [--repo-root <directory>] [--reviewers <login,login>] [--json]
+  repo-chap apply <workflow.json> --repo <owner/name> --pr <number> --state-dir <private-directory> --provider-config <private-settings.json> --profile <name> --policy <private-apply-policy.json> [--plan] [--retry] [--slack-config <private-slack.json>] [--repo-root <directory>] [--reviewers <login,login>] [--json]
   repo-chap apply inspect <run-id> --state-dir <private-directory> [--json]
   repo-chap apply reconcile <run-id> --state-dir <private-directory> [--json]
 
+Use apply inbox or apply slack-reconcile for offline retained Slack requests and explicit receipt/resend reconciliation.
 The private policy authorizes each selected action. Planned remote effects print before dispatch.
 --plan performs live GitHub reads, provider analysis or repair and local checks, then saves planned effects without remote writes.
 Run the same command without --plan to continue. --retry explicitly retries a retained failed action within its original limits.
@@ -21,6 +23,7 @@ Waiting work exits with its next wake time; rerun after that time. Ctrl-C stops 
 Exit 8 means local apply failed, was blocked, or needs unknown-outcome inspection; 130 means cancelled work.
 `;
 export async function applyCommand(args: string[]): Promise<void> {
+  if (args[0] === 'inbox' || args[0] === 'slack-reconcile') { const action = args.shift() as 'inbox' | 'slack-reconcile'; await slackInboxCommand(action, args, true); return; }
   const json = args.includes('--json'), controller = new AbortController(), cancel = () => controller.abort();
   process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
   try {
@@ -30,7 +33,7 @@ export async function applyCommand(args: string[]): Promise<void> {
     if (inspect && (!runId || runId.startsWith('-'))) throw new RuntimeError(`${command} requires a retained run ID.`);
     const options: Record<string, string> = {}, seen = new Set<string>();
     const flags = ['--json', ...(!inspect ? ['--plan', '--retry'] : [])];
-    const allowed = ['--state-dir', ...(!inspect ? ['--repo', '--pr', '--provider-config', '--profile', '--policy', '--repo-root', '--reviewers'] : []), ...flags];
+    const allowed = ['--state-dir', ...(!inspect ? ['--repo', '--pr', '--provider-config', '--profile', '--policy', '--slack-config', '--repo-root', '--reviewers'] : []), ...flags];
     while (args.length) {
       const option = args.shift()!;
       if (!allowed.includes(option) || seen.has(option)) throw new RuntimeError(`Unknown or repeated option: ${option}. See repo-chap apply --help.`);
@@ -56,6 +59,7 @@ export async function applyCommand(args: string[]): Promise<void> {
         reviewers: options['--reviewers']?.split(',').map(value => value.trim()), signal: controller.signal }, {
         credentials: await localCredentials(), profile: name => readProfile(config, name), applyPolicy: () => readApplyPolicy(policyPath), pushCredentials: name => localPushCredentials(name), threadCredentials: name => localPullRequestWriteCredentials(name),
         publicationCredentials: (name, capability) => localPublicationCredentials(name, capability),
+        ...(options['--slack-config'] ? { slack: await readSlackInstallation(resolve(options['--slack-config'])) } : {}),
         onPlannedEffect: effect => { if (!json && !displayed.has(effect.id)) { displayed.add(effect.id); process.stdout.write(`Planned ${effect.kind} to ${effect.destination}; expected ${effect.expectedRevision}. Effect ${effect.id}\n`); } },
       });
     }

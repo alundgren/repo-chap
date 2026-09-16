@@ -47,7 +47,7 @@ export class DaemonService {
   readonly now: () => number;
   constructor(readonly store: RuntimeStore, private readonly dependencies: DaemonDependencies) {
     this.now = dependencies.now ?? Date.now;
-    this.store.slack.recover(this.now(), true);
+    this.store.slack.recover(this.now());
     if (dependencies.slack) this.slackApi = new SlackApi({ ...dependencies.slack, now: this.now, rates: { read: key => store.slack.rate(key), extend: (key, until) => { store.slack.rate(key, until); } } });
   }
   private reader(): GitHubReader { return new GitHubReader(this.dependencies.credentials, { ...this.dependencies.readOptions, now: this.now, signal: this.shutdown.signal,
@@ -119,13 +119,20 @@ export class DaemonService {
       }
       this.abortStale(); this.dispatch();
       this.store.slack.supersedeStale(this.now());
-      if (this.slackApi && !this.slackCycle && (this.slackFailure?.retryAt ?? 0) <= this.now()) {
-        this.slackCycle = deliverSlack(this.store, this.slackApi, this.now, this.shutdown.signal, async run => (await this.dependencies.profile(this.store.repository(run.repositoryId).profile)).maximumCapabilities.includes('notify.send'))
+      if (this.slackApi && !this.dependencies.planOnly && !this.slackCycle && (this.slackFailure?.retryAt ?? 0) <= this.now()) {
+        this.slackCycle = deliverSlack(this.store, this.slackApi, this.now, this.shutdown.signal, run => this.slackPermitted(run), run => !this.dependencies.target || run.number === this.dependencies.target.number && this.store.repository(run.repositoryId).name.toLowerCase() === this.dependencies.target.repository.toLowerCase())
           .then(() => { this.slackFailure = null; })
           .catch(() => { this.slackFailure = { reason: 'Slack delivery could not persist its outcome. Inspect private storage and the inbox before reconciling any unknown send.', retryAt: this.now() + this.store.limits.pollSeconds * 1000 }; })
           .finally(() => { this.slackCycle = null; });
       }
     } finally { this.polling = false; }
+  }
+  private async slackPermitted(run: RunRecord): Promise<boolean> {
+    const repo = this.store.repository(run.repositoryId), target = this.dependencies.target;
+    if (!this.dependencies.applyPolicy || this.dependencies.planOnly || repo.paused || target && (repo.name.toLowerCase() !== target.repository.toLowerCase() || run.number !== target.number)) return false;
+    const policy = requireApplyPolicy(await this.dependencies.applyPolicy(repo.name), repo.name, ['notify.send']);
+    const profile = await this.dependencies.profile(repo.profile), pkg = await this.store.artifacts.get<WorkflowPackage>(run.package);
+    return policy.capabilities.includes('notify.send') && profile.maximumCapabilities.includes('notify.send') && pkg.workflow.requestedCapabilities.includes('notify.send') && (!repo.source || repo.source.maximumCapabilities.includes('notify.send'));
   }
   async poll(repo: RepositoryRecord): Promise<void> {
     if (this.store.cooldown() > this.now()) return;
@@ -207,6 +214,8 @@ export class DaemonService {
     if (action.uses === 'human.publish_packet') {
       const packet = await packetForRun(this.store, run, pkg, inspection, this.now());
       const request = await this.store.slack.queue(claim, packet, pkg.workflow.slack, this.now());
+      const effect = this.store.effects(run.id).find(value => this.store.slack.deliveries(run.id).some(delivery => delivery.requestId === request.id && delivery.id === value.id));
+      if (effect?.state === 'planned') await this.dependencies.onPlannedEffect?.(effect);
       run.control.memory = { ...run.control.memory, packetCurrent: true };
       park('waiting', `Decision packet retained in the CLI inbox. ${this.slackApi ? 'Slack delivery is queued independently.' : 'Slack delivery is disabled in installation settings.'} Request ${request.id}.`, null, action.onSuccess);
       return;

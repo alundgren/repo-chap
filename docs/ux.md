@@ -227,3 +227,9 @@ have accepted it. Storage failures appear in daemon status with the next process
 retry time. Reconciliation requires
 a matching receipt or an explicit resend command. Resend help explains possible
 duplicates and retained history. It does not restart analysis or repair.
+
+Local apply accepts optional private Slack settings. Its plan mode still performs
+no remote writes and retains the request for inspection. `apply inbox` and
+`apply slack-reconcile` use the same complete content and explicit receipt/resend
+wording as daemon controls, without requiring a running daemon. JSON distinguishes
+a confirmed logical delivery from its retained unknown historical send attempt.

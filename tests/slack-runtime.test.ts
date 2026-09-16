@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { RuntimeStore } from '@repo-chap/runtime';
 import { buildPackage, canonicalJson, digest } from '@repo-chap/workflow';
@@ -44,7 +45,7 @@ async function fixture(options: { source?: boolean } = {}) {
     await store.observe(repo.id, inspection, now);
   };
   return { ...source, directory, run, repo, calls, queue, deliver, revise, get api() { return api; }, advance: (milliseconds: number) => { now += milliseconds; }, get store() { return store; }, get now() { return now; }, failure: (mode: typeof fail) => { fail = mode; },
-    reopen: async () => { store.close(); store = await RuntimeStore.open(directory); store.slack.recover(now, true); api = createApi(); },
+    reopen: async () => { store.close(); store = await RuntimeStore.open(directory); now += 31_000; store.slack.recover(now); api = createApi(); },
     cleanup: async () => { store.close(); await source.cleanup(); } };
 }
 test('receipts survive restart and unchanged packets reuse one message without provider attempts', async () => {
@@ -146,13 +147,13 @@ test('migration during a send rejects late completion and retains the unknown at
   const s = await fixture({ source: true });
   try {
     await s.queue(); const delivery = s.store.slack.deliveries()[0]!;
-    s.store.slack.begin(delivery.id, 'GENGINEERS', 'old-worker', s.now);
+    const oldLease = s.store.slack.begin(delivery.id, 'GENGINEERS', 'old-worker', s.now)!;
     const files = Object.fromEntries(s.pkg.files.map(file => [file.path, file.text]));
     const prompt = s.pkg.files.find(file => file.path.endsWith('classify.md'))!; files[prompt.path] += '\nCheck the captured head.\n';
     const version = await s.store.activateSource(s.repo.id, '2'.repeat(40), 'main', buildPackage(s.pkg.workflowPath, files), s.now);
     await s.store.migrate(s.run.id, version.id, s.now);
     const receipt = { workspaceId: 'TFOREST', channelId: 'GENGINEERS', timestamp: '123456.000001' };
-    assert.equal(s.store.slack.finish(delivery.id, 'old-worker', { status: 'confirmed', value: receipt }, s.now), false);
+    assert.equal(s.store.slack.finish(oldLease, { status: 'confirmed', value: receipt }, s.now), false);
     await s.deliver(); assert.equal(s.calls.length, 0);
     assert.equal(s.store.slack.delivery(delivery.id).state, 'unknown');
     assert.equal(s.store.slack.delivery(delivery.id).attempts[0]?.status, 'unknown');
@@ -182,12 +183,10 @@ test('permission revoked while preparing a message rejects delivery before the m
 test('receipt persistence failure after acceptance becomes unknown and processing never repeats the send', async () => {
   const s = await fixture();
   try {
-    await s.queue(); const finish = s.store.slack.finish.bind(s.store.slack);
-    s.store.slack.finish = (id, owner, result, now) => {
-      if (result.status === 'confirmed') throw new Error('Fictional receipt write failure after acceptance.');
-      return finish(id, owner, result, now);
-    };
-    await s.deliver(); const delivery = s.store.slack.deliveries()[0]!;
+    await s.queue(); const db = new DatabaseSync(join(s.directory, 'runtime.sqlite'));
+    db.exec("CREATE TRIGGER fail_slack_receipt BEFORE UPDATE ON slack_requests WHEN json_extract(NEW.data,'$.receipt') IS NOT NULL BEGIN SELECT RAISE(FAIL,'Fictional receipt write failure after acceptance'); END;"); db.close();
+    await s.deliver(); const recovered = new DatabaseSync(join(s.directory, 'runtime.sqlite')); recovered.exec('DROP TRIGGER fail_slack_receipt'); recovered.close();
+    const delivery = s.store.slack.deliveries()[0]!;
     assert.equal(delivery.state, 'unknown'); assert.equal(delivery.attempts.length, 1); assert.equal(delivery.attempts[0]!.status, 'unknown');
     assert.equal(s.calls.filter(call => call.method === 'chat.postMessage').length, 1);
     await s.reopen(); await s.deliver(); assert.equal(s.calls.filter(call => call.method === 'chat.postMessage').length, 1);
@@ -213,15 +212,15 @@ test('daemon handles an unavailable Slack store with a visible retry delay and n
     assert.equal(s.calls.length, 0); assert.equal(s.store.inspect(s.run.id).attempts.length, 0);
   } finally { await service.stop(); await s.cleanup(); }
 });
-test('CLI inbox keeps complete content and reconciles unknown delivery through the local control socket', async () => {
+for (const mode of ['daemon', 'apply']) test(`${mode} CLI inbox keeps complete content and reconciles unknown delivery`, async () => {
   const s = await fixture();
   const service = new DaemonService(s.store, { directory: s.directory, credentials: tokenCredentials('fictional-token'), profile: async () => s.profile, now: () => s.now });
   const control = await serveControl(s.directory, service);
-  const cli = async (args: string[]) => promisify(execFile)(process.execPath, [resolve('apps/cli/dist/cli.js'), 'daemon', ...args, '--state-dir', s.directory, '--json']);
+  const cli = async (args: string[]) => promisify(execFile)(process.execPath, [resolve('apps/cli/dist/cli.js'), mode, ...args, '--state-dir', s.directory, '--json']);
   try {
     const completeFinding = 'A retained finding with full supporting context. '.repeat(1500);
     await s.queue({ findings: [completeFinding] }); const delivery = s.store.slack.deliveries()[0]!;
-    s.store.slack.begin(delivery.id, 'GENGINEERS', 'lost-worker', s.now); s.store.slack.recover(s.now, true);
+    s.store.slack.begin(delivery.id, 'GENGINEERS', 'lost-worker', s.now); s.advance(31_000); s.store.slack.recover(s.now);
     const inbox = JSON.parse((await cli(['inbox', s.run.id])).stdout);
     assert.equal(inbox.result[0].packet.findings[0], completeFinding);
     assert.ok(inbox.result[0].preview.message.text.length < completeFinding.length);
@@ -230,12 +229,90 @@ test('CLI inbox keeps complete content and reconciles unknown delivery through t
     assert.equal(s.store.slack.delivery(delivery.id).state, 'unknown');
     const reconciled = JSON.parse((await cli(['slack-reconcile', delivery.id, '--delivered', '--workspace', 'TFOREST', '--channel', 'GENGINEERS', '--timestamp', '123.000001'])).stdout);
     assert.equal(reconciled.result.state, 'confirmed');
+    assert.equal(reconciled.result.attempts[0].state, 'unknown');
+    assert.equal(s.store.inspect(s.run.id).effectAttempts[0]!.state, 'unknown');
     assert.equal(s.store.slack.request(delivery.requestId).receipt?.timestamp, '123.000001');
     await s.revise(); await s.queue({ reason: 'A new request with a lost result.' }); const next = s.store.slack.deliveries().find(item => item.state === 'planned')!;
-    s.store.slack.begin(next.id, 'GENGINEERS', 'lost-again', s.now); s.store.slack.recover(s.now, true);
+    s.store.slack.begin(next.id, 'GENGINEERS', 'lost-again', s.now); s.advance(31_000); s.store.slack.recover(s.now);
     const resend = JSON.parse((await cli(['slack-reconcile', next.id, '--resend'])).stdout);
     assert.equal(resend.result.state, 'planned'); assert.notEqual(resend.result.id, next.id);
     assert.equal(s.store.slack.delivery(next.id).attempts[0]?.status, 'unknown');
     assert.equal(s.calls.length, 0); assert.equal(s.store.inspect(s.run.id).attempts.length, 0);
   } finally { await control.close(); await service.stop(); await s.cleanup(); }
+});
+
+test('a parked packet uses shared effect ownership without scheduling or reserving provider work', async () => {
+  const s = await fixture();
+  try {
+    await s.queue(); const claim = s.store.claim(s.run.id, 'park-workflow', s.now, 30)!, current = s.store.run(s.run.id);
+    s.store.park(claim, 'waiting', 'Waiting for a human.', null, current.control, null, s.now);
+    const delivery = s.store.slack.deliveries()[0]!, lease = s.store.slack.begin(delivery.id, 'GENGINEERS', 'notification', s.now)!;
+    assert.ok(lease); assert.equal(s.store.run(s.run.id).owner, null); assert.equal(s.store.run(s.run.id).dueAt, null); assert.equal(s.store.run(s.run.id).nextAction, null);
+    assert.equal(s.store.effectAttempts(delivery.id).length, 1); assert.equal(s.store.effectCurrent(lease, s.now), true);
+    s.store.recover(s.now + 100); assert.equal(s.store.slack.delivery(delivery.id).state, 'sending');
+    assert.equal(s.store.claimForEffect(delivery.id, 'duplicate', s.now, 30), null);
+    assert.equal(s.store.claim(s.run.id, 'provider', s.now, 30), null);
+    assert.equal(s.store.inspect(s.run.id).attempts.length, 0); assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
+    s.advance(31_000); s.store.recover(s.now);
+    assert.equal(s.store.slack.delivery(delivery.id).state, 'unknown'); assert.equal(s.store.effectAttempts(delivery.id)[0]!.state, 'unknown');
+    assert.equal(s.store.claimForEffect(delivery.id, 'blind-retry', s.now, 30), null); await s.deliver(); assert.equal(s.calls.length, 0);
+  } finally { await s.cleanup(); }
+});
+
+test('Slack effect claims share repository contention with provider claims and keep the parked continuation', async () => {
+  const s = await fixture();
+  try {
+    await s.queue(); const other = structuredClone(s.inspection);
+    other.evidence.pullRequest!.id = 'PR_43'; other.evidence.pullRequest!.number = 43; other.evidence.requested.pr = 43;
+    other.evidenceDigest = digest(canonicalJson(other.evidence)); other.fixture.observations[0]!.evidenceDigest = other.evidenceDigest;
+    const second = (await s.store.observe(s.repo.id, other, s.now))!, claim = s.store.claim(second.id, 'provider-owner', s.now, 30)!; assert.ok(claim);
+    const delivery = s.store.slack.deliveries()[0]!;
+    assert.equal(s.store.slack.begin(delivery.id, 'GENGINEERS', 'notification', s.now), null); assert.equal(s.store.effectAttempts(delivery.id).length, 0);
+    s.store.park(claim, 'waiting', 'Provider work is idle.', null, second.control, null, s.now);
+    const db = new DatabaseSync(join(s.directory, 'runtime.sqlite')); db.prepare("UPDATE runs SET data=json_set(data,'$.steps',7,'$.agents',2) WHERE id=?").run(s.run.id); db.close();
+    const before = s.store.run(s.run.id), lease = s.store.slack.begin(delivery.id, 'GENGINEERS', 'notification', s.now)!; assert.ok(lease);
+    assert.equal(s.store.run(s.run.id).steps, before.steps); assert.equal(s.store.run(s.run.id).agents, before.agents);
+    assert.equal(s.store.run(s.run.id).status, before.status); assert.equal(s.store.run(s.run.id).nextAction, before.nextAction); assert.equal(s.store.run(s.run.id).dueAt, before.dueAt);
+    assert.equal(s.store.claimForEffect(delivery.id, 'another-owner', s.now, 30), null);
+    assert.equal(s.store.claim(second.id, 'provider-again', s.now, 30), null);
+    assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
+  } finally { await s.cleanup(); }
+});
+
+for (const interrupt of ['pause', 'cancel', 'new-head'] as const) test(`${interrupt} prevents Slack dispatch or fences late completion without erasing history`, async () => {
+  const s = await fixture();
+  try {
+    await s.queue(); const delivery = s.store.slack.deliveries()[0]!;
+    s.store.pause(s.repo.id, true, s.now); assert.equal(s.store.slack.begin(delivery.id, 'GENGINEERS', 'paused', s.now), null);
+    s.store.pause(s.repo.id, false, s.now);
+    const lease = s.store.slack.begin(delivery.id, 'GENGINEERS', 'active-owner', s.now)!; assert.ok(lease);
+    if (interrupt === 'pause') s.store.pause(s.repo.id, true, s.now);
+    else if (interrupt === 'cancel') s.store.cancel(s.run.id);
+    else await s.revise(true);
+    assert.equal(s.store.slack.finish(lease, { status: 'confirmed', value: { workspaceId: 'TFOREST', channelId: 'GENGINEERS', timestamp: '123.000001' } }, s.now), false);
+    assert.equal(s.store.slack.delivery(delivery.id).state, 'unknown'); assert.equal(s.store.effectAttempts(delivery.id)[0]!.state, 'unknown');
+    s.store.slack.supersedeStale(s.now); await s.deliver(); assert.equal(s.calls.length, 0);
+    assert.equal(s.store.inspect(s.run.id).attempts.length, 0);
+  } finally { await s.cleanup(); }
+});
+
+for (const mode of ['plan', 'denied', 'allowed'] as const) test(`shared service ${mode} delivery honors private notify policy without starting workflow work`, async () => {
+  const s = await fixture(), calls: string[] = [];
+  const service = new DaemonService(s.store, { directory: s.directory, credentials: tokenCredentials('fictional-token'), profile: async () => s.profile, now: () => s.now, planOnly: mode === 'plan',
+    applyPolicy: async () => ({ schemaVersion: 1, repository: s.repo.name, capabilities: mode === 'denied' ? [] : ['notify.send'], maxRepairsPerLifecycle: 1, maxPushAttempts: 1 }),
+    slack: { workspaceId: 'TFOREST', token: async () => 'fictional-token', transport: async (url, options) => {
+      const method = String(url).split('/').at(-1)!; calls.push(method);
+      if (method === 'auth.test') return Response.json({ ok: true, team_id: 'TFOREST' });
+      const body = JSON.parse(String(options?.body)); return Response.json({ ok: true, channel: body.channel, ts: '123.000001' });
+    } } });
+  try {
+    await s.queue(); const current = s.store.run(s.run.id), claim = s.store.claim(s.run.id, 'park-workflow', s.now, 30)!;
+    s.store.park(claim, 'waiting', 'The human decision is retained.', null, current.control, null, s.now);
+    s.store.pollFinished(s.repo.id, s.now + 60_000, null);
+    for (let count = 0; count < 4; count++) { await service.tick(); await service.idle(); s.advance(1500); }
+    assert.equal(s.store.slack.deliveries()[0]!.state, mode === 'plan' ? 'planned' : mode === 'denied' ? 'rejected' : 'confirmed');
+    assert.equal(calls.filter(method => method === 'chat.postMessage').length, mode === 'allowed' ? 1 : 0);
+    if (mode !== 'allowed') assert.equal(calls.length, 0);
+    assert.equal(s.store.inspect(s.run.id).attempts.length, 0); assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
+  } finally { await service.stop(); await s.cleanup(); }
 });
