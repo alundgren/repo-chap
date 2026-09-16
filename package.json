@@ -11,10 +11,13 @@
     "docs:build": "python3 docs/pr-workflows/build_presentation.py",
     "docs:browser": "node docs/pr-workflows/check-presentation.mjs",
     "browser:install": "playwright install chromium webkit",
-    "build": "pnpm --filter @repo-chap/workflow build && pnpm --filter @repo-chap/slack build && pnpm --filter @repo-chap/github build && pnpm --filter @repo-chap/providers build && pnpm --filter @repo-chap/execution build && pnpm --filter @repo-chap/runtime build && pnpm --filter @repo-chap/daemon build && pnpm --filter repo-chap build",
+    "build": "pnpm --filter @repo-chap/workflow build && pnpm --filter @repo-chap/slack build && pnpm --filter @repo-chap/github build && pnpm --filter @repo-chap/providers build && pnpm --filter @repo-chap/execution build && pnpm --filter @repo-chap/runtime build && pnpm --filter @repo-chap/daemon build && pnpm --filter repo-chap build && pnpm --filter @repo-chap/desktop build",
     "typecheck": "pnpm build && tsc --noEmit --allowImportingTsExtensions",
     "test": "pnpm build && node --test --test-reporter=dot tests/*.test.ts",
-    "check": "pnpm typecheck && pnpm test"
+    "check": "pnpm typecheck && pnpm test",
+    "desktop": "pnpm build && pnpm --filter @repo-chap/desktop start",
+    "desktop:package": "pnpm build && pnpm --filter @repo-chap/desktop package",
+    "test:desktop": "pnpm build && node --test --test-reporter=dot tests/desktop.electron.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",

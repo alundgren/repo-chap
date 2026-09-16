@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Repo Chap</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#source">Skip to source</a>
+  <header class="app-header">
+    <span class="brand">Repo Chap</span>
+    <span class="secondary">Local workflow editor</span>
+    <div class="controls open-controls">
+      <button id="open-repository">Open repository</button>
+      <button id="open-workflow">Open workflow</button>
+    </div>
+  </header>
+  <main>
+    <section id="welcome" class="welcome">
+      <p class="eyebrow">Workflow files</p>
+      <h1>Edit your workflow.</h1>
+      <p>Open a repository and choose its workflow JSON. Edit the source and its referenced Markdown together, then save when validation passes.</p>
+      <p class="secondary">Files stay on this computer. Opening and editing makes no provider calls.</p>
+    </section>
+    <section id="workspace" hidden aria-label="Workflow editor">
+      <div class="workspace-heading">
+        <div><p class="eyebrow">Workflow source</p><h1 id="workflow-name"></h1></div>
+        <p id="repository-path" class="path secondary"></p>
+      </div>
+      <p id="read-only" class="notice" hidden></p>
+      <div class="editor-bar">
+        <p id="dirty-state" role="status" aria-live="polite">All changes saved</p>
+        <div class="controls">
+          <button id="reload">Reload file</button>
+          <button id="discard" class="danger">Discard changes</button>
+          <button id="save" class="primary">Save all</button>
+        </div>
+      </div>
+      <div class="editor-layout">
+        <nav class="files" aria-label="Workflow files"><h2>Files</h2><div id="file-list"></div><p class="secondary file-help">Explicit references only. Switching files keeps your drafts.</p></nav>
+        <div class="source-pane">
+          <div class="file-heading"><label id="source-label" for="source">Source</label><span id="file-state" class="secondary"></span></div>
+          <p id="external" class="notice" hidden>This file changed on disk. Your draft has been kept. Use Reload file to read the disk version before saving.</p>
+          <p id="file-error" class="notice danger" hidden></p>
+          <textarea id="source" aria-describedby="source-help" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea>
+          <p id="source-help" class="secondary">Plain source. Save all writes the exact text of each changed file.</p>
+        </div>
+      </div>
+      <section class="validation" aria-label="Validation">
+        <div class="validation-heading"><h2 id="validation-title">Validation</h2><span id="revision" class="secondary"></span></div>
+        <ul id="diagnostics"></ul>
+        <p id="validation-ok" class="success">The captured workflow and referenced files are valid.</p>
+      </section>
+    </section>
+    <p id="message" role="status" aria-live="polite"></p>
+  </main>
+  <footer><span>Local files</span><span id="footer-detail">JSON and Markdown</span></footer>
+  <dialog id="confirmation" aria-labelledby="confirm-title" aria-describedby="confirm-detail">
+    <h2 id="confirm-title"></h2><p id="confirm-detail"></p><div id="confirm-actions" class="controls"></div>
+  </dialog>
+  <script src="renderer.js"></script>
+</body>
+</html>

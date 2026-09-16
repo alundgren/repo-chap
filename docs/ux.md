@@ -1,8 +1,8 @@
 # UX notes for Repo Chap
 
-The current UI is an offline investigation presentation with an editor concept.
-There is no production Electron UI yet. Its task is to explain PR automation
-and let an engineer try a bounded edit and fictional simulation on a laptop.
+The offline investigation presentation explains PR automation and includes an
+editor concept. The Electron app now opens and edits local workflow source and
+referenced files. Its current task is source authoring on macOS/Linux laptops.
 
 The presentation uses warm paper, IBM Plex Sans for reading, and IBM Plex Mono
 for source and identifiers. Font assets and their licence are local. Body text
@@ -24,10 +24,48 @@ The narrow layout places the inspector below the process. Architecture drawings
 scroll within their region. This is intentional so diagram labels stay readable.
 Semantic tokens in presentation.template.html bind the current roles.
 
-Implementation should record its actual desktop UI choices here as components
-ship. The existing browser check verifies navigation, editing, invalid input,
-reset, export, offline operation, and laptop/narrow layouts. Generated browser
-evidence stays outside Git.
+The presentation browser check verifies navigation, editing, invalid input,
+reset, export, offline operation, and laptop/narrow layouts. Generated evidence
+stays outside Git.
+
+## Desktop source editor
+
+The desktop uses the presentation's warm-paper roles and locally bundled IBM
+Plex Sans and Mono, with 16px reading and source text, 13.5px supporting text,
+17px section labels and a 28px to 36px workflow title. Regular and semibold are
+the only weights. Fields use #F9F6F0, borders #C1AF9A, successful validation
+#3D6034 and destructive actions #8F3A2D. Keyboard focus uses the link color.
+
+The app header opens a repository or workflow. A file list names the workflow
+and every explicit reference, including output contracts; workflow-relative paths distinguish
+files with the same basename. The source pane edits the selected file. Switching
+files retains drafts. A single Save all action validates and writes the captured
+drafts together. Validation errors name the affected file and JSON path, with
+keyboard-accessible links back to the source. Validation uses the shared runtime
+package, so the desktop does not maintain its own acceptance rules.
+
+The source editor keeps the approved presentation's toolbar, light source field,
+status placement, spacing and typography. It adds a file list because real
+authoring includes Markdown and output contracts. The source text is 16px rather
+than the presentation's 13.5px because it is the primary working content.
+
+The file list scrolls within its own region and keeps the workflow first. At
+widths below 600px it moves above the source. Paths wrap, controls wrap, and only source lines scroll
+horizontally. The page does not require horizontal scrolling. A skip link and
+visible focus support keyboard use; Tab leaves the source field normally.
+
+Unsaved counts, per-file draft markers, external-change notices and read-only
+unsupported-format notices stay visible. Reload replaces the selected buffer
+with disk text after confirmation. Discard restores its last loaded or saved
+text. Close and open protection offers save, discard and cancel, with Cancel
+focused initially. Escape cancels confirmations and returns focus to the prior
+control. A cancelled file picker keeps existing drafts. Save failures retain
+drafts and report partial saves when necessary. No force-overwrite control is
+provided; an external edit must be explicitly reloaded before saving.
+
+The app displays plain source for JSON and Markdown. It does not render Markdown
+HTML or follow links. Simulation, ordered visual editing, chat and live trials
+will add their own task views when those features ship.
 
 ## Offline CLI
 
