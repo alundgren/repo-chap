@@ -114,7 +114,8 @@ export async function runCodex(request: ProviderRequest): Promise<ProviderResult
     'Use only the supplied evidence. Source citations use repository paths and 1-based inclusive lines in sources.files. The base side is comparisonBaseSha; baseSha remains the captured target branch revision.',
     request.mode === 'read' ? 'This is read analysis. Do not modify files, push, publish reviews, change labels, send messages, or merge. No tool use is necessary.' : 'Work only in the caller-owned workspace. Do not push, publish reviews, change labels, send messages, or merge.',
     'If evidence is missing, classification must be uncertain and review must be partial and inconclusive, with every supplied missingEvidence entry retained. Do not invent source citations.',
-    canonicalJson({ actionContract: schema, instructions: pinned, evidence: request.evidence, sources, missingEvidence: request.missingEvidence }),
+    'Classification labels must come from allowedLabels below. An empty label list is allowed when none applies.',
+    canonicalJson({ actionContract: schema, allowedLabels: pkg.workflow.labels, instructions: pinned, evidence: request.evidence, sources, missingEvidence: request.missingEvidence }),
   ].join('\n\n');
   if (Buffer.byteLength(prompt) > 16 * 1024 * 1024) return end('blocked', 'Pinned inputs exceed the 16 MiB provider input limit. Reduce the workflow context or PR size.');
   const artifacts = await prepareCaptureDirectory(request.artifactDirectory);

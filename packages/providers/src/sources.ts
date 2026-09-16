@@ -46,7 +46,7 @@ export async function collectSources(repository: string, headSha: string, baseSh
         const content = await git(['cat-file', 'blob', blob], sourceLimits.fileBytes);
         if (content.status !== 'exited' || content.exitCode !== 0) { missingEvidence.push(`${side}:${path}: source could not be read within the deadline.`); continue; }
         try {
-          const text = new TextDecoder('utf-8', { fatal: true }).decode(content.stdout);
+          const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content.stdout);
           if (text.includes('\0')) throw new Error('binary');
           total += content.stdout.length;
           files.push({ path, side, revision, blob, text, digest: digest(text), lines: text ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0 });

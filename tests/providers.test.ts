@@ -57,7 +57,8 @@ if (mode === 'error') { console.error('credential-example-must-not-leak');proces
 const data=JSON.parse(input.split('\\n\\n').find(line=>line.startsWith('{')).split('\\n')[0]);
 const classify=input.startsWith('Perform agent.classify');
 const missing=data.missingEvidence;
-let result=classify?{schemaVersion:1,headSha:data.sources.headSha,labels:[{name:'other',reason:'The value changed.',evidence:[{path:'src/value.js',side:'head',startLine:1,endLine:1,explanation:'Updates the exported value.'}]}],uncertain:missing.length>0}:{schemaVersion:1,headSha:data.sources.headSha,baseSha:data.sources.baseSha,summary:'Reviewed the pinned value change.',verdict:missing.length?'inconclusive':'acceptable',coverage:missing.length?'partial':'complete',missingEvidence:missing,findings:[]};
+let result=classify?{schemaVersion:1,headSha:data.sources.headSha,labels:[{name:data.allowedLabels.includes('other')?'other':data.allowedLabels[0],reason:'The value changed.',evidence:[{path:'src/value.js',side:'head',startLine:1,endLine:1,explanation:'Updates the exported value.'}]}],uncertain:missing.length>0}:{schemaVersion:1,headSha:data.sources.headSha,baseSha:data.sources.baseSha,summary:'Reviewed the pinned value change.',verdict:missing.length?'inconclusive':'acceptable',coverage:missing.length?'partial':'complete',missingEvidence:missing,findings:[]};
+if(classify && !data.allowedLabels.length)result.labels=[];
 if(mode==='invalid')result={};
 if(mode==='citation' && classify)result.labels[0].evidence[0].endLine=99;
 if(mode==='wrong_side' && classify)result.labels[0].evidence[0].side='absent';
@@ -290,5 +291,39 @@ test('capture mismatch and unavailable Git objects block the public command with
     await writeFile(s.capture.fixture, JSON.stringify(fixture));
     const mismatch = s.run(); assert.equal(mismatch.status, 5); assert.match(mismatch.json.diagnostics[0].message, /digests/);
     assert.equal(await readFile(s.log, 'utf8').catch(() => ''), '');
+  } finally { await s.cleanup(); }
+});
+
+test('public analysis preserves UTF-8 BOM bytes in source evidence and Git blob identity', async () => {
+  const s = await setup();
+  try {
+    const text = '\ufeffexport const value = 3;\n'; await writeFile(join(s.repository, 'src/value.js'), text);
+    git(s.repository, 'commit', '-qam', 'Preserve text bytes'); const head = git(s.repository, 'rev-parse', 'HEAD');
+    s.inspection.evidence.pullRequest!.headSha = head; s.inspection.evidence.revision.headSha = head;
+    s.inspection.evidenceDigest = digest(canonicalJson(s.inspection.evidence));
+    s.inspection.fixture.observations[0]!.headSha = head; s.inspection.fixture.observations[0]!.evidenceDigest = s.inspection.evidenceDigest;
+    const capture = await saveCapture(join(s.temporary, 'captures'), s.inspection); s.args[s.args.indexOf('--capture') + 1] = capture.directory;
+    const result = s.run(); assert.equal(result.status, 0, result.stdout); assert.equal(result.json.decision, 'analysis_acceptable');
+    const inputs = (await readdir(s.output)).find(name => name.startsWith('inputs-'))!;
+    const source = JSON.parse(await readFile(join(s.output, inputs, 'sources.json'), 'utf8'));
+    assert.equal(source.files.find((file: { path: string; side: string }) => file.path === 'src/value.js' && file.side === 'head').text, text);
+    assert.deepEqual(source.missingEvidence, []);
+  } finally { await s.cleanup(); }
+});
+
+test('public analysis supplies a restricted workflow label set to the provider', async () => {
+  const s = await setup();
+  try {
+    const authored = join(s.temporary, 'authored'); s.args.push('--repo-root', authored);
+    for (const allowedLabels of [['tests'], []]) {
+      const files = Object.fromEntries(s.pkg.files.map(file => [file.path, file.text]));
+      const workflow = JSON.parse(files[s.pkg.workflowPath]!); workflow.labels = allowedLabels; files[s.pkg.workflowPath] = JSON.stringify(workflow);
+      const pkg = buildPackage(s.pkg.workflowPath, files);
+      for (const [path, text] of Object.entries(files)) { await mkdir(dirname(join(authored, path)), { recursive: true }); await writeFile(join(authored, path), text); }
+      s.inspection.packageDigest = pkg.digest;
+      const capture = await saveCapture(join(s.temporary, 'captures'), s.inspection); s.args[s.args.indexOf('--capture') + 1] = capture.directory;
+      s.args[1] = join(authored, pkg.workflowPath);
+      const result = s.run(); assert.equal(result.status, 0, result.stdout); assert.deepEqual(result.json.results.classify.payload.labels.map((label: { name: string }) => label.name), allowedLabels);
+    }
   } finally { await s.cleanup(); }
 });
