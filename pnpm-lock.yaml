@@ -26,6 +26,9 @@ importers:
       '@repo-chap/runtime':
         specifier: workspace:*
         version: link:packages/runtime
+      '@repo-chap/slack':
+        specifier: workspace:*
+        version: link:packages/slack
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:packages/workflow
@@ -56,6 +59,9 @@ importers:
       '@repo-chap/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@repo-chap/slack':
+        specifier: workspace:*
+        version: link:../../packages/slack
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
@@ -74,6 +80,9 @@ importers:
       '@repo-chap/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@repo-chap/slack':
+        specifier: workspace:*
+        version: link:../../packages/slack
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
@@ -116,6 +125,15 @@ importers:
       '@repo-chap/providers':
         specifier: workspace:*
         version: link:../providers
+      '@repo-chap/slack':
+        specifier: workspace:*
+        version: link:../slack
+      '@repo-chap/workflow':
+        specifier: workspace:*
+        version: link:../workflow
+
+  packages/slack:
+    dependencies:
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:../workflow

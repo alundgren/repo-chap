@@ -28,15 +28,15 @@ async function fixture(options: { failing?: boolean; reviewers?: string[]; limit
     restart: async () => { await service.stop(); store.close(); store = await RuntimeStore.open(directory, options.limits); service = new DaemonService(store, deps); },
     cleanup: async () => { await service.stop(); store.close(); await s.cleanup(); } };
 }
-test('daemon waits persist across restart and analysis progresses to a local effect stop', async () => {
+test('daemon waits persist across restart and analysis retains a local Slack handoff', async () => {
   const s = await fixture();
   try {
     await s.tick(); const waiting = s.store.runs()[0]!; assert.equal(waiting.status, 'waiting'); assert.equal(waiting.dueAt, s.now + 30_000); assert.equal(s.jobs.length, 0);
     await s.restart(); s.advance(30_001); await s.tick(); assert.equal(s.jobs.length, 1); assert.equal(s.store.run(waiting.id).control.memory?.classificationCurrent, true);
     await s.tick(); s.advance(60_001); await s.tick(); assert.equal(s.jobs.length, 2);
     await s.tick(); s.advance(60_001); await s.tick();
-    assert.equal(s.store.run(waiting.id).status, 'blocked'); assert.match(s.store.run(waiting.id).reason, /Analysis mode stopped before human.publish_packet/);
-    assert.deepEqual(s.store.effects(waiting.id), []); assert.equal(s.jobs.map(job => job.actionId).join(','), 'classify,review');
+    assert.equal(s.store.run(waiting.id).status, 'waiting'); assert.match(s.store.run(waiting.id).reason, /Decision packet retained in the CLI inbox/);
+    assert.equal(s.store.slack.requests(waiting.id).length, 1); assert.equal(s.store.effects(waiting.id)[0]?.state, 'planned'); assert.equal(s.jobs.map(job => job.actionId).join(','), 'classify,review');
     assert.ok(s.fake.calls.every(call => call.startsWith('Inspect') || call === 'PollPullRequests'));
     const ref = s.store.run(waiting.id).inspection; const latest = await s.store.artifacts.get<Inspection>(ref);
     assert.equal(latest.fixture.observations[0]!.headChangedAt, '2026-09-16T12:00:00.000Z');
@@ -56,7 +56,8 @@ test('provider failures remain visible and suppressed until a bounded explicit r
   const s = await fixture({ failing: true });
   try {
     await s.tick(); s.advance(31_000); await s.tick(); await s.tick(); const run = s.store.runs()[0]!;
-    assert.equal(run.status, 'blocked'); assert.equal(s.jobs.length, 1); assert.ok(!JSON.stringify(s.store.inspect(run.id)).includes('credential-not-for-output'));
+    assert.equal(run.status, 'waiting'); assert.equal(s.jobs.length, 1);
+    assert.equal((await s.store.slack.inbox(run.id) as { packet: { outcome: string } }[])[0]?.packet.outcome, 'blocked_execution'); assert.ok(!JSON.stringify(s.store.inspect(run.id)).includes('credential-not-for-output'));
     s.advance(61_000); await s.tick(); await s.restart(); s.advance(61_000); await s.tick(); assert.equal(s.jobs.length, 1);
     s.store.retry(run.id, s.now); await s.tick(); assert.equal(s.jobs.length, 2); assert.equal(s.store.inspect(run.id).reservations.length, 2);
   } finally { await s.cleanup(); }
@@ -156,7 +157,7 @@ test('one repository provider failure does not stop another repository analysis'
       await store.observe(repo.id, inspection, now);
     }
     service.dispatch(); await service.idle(); service.dispatch(); await service.idle();
-    assert.equal(store.runs('R_paperboat')[0]!.status, 'blocked'); assert.equal(store.runs('R_sailboat')[0]!.control.memory?.classificationCurrent, true);
+    assert.equal(store.runs('R_paperboat')[0]!.status, 'waiting'); assert.equal(store.runs('R_sailboat')[0]!.control.memory?.classificationCurrent, true);
   } finally { await service.stop(); store.close(); await s.cleanup(); }
 });
 test('foreground daemon starts with private App settings and recovers its socket after SIGKILL', async () => {

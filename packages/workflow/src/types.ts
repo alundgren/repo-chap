@@ -23,7 +23,7 @@ export interface Workflow {
   requestedCapabilities: Capability[]; labels: string[];
   rules: { id: string; when: Condition; action: string }[];
   otherwise: string; actions: Record<string, Action>; layout?: Record<string, unknown>;
-  slack?: { workspaceId: string; users: Record<string, string>; channels: Record<string, string>; defaultChannel: string; routes: Record<PacketOutcome, string> };
+  slack?: { workspaceId: string; users: Record<string, string>; channels: Record<string, string>; defaultChannel: string; routes: Record<PacketOutcome, string>; mentions?: Partial<Record<PacketOutcome, string[]>> };
 }
 export interface Diagnostic { code: string; path: string; message: string }
 export interface PinnedFile { path: string; text: string; digest: string }

@@ -9,6 +9,7 @@ import { applyPolicyDigest, requireApplyPolicy, type ApplyPolicy } from './polic
 import { ArtifactStore, RuntimeError } from './artifacts.js';
 import { onlyPublicationChanges } from './publication.js';
 import { defaultLimits, type AnalysisJob, type AnalysisResult, type ArtifactRef, type Claim, type EffectRecord, type EffectRequest, type EffectState, type EffectLease, type EffectAttempt, type RepairAttemptJob, type RepairAttemptResult, type MigrationRecord, type Registration, type RepositoryRecord, type RunRecord, type RuntimeLimits, type SourceRegistration, type WorkflowVersion } from './types.js';
+import { SlackOutbox } from './slack.js';
 
 const json = (value: unknown): string => canonicalJson(JSON.parse(JSON.stringify(value)));
 const day = (now: number) => new Date(now).toISOString().slice(0, 10);
@@ -28,6 +29,7 @@ export function validateLimits(input: Partial<RuntimeLimits> = {}): RuntimeLimit
 export class RuntimeStore {
   readonly artifacts: ArtifactStore;
   private readonly repairDirectory: string;
+  readonly slack: SlackOutbox;
   private constructor(private readonly db: DatabaseSync, directory: string, readonly limits: RuntimeLimits) {
     this.artifacts = new ArtifactStore(join(directory, 'artifacts'));
     this.repairDirectory = join(directory, 'repairs');
@@ -50,7 +52,7 @@ export class RuntimeStore {
       CREATE TABLE IF NOT EXISTS migrations (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS attempt_run ON attempts(run_id, head_sha);
       CREATE INDEX IF NOT EXISTS budget_day ON reservations(day, repository_id);`);
-    this.transaction(() => {
+    this.slack = this.transaction(() => {
       const schema = db.prepare("SELECT value FROM metadata WHERE key='schema'").get() as { value: string } | undefined;
       if (schema?.value === '1') {
         for (const repo of this.repositories()) {
@@ -64,6 +66,7 @@ export class RuntimeStore {
         db.prepare("UPDATE effects SET state='unknown' WHERE state='sending'").run();
       }
       db.prepare("INSERT INTO metadata VALUES ('schema','3') ON CONFLICT(key) DO UPDATE SET value='3'").run();
+      return new SlackOutbox(db, this.artifacts, id => this.run(id));
     });
   }
   static async open(directory: string, input: Partial<RuntimeLimits> = {}): Promise<RuntimeStore> {

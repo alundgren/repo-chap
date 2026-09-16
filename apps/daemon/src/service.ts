@@ -10,6 +10,8 @@ import { dispatchCandidatePush, reconcilePendingPushes } from './push.js';
 import { dispatchThreadResolutions, reconcilePendingThreads } from './threads.js';
 import { dispatchPublication, reconcilePendingPublications } from './publication.js';
 import { fetchWorkflowCommit } from './source.js';
+import { SlackApi, type SlackApiOptions } from '@repo-chap/slack/web-api';
+import { deliverSlack, packetForRun } from './slack.js';
 
 export interface DaemonDependencies {
   credentials: CredentialSource; profile: (name: string) => Promise<ProviderProfile>; directory: string;
@@ -29,6 +31,7 @@ export interface DaemonDependencies {
   planOnly?: boolean;
   onPlannedEffect?: (effect: EffectRecord) => void | Promise<void>;
   execute?: (job: AnalysisJob, profile: ProviderProfile, signal: AbortSignal, isCurrent: () => boolean) => Promise<AnalysisResult>;
+  slack?: Omit<SlackApiOptions, 'rates' | 'now'>;
 }
 export class DaemonService {
   private readonly owner = randomUUID();
@@ -38,8 +41,14 @@ export class DaemonService {
   private stopped = false;
   private readonly shutdown = new AbortController();
   private cycle: Promise<void> | null = null;
+  private slackCycle: Promise<void> | null = null;
+  private readonly slackApi?: SlackApi;
   readonly now: () => number;
-  constructor(readonly store: RuntimeStore, private readonly dependencies: DaemonDependencies) { this.now = dependencies.now ?? Date.now; }
+  constructor(readonly store: RuntimeStore, private readonly dependencies: DaemonDependencies) {
+    this.now = dependencies.now ?? Date.now;
+    this.store.slack.recover(this.now(), true);
+    if (dependencies.slack) this.slackApi = new SlackApi({ ...dependencies.slack, now: this.now, rates: { read: key => store.slack.rate(key), extend: (key, until) => { store.slack.rate(key, until); } } });
+  }
   private reader(): GitHubReader { return new GitHubReader(this.dependencies.credentials, { ...this.dependencies.readOptions, now: this.now, signal: this.shutdown.signal,
     cooldown: { read: () => this.store.cooldown(), extend: until => { this.store.cooldown(until); } } }); }
   async register(input: Omit<Registration, 'id'>): Promise<RepositoryRecord> {
@@ -108,6 +117,8 @@ export class DaemonService {
         if (repo.nextPollAt <= this.now()) await this.poll(repo);
       }
       this.abortStale(); this.dispatch();
+      this.store.slack.supersedeStale(this.now());
+      if (this.slackApi && !this.slackCycle) this.slackCycle = deliverSlack(this.store, this.slackApi, this.now, this.shutdown.signal, async run => (await this.dependencies.profile(this.store.repository(run.repositoryId).profile)).maximumCapabilities.includes('notify.send')).finally(() => { this.slackCycle = null; });
     } finally { this.polling = false; }
   }
   async poll(repo: RepositoryRecord): Promise<void> {
@@ -187,6 +198,13 @@ export class DaemonService {
       park(status, scheduling.reason, scheduling.nextWakeAt ? Math.max(Date.parse(scheduling.nextWakeAt), retryAt(inspection)) : status === 'waiting' ? this.now() + this.store.limits.pollSeconds * 1000 : null);
       return;
     }
+    if (action.uses === 'human.publish_packet') {
+      const packet = await packetForRun(this.store, run, pkg, inspection, this.now());
+      const request = await this.store.slack.queue(claim, packet, pkg.workflow.slack, this.now());
+      run.control.memory = { ...run.control.memory, packetCurrent: true };
+      park('waiting', `Decision packet retained in the CLI inbox. ${this.slackApi ? 'Slack delivery is queued independently.' : 'Slack delivery is disabled in installation settings.'} Request ${request.id}.`, null, action.onSuccess);
+      return;
+    }
     const repairing = ['agent.resolve_conflict', 'agent.address_review'].includes(action.uses);
     const publishing = ['github.publish_review', 'github.set_labels'].includes(action.uses);
     const applying = repairing || publishing || ['checks.validate_candidate', 'github.push_candidate', 'github.resolve_eligible_threads'].includes(action.uses);
@@ -262,9 +280,9 @@ export class DaemonService {
     run = this.store.run(claim.runId);
   }
   abortStale(): void { for (const active of this.active.values()) if (!this.store.isCurrent(active.claim, this.now()) && !this.store.ownsEffect(active.claim.runId, this.owner, this.now())) active.controller.abort('superseded'); }
-  async idle(): Promise<void> { await Promise.all([...this.active.values()].map(value => value.done)); }
+  async idle(): Promise<void> { await Promise.all([...this.active.values()].map(value => value.done)); await this.slackCycle; }
   async stop(): Promise<void> { this.stopped = true; this.shutdown.abort(); for (const active of this.active.values()) active.controller.abort(); await this.cycle; await Promise.all(this.sourceReads.values()); await this.idle(); }
-  status(): unknown { return { schemaVersion: 1, mode: this.dependencies.applyPolicy ? 'apply' : 'analysis', githubRetryAt: this.store.cooldown() || null, limits: this.store.limits, repositories: this.store.repositories(), runs: this.store.runs() }; }
+  status(): unknown { return { schemaVersion: 1, mode: this.dependencies.applyPolicy ? 'apply' : 'analysis', slackEnabled: !!this.slackApi, slackDeliveries: this.store.slack.deliveries(), githubRetryAt: this.store.cooldown() || null, limits: this.store.limits, repositories: this.store.repositories(), runs: this.store.runs() }; }
 }
 function waitingWorkflow(workflow: Workflow, run: RunRecord, observation: Observation): Workflow {
   const timing = run.waitTiming;

@@ -20,6 +20,7 @@
     "@repo-chap/providers": "workspace:*",
     "@repo-chap/execution": "workspace:*",
     "@repo-chap/daemon": "workspace:*",
-    "@repo-chap/runtime": "workspace:*"
+    "@repo-chap/runtime": "workspace:*",
+    "@repo-chap/slack": "workspace:*"
   }
 }
