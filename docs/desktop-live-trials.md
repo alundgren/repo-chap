@@ -33,6 +33,12 @@ before any GitHub or provider call and requires another explicit Start. Changing
 or removing a prepared profile clears that proposal. A retained result continues
 to identify the settings used by its actual run.
 
+Codex checks its native instruction and skill settings before sending analysis
+inputs. A blocked result explains when an instruction-free `CODEX_HOME` with a
+normal Codex login is required. The draft and selected trial inputs remain
+available; correct the local setup and press Start again. See
+[Codex analysis settings](codex-analysis.md#operator-profiles-and-capability-checks).
+
 ## Retained evidence
 
 The shared `runAnalysis` API powers the CLI and desktop analysis. It uses

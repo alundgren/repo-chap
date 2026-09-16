@@ -223,6 +223,11 @@ settings clear the prepared proposal; an outdated Start rejects before calls and
 asks the person to review the refreshed selection. Retained findings keep their
 original provider identity.
 
+If Codex's native settings include unsupported ambient instructions, the retained
+blocked result explains the instruction-free `CODEX_HOME` and normal login needed
+before another run. It says that analysis inputs were not sent. The draft and
+selection stay available; fixing the local setup requires another explicit Start.
+
 The result leads with completion status and the analysis decision. Actual findings
 and missing evidence precede detailed identities. Tested head, target base and
 comparison base have separate labels. Actual token counts and estimates have

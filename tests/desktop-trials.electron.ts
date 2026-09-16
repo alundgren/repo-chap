@@ -213,6 +213,29 @@ for (const provider of ['codex', 'claude'] as const) test(`Electron ${provider} 
   await page.screenshot({ path: join(proof!, `trial-14-${provider}-preserved-evidence.png`), fullPage: true });
 });
 
+test('Electron retains a blocked Codex settings result and requires explicit Start after recovery', { timeout: 90_000 }, async t => {
+  const f = await launch(t, 'trial-codex-settings'), { page } = f;
+  await f.mode('codex', 'ambient-global');
+  await f.start(); await f.finished('blocked');
+  const blocked = await f.last();
+  assert.equal(blocked.analysis!.results.classify!.attempts.length, 0);
+  assert.equal((await f.calls()).some(args => args.includes('exec') && !args.includes('--help')), false);
+  await expect(page.locator('#trial-result')).toContainText('instruction-free CODEX_HOME');
+  await expect(page.locator('#trial-result')).toContainText('Analysis inputs were not sent.');
+  await page.screenshot({ path: join(proof!, 'trial-18-codex-settings-blocked.png'), fullPage: true });
+  await f.mode('codex', 'valid');
+  assert.equal((await f.last()).id, blocked.id);
+  await f.start(); await f.finished();
+  const recovered = await f.last();
+  assert.notEqual(recovered.id, blocked.id); assert.deepEqual(recovered.document, blocked.document);
+  assert.equal(recovered.draftDigest, blocked.draftDigest);
+  await expect(page.locator('#trial-result')).toContainText('Reviewed the pinned value change.');
+  assert.equal(JSON.parse(await readFile(blocked.recordPath, 'utf8')).status, 'blocked');
+  await page.screenshot({ path: join(proof!, 'trial-19-codex-settings-recovered.png'), fullPage: true });
+  assert.equal(await f.electron.evaluate(() => (globalThis as any).trialFixture.mutations), 0);
+  assert.deepEqual(f.errors, []); assert.deepEqual(f.requests, []);
+});
+
 test('Electron binds Start to displayed settings across provider, model, effort and profile removal', { timeout: 120_000 }, async t => {
   const f = await launch(t, 'trial-profile-binding'), { page } = f;
   const settings = JSON.parse(await readFile(f.source.settings, 'utf8'));

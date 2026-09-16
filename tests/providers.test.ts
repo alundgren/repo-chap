@@ -33,6 +33,52 @@ test('analyze CLI binds correct code, keeps supported usage separate, and saves 
   } finally { await s.cleanup(); }
 });
 
+for (const mode of ['ambient-global', 'custom-instructions', 'model-instructions', 'skills-error']) test(`Codex rejects ${mode} before sending pinned action inputs`, async () => {
+  const s = await setup(mode);
+  try {
+    const result = s.run(); assert.equal(result.status, 5); assert.equal(result.json.status, 'blocked');
+    assert.equal(result.json.results.classify.attempts.length, 0);
+    assert.ok(!result.stdout.includes('PRIVATE_'));
+    const calls: string[][] = (await readFile(s.log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(calls.some(args => args.includes('exec') && !args.includes('--help')), false);
+    assert.equal((await readFile(s.settingsLog, 'utf8')).includes('turn/start'), false);
+  } finally { await s.cleanup(); }
+});
+
+test('Codex native settings inspection shares cancellation and action deadline', async () => {
+  for (const cancel of [false, true]) {
+    const s = await setup('settings-hang', { timeoutMs: cancel ? 10_000 : 500 });
+    const controller = new AbortController();
+    const timer = cancel ? setTimeout(() => controller.abort('superseded'), 500) : undefined;
+    try {
+      const sources = await collectSources(s.repository, s.head, s.base);
+      const result = await runCodex({ package: s.pkg, profile: s.profile, actionId: 'classify', mode: 'read', workingDirectory: s.temporary, artifactDirectory: s.output,
+        sources, evidence: s.inspection.evidence, evidenceDigest: s.inspection.evidenceDigest, fixtureDigest: 'fixture', missingEvidence: [], signal: controller.signal });
+      assert.equal(result.outcome, cancel ? 'superseded' : 'timeout'); assert.equal(result.attempts.length, 0); assert.equal(result.session, undefined);
+    } finally { clearTimeout(timer); await s.cleanup(); }
+  }
+});
+
+test('Codex transient isolation settings invalidate sessions from the earlier adapter', async () => {
+  const s = await setup();
+  try {
+    const first = s.run(); assert.equal(first.status, 0);
+    const result = first.json;
+    for (const action of ['classify', 'review']) {
+      const old = result.results[action];
+      old.session.providerDigest = digest(canonicalJson({ provider: 'codex', version: old.providerVersion, profile: s.profile, effectiveEffort: 'medium', authHome: process.env.CODEX_HOME ?? process.env.HOME ?? '', userConfig: 'ignored' }));
+    }
+    await writeFile(first.json.recordPath, JSON.stringify(result));
+    const again = s.run('--resume', first.json.recordPath); assert.equal(again.status, 0);
+    assert.equal(again.json.results.classify.attempts[0].resumed, false); assert.equal(again.json.results.review.attempts[0].resumed, false);
+    const calls: string[][] = (await readFile(s.log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const actions = calls.filter(args => args.includes('exec') && !args.includes('--help'));
+    assert.ok(actions.every(args => args.includes('project_doc_max_bytes=0') && args.includes('features.skip_host_skill_discovery=true') && args.some(value => value.startsWith('skills=') && value.includes('"enabled"=false'))));
+    const inspections = (await readFile(s.settingsLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    assert.ok(inspections.filter(x => x.method === 'thread/start').every(x => x.params.ephemeral && x.params.config.skills.config.every((skill: { enabled: boolean }) => !skill.enabled)));
+  } finally { await s.cleanup(); }
+});
+
 for (const mode of ['invalid', 'citation', 'wrong_side', 'wrong_head', 'unsupported', 'flood', 'error']) test(`analyze CLI reports ${mode} without accepting old readiness`, async () => {
   const s = await setup(mode);
   try {
@@ -68,6 +114,13 @@ test('same inputs resume exact sessions; settings changes start fresh and replac
     const first = s.run(); assert.equal(first.status, 0, first.stdout);
     const second = s.run('--resume', first.json.recordPath); assert.equal(second.status, 0, second.stdout);
     assert.ok(Object.values(second.json.results).every((value: any) => value.attempts[0].resumed));
+    const calls: string[][] = (await readFile(s.log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const resumedCalls = calls.filter(args => args.includes('resume') && !args.includes('--help'));
+    assert.equal(resumedCalls.length, 2);
+    for (const args of resumedCalls) {
+      for (const option of ['--strict-config', '--ignore-user-config', '--config', 'project_doc_max_bytes=0', 'sandbox_mode="read-only"', 'approval_policy="never"'])
+        assert.ok(args.indexOf(option) > args.indexOf('resume'), `${option} must apply to the resume subcommand`);
+    }
     const config = JSON.parse(await readFile(s.settings, 'utf8')); config.profiles.pilot.effort = 'high'; await writeFile(s.settings, JSON.stringify(config));
     const changed = s.run('--resume', second.json.recordPath); assert.equal(changed.status, 0, changed.stdout);
     assert.ok(Object.values(changed.json.results).every((value: any) => !value.attempts[0].resumed));

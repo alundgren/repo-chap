@@ -6,6 +6,7 @@ import { prepareCaptureDirectory } from '@repo-chap/github';
 import type { ProcessResult } from './process.js';
 import { object, processOutcome, runAction, type ProviderTransport, type Invoke } from './runner.js';
 import type { Outcome, ProviderProfile, ProviderRequest, ProviderResult, Usage } from './types.js';
+import { codexActionSettings, codexConfigArguments } from './codex-action-settings.js';
 
 function decode(result: ProcessResult): { payload: unknown; session?: string; usage: Usage['actual']; failed: boolean } {
   let text: string | undefined, session: string | undefined, usage: Usage['actual'] = null, completed = false, failed = false;
@@ -79,24 +80,30 @@ const codex: ProviderTransport = {
   provider: 'codex', label: 'Codex', maxInputBytes: 16 * 1024 * 1024,
   resultInstruction: 'Return an object with exactly one string field, resultJson. That string must contain the JSON result satisfying both full action contracts below.',
   validSession: id => /^[a-zA-Z0-9_-]{1,128}$/.test(id), decode,
-  async prepare(request, invoke) {
+  async prepare(request, invoke, deadline) {
     const { profile } = request;
     const checked = await probeCodex(profile, invoke);
     if ('outcome' in checked) return checked;
     const { version: versionText, effectiveEffort } = checked;
+    const help = await invoke(['app-server', '--help'], 128 * 1024);
+    if (processOutcome(help) || !['--stdio', '--strict-config'].every(flag => help.stdout.toString().includes(flag)))
+      return { outcome: processOutcome(help) ?? 'blocked', version: versionText, diagnostic: 'This Codex lacks the native settings inspection required for analysis. Install a supported Codex CLI.' };
+    const settings = await codexActionSettings(request, deadline);
+    if ('outcome' in settings) return { ...settings, version: versionText };
     const artifacts = await prepareCaptureDirectory(request.artifactDirectory);
     const schemaPath = join(artifacts, `schema-${randomUUID()}.json`);
     await writeFile(schemaPath, JSON.stringify({ type: 'object', properties: { resultJson: { type: 'string' } }, required: ['resultJson'], additionalProperties: false }), { flag: 'wx', mode: 0o600 });
     return {
       version: versionText,
-      identity: { effectiveEffort, authHome: process.env.CODEX_HOME ?? process.env.HOME ?? '', userConfig: 'ignored' },
+      identity: { effectiveEffort, authHome: process.env.CODEX_HOME ?? process.env.HOME ?? '', userConfig: 'ignored', isolationVersion: 1, isolation: settings.config },
       canResume: async () => {
         const resume = await invoke(['exec', 'resume', '--help'], 128 * 1024);
-        return !processOutcome(resume) && ['--json', '--output-schema'].every(flag => resume.stdout.toString().includes(flag));
+        return !processOutcome(resume) && ['--json', '--output-schema', '--ignore-user-config', '--strict-config', '--model', '--config', '--skip-git-repo-check'].every(flag => resume.stdout.toString().includes(flag));
       },
-      run: (input, session) => invoke(['--ask-for-approval', 'never', 'exec', '--strict-config', '--ignore-user-config', '--model', profile.model,
-        '--config', `model_reasoning_effort=${JSON.stringify(effectiveEffort)}`, '--sandbox', request.mode === 'read' ? 'read-only' : 'workspace-write',
-        '--skip-git-repo-check', ...(session ? ['resume'] : []), '--json', '--output-schema', schemaPath, ...(session ? [session] : []), '-'], profile.maxOutputBytes, input),
+      run: (input, session) => invoke(['--ask-for-approval', 'never', 'exec', ...(session ? ['resume'] : []), '--strict-config', '--ignore-user-config', '--model', profile.model,
+        ...codexConfigArguments(settings.config), '--config', `model_reasoning_effort=${JSON.stringify(effectiveEffort)}`,
+        ...(session ? [] : ['--sandbox', request.mode === 'read' ? 'read-only' : 'workspace-write']),
+        '--skip-git-repo-check', '--json', '--output-schema', schemaPath, ...(session ? [session] : []), '-'], profile.maxOutputBytes, input),
       dispose: () => rm(schemaPath, { force: true }),
     };
   },
