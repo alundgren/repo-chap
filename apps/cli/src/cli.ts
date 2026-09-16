@@ -2,6 +2,8 @@
 import { loadWorkflow, parseFixture, parseJson, readFixtureText, replay, WorkflowError, type ReplayResult, type ConditionTrace } from '@repo-chap/workflow';
 import { CaptureError, GitHubReadError, validateTarget } from '@repo-chap/github';
 import { inspectCommand } from './inspect.js';
+import { analyzeCommand } from './analyze.js';
+import { readProfile, ProviderConfigurationError } from '@repo-chap/providers';
 
 const help = `repo-chap validates, replays, and inspects repository workflows.
 
@@ -9,15 +11,18 @@ Usage:
   repo-chap validate <workflow.json> [--repo-root <directory>] [--json]
   repo-chap replay <workflow.json> --fixture <fixture.json> [--repo-root <directory>] [--json]
   repo-chap inspect <workflow.json> --repo <owner/name> --pr <number> --capture-dir <private-directory> [--reviewers <login,login>] [--repo-root <directory>] [--json]
+  repo-chap analyze <workflow.json> --capture <inspection-directory> --source-repo <local-git-repository> --output-dir <private-directory> --provider-config <private-settings.json> --profile <name> [--resume <decision.json>] [--repo-root <directory>] [--json]
 
 Replay uses supplied observations, results, control state, and time.
 It never runs providers, commands, or remote effects. Humans merge.
 Inspect reads GitHub using GH_TOKEN, GITHUB_TOKEN, or your local gh login.
 It saves a private fixture and evidence outside Git, with no models or repository writes.
 Optional reviewer logins use PR eyes reactions as bounded waiting hints.
+Analyze explicitly starts a local provider to classify and review captured revisions.
+It saves a private decision and never publishes, pushes, sends messages, or merges.
 
 Exit codes: 0 valid or replay completed, 2 invalid workflow/package,
-3 invalid fixture, 4 incomplete inspection/access/capture failure,
+3 invalid fixture, 4 incomplete inspection/access/capture failure, 5 analysis failure,
 64 invalid command, 70 unexpected internal failure, 130 cancelled inspection.
 A simulated wait, block, or missing stub is a successful replay with exit 0.
 `;
@@ -44,7 +49,7 @@ async function main(): Promise<void> {
   try {
     const command = args.shift();
     const file = args.shift();
-    if (!['validate', 'replay', 'inspect'].includes(command ?? '') || !file || file.startsWith('-')) throw new Error('Use validate, replay, or inspect followed by a workflow path. See --help.');
+    if (!['validate', 'replay', 'inspect', 'analyze'].includes(command ?? '') || !file || file.startsWith('-')) throw new Error('Use validate, replay, inspect, or analyze followed by a workflow path. See --help.');
     let repositoryRoot: string | undefined, fixture: string | undefined;
     const inspectOptions: Record<string, string> = {};
     const seen = new Set<string>();
@@ -53,13 +58,14 @@ async function main(): Promise<void> {
       if (seen.has(option)) throw new Error(`Repeated option: ${option}`);
       seen.add(option);
       if (option === '--json') continue;
-      if (option !== '--repo-root' && option !== '--fixture' && !(command === 'inspect' && ['--repo', '--pr', '--capture-dir', '--reviewers'].includes(option))) throw new Error(`Unknown option: ${option}. See --help.`);
+      if (option !== '--repo-root' && option !== '--fixture' && !(command === 'inspect' && ['--repo', '--pr', '--capture-dir', '--reviewers'].includes(option)) && !(command === 'analyze' && ['--capture', '--source-repo', '--output-dir', '--provider-config', '--profile', '--resume'].includes(option))) throw new Error(`Unknown option: ${option}. See --help.`);
       const value = args.shift();
       if (!value || value.startsWith('-')) throw new Error(`${option} requires a value.`);
       if (option === '--repo-root') repositoryRoot = value; else if (option === '--fixture') fixture = value; else inspectOptions[option] = value;
     }
     if (command === 'replay' && !fixture) throw new Error('Replay requires --fixture <fixture.json>.');
     if (command !== 'replay' && fixture) throw new Error('--fixture is only used with replay.');
+    if (command === 'analyze' && ['--capture', '--source-repo', '--output-dir', '--provider-config', '--profile'].some(key => !inspectOptions[key])) throw new Error('Analyze requires --capture, --source-repo, --output-dir, --provider-config, and --profile. See --help.');
     if (command === 'inspect') {
       if (!inspectOptions['--repo'] || !inspectOptions['--pr'] || !inspectOptions['--capture-dir']) throw new Error('Inspect requires --repo, --pr, and --capture-dir. See --help.');
       if (!/^\d+$/.test(inspectOptions['--pr'])) throw new Error('--pr requires a positive integer.');
@@ -67,13 +73,17 @@ async function main(): Promise<void> {
       if (inspectOptions['--reviewers']?.split(',').some(s => !/^[a-z0-9][a-z0-9-]*(\[bot\])?$/i.test(s.trim()))) throw new Error('--reviewers requires comma-separated GitHub logins.');
     }
     phase = 2;
-    const pkg = await loadWorkflow(file, { repositoryRoot });
+    const profile = command === 'analyze' ? await readProfile(inspectOptions['--provider-config']!, inspectOptions['--profile']!) : undefined;
+    const pkg = await loadWorkflow(file, { repositoryRoot, ...(profile ? { maximumCapabilities: profile.maximumCapabilities } : {}) });
     if (command === 'validate') {
       const result = { schemaVersion: 1, valid: true, workflowId: pkg.workflow.id, packageDigest: pkg.digest, files: pkg.files.map(f => ({ path: f.path, digest: f.digest })) };
       process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : `Valid ${pkg.workflow.id}\nPackage ${pkg.digest}\nPinned ${pkg.files.length} files.\n`);
     } else if (command === 'inspect') {
       phase = 4;
       await inspectCommand(pkg, { repository: inspectOptions['--repo']!, pr: Number(inspectOptions['--pr']), directory: inspectOptions['--capture-dir']!, reviewers: inspectOptions['--reviewers']?.split(',') ?? [], json });
+    } else if (command === 'analyze') {
+      phase = 5;
+      await analyzeCommand(pkg, profile!, { capture: inspectOptions['--capture']!, sourceRepository: inspectOptions['--source-repo']!, directory: inspectOptions['--output-dir']!, resume: inspectOptions['--resume'], json });
     } else {
       phase = 3;
       const result = replay(pkg, parseFixture(parseJson(await readFixtureText(fixture!), fixture!)));
@@ -81,7 +91,7 @@ async function main(): Promise<void> {
     }
   } catch (error) {
     const diagnostics = error instanceof WorkflowError ? error.diagnostics : [{ code: error instanceof GitHubReadError ? error.failure.code : error instanceof CaptureError ? 'capture' : phase === 64 ? 'usage' : 'internal', path: '', message: error instanceof Error ? error.message : String(error) }];
-    const exitCode = error instanceof WorkflowError || error instanceof GitHubReadError || error instanceof CaptureError || phase === 64 ? phase : 70;
+    const exitCode = error instanceof ProviderConfigurationError ? 5 : error instanceof WorkflowError || error instanceof GitHubReadError || error instanceof CaptureError || phase === 64 ? phase : 70;
     const result = { schemaVersion: 1, valid: false, exitCode, diagnostics };
     if (json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     else process.stderr.write(`${diagnostics.map(d => `${d.code}${d.path ? ` ${d.path}` : ''}: ${d.message}`).join('\n')}\n`);

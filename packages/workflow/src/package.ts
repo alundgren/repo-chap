@@ -59,6 +59,16 @@ function contractValidator(pkg: WorkflowPackage, actionId: string): ValidateFunc
   catch (error) { return fail('invalid_schema', reference, `Invalid output contract: ${error instanceof Error ? error.message : String(error)}`); }
 }
 const builtinValidator = schemaValidator().addSchema(builtinSchemas);
+export function actionContracts(pkg: WorkflowPackage, actionId: string): {
+  canonical: { document: unknown; fragment: string }; configured: { document: unknown; fragment: string };
+} {
+  const action = pkg.workflow.actions[actionId];
+  const result = action && actionRegistry[action.uses]?.result;
+  if (!result || !action.outputSchema) fail('agent_contract', actionId, 'Action must have a built-in agent output contract.');
+  const { path, fragment } = referencePath(pkg.workflowPath, action.outputSchema);
+  const document = parseJson(pkg.files.find(file => file.path === path)!.text, path);
+  return freeze({ canonical: { document: builtinSchemas, fragment: `/$defs/${result}` }, configured: { document, fragment } });
+}
 export function validateActionPayload(pkg: WorkflowPackage, actionId: string, payload: unknown): void {
   const action = pkg.workflow.actions[actionId];
   const requiredResult = action && actionRegistry[action.uses]?.result;
