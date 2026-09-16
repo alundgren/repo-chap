@@ -21,7 +21,8 @@ export class DaemonService {
   private cycle: Promise<void> | null = null;
   readonly now: () => number;
   constructor(readonly store: RuntimeStore, private readonly dependencies: DaemonDependencies) { this.now = dependencies.now ?? Date.now; }
-  private reader(): GitHubReader { return new GitHubReader(this.dependencies.credentials, { ...this.dependencies.readOptions, now: this.now, signal: this.shutdown.signal }); }
+  private reader(): GitHubReader { return new GitHubReader(this.dependencies.credentials, { ...this.dependencies.readOptions, now: this.now, signal: this.shutdown.signal,
+    cooldown: { read: () => this.store.cooldown(), extend: until => { this.store.cooldown(until); } } }); }
   async register(input: Omit<Registration, 'id'>): Promise<RepositoryRecord> {
     const profile = await this.dependencies.profile(input.profile);
     if (input.package.workflow.requestedCapabilities.some(cap => !profile.maximumCapabilities.includes(cap))) throw new RuntimeError('The operator profile does not permit the requested workflow capabilities.');
@@ -39,7 +40,7 @@ export class DaemonService {
     this.polling = true;
     try {
       this.store.recover(this.now()); this.abortStale();
-      for (const repo of this.store.repositories()) {
+      for (const repo of this.store.repositories().sort((a, b) => a.nextPollAt - b.nextPollAt)) {
         if (this.stopped || this.store.cooldown() > this.now()) break;
         if (!repo.paused && repo.nextPollAt <= this.now()) await this.poll(repo);
       }
@@ -47,20 +48,25 @@ export class DaemonService {
     } finally { this.polling = false; }
   }
   async poll(repo: RepositoryRecord): Promise<void> {
+    if (this.store.cooldown() > this.now()) return;
     const reader = this.reader(), next = () => this.now() + this.store.limits.pollSeconds * 1000;
     try {
       const pkg = await this.store.artifacts.get<WorkflowPackage>(repo.package), listing = await listOpenPullRequests(reader, repo.name);
       let diagnostic = listing.coverage.status === 'complete' ? null : listing.coverage.failure?.message ?? 'PR listing is incomplete.';
       if (listing.repository && listing.repository.id !== repo.id) throw new RuntimeError('Repository identity changed; registration must be inspected.');
-      const known = this.store.runs(repo.id), numbers = [...new Set([...listing.numbers, ...known.filter(run => run.status !== 'closed').map(run => run.number)])];
+      this.store.cooldown(Math.max(reader.nextRequestAt, Date.parse(listing.coverage.failure?.retryAt ?? '') || 0));
+      const known = this.store.runs(repo.id), ordered = [...new Set([...listing.numbers, ...known.filter(run => run.status !== 'closed').map(run => run.number)])].sort((a, b) => a - b);
+      const after = this.store.repository(repo.id).lastPolledPr ?? 0, numbers = [...ordered.filter(number => number > after), ...ordered.filter(number => number <= after)];
       for (const number of numbers) {
-        if (this.stopped) break;
+        if (this.stopped || this.store.cooldown() > this.now()) break;
+        const inspectionReader = this.reader();
         const prior = known.find(run => run.number === number), previous = prior && await this.store.artifacts.get<Inspection>(prior.inspection);
-        const inspection = await inspectPullRequest(reader, pkg, { repository: repo.name, pr: number, reviewers: repo.reviewers, previous });
+        const inspection = await inspectPullRequest(inspectionReader, pkg, { repository: repo.name, pr: number, reviewers: repo.reviewers, previous });
+        this.store.cooldown(Math.max(inspectionReader.nextRequestAt, retryAt(inspection)));
         if (inspection.evidence.pullRequest) await this.store.observe(repo.id, inspection, this.now());
         else if (prior) this.store.unavailable(prior.id, 'GitHub evidence is unavailable. Refresh access before analysis continues.', next());
         if (inspection.status !== 'complete') diagnostic ??= 'Some PR evidence is incomplete. Inspect the run for collection coverage.';
-        this.store.cooldown(Math.max(reader.nextRequestAt, retryAt(inspection)));
+        this.store.pollProgress(repo.id, number);
         if (this.store.cooldown() > this.now()) break;
       }
       this.store.cooldown(Math.max(reader.nextRequestAt, Date.parse(listing.coverage.failure?.retryAt ?? '') || 0));
@@ -97,7 +103,7 @@ export class DaemonService {
     if (!this.store.step(claim, this.store.limits.maxImmediateSteps, this.now())) { park('blocked', 'Immediate step limit reached.', null, run.nextAction, true); return; }
     if (run.nextAction?.startsWith('$')) {
       if (run.nextAction === '$observe') { this.store.pollFinished(run.repositoryId, this.now(), null); park('waiting', 'Refresh GitHub evidence before continuing.', this.now() + this.store.limits.pollSeconds * 1000); return; }
-      park(run.nextAction === '$wait' ? 'waiting' : 'blocked', 'The action chain stopped at its configured continuation.', run.nextAction === '$wait' ? this.now() + this.store.limits.pollSeconds * 1000 : null); return;
+      park(run.nextAction === '$wait' ? 'waiting' : 'blocked', `${run.reason} The action chain stopped at ${run.nextAction}.`, run.nextAction === '$wait' ? this.now() + this.store.limits.pollSeconds * 1000 : null); return;
     }
     const actionId = run.nextAction ?? evaluate(pkg.workflow, observation, run.control, clock).actionId, action = pkg.workflow.actions[actionId]!;
     const scheduling = controlDecision(pkg.workflow, action.uses, observation, run.control, clock);
@@ -113,6 +119,7 @@ export class DaemonService {
       park('waiting', 'Analysis requires complete evidence and an open, non-draft PR after its delays.', Math.max(this.now() + this.store.limits.pollSeconds * 1000, retryAt(inspection))); return;
     }
     const profile = await this.dependencies.profile(this.store.repository(run.repositoryId).profile);
+    if (this.store.cooldown() > this.now()) { park('waiting', 'GitHub reads are waiting for the installation cooldown.', this.store.cooldown(), actionId); return; }
     const sourceSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, claim.until - this.now()))]);
     const sources = await (this.dependencies.sources?.(this.store.repository(run.repositoryId).name, inspection, sourceSignal) ?? fetchSources(join(this.dependencies.directory, 'git-cache'), this.store.repository(run.repositoryId).name, inspection, this.dependencies.credentials, sourceSignal));
     const sourceRef = await this.store.artifacts.put(sources);

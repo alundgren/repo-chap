@@ -11,6 +11,7 @@ export interface ReadOptions {
   maxRequests?: number;
   maxDurationMs?: number;
   maxResponseBytes?: number;
+  cooldown?: { read(): number; extend(until: number): void };
 }
 export interface QueryResult { data: unknown; incomplete: boolean }
 export function object(value: unknown): Record<string, unknown> {
@@ -55,7 +56,7 @@ export class GitHubReader {
     if (!/^query\s/.test(query)) throw new GitHubReadError('invalid_response');
     let refreshed = false;
     for (let attempt = 0; attempt < 3; attempt++) {
-      this.check(); await this.pause(this.retryAt, this.rateLimited);
+      this.check(); await this.pause(Math.max(this.retryAt, this.options.cooldown?.read() ?? 0), this.rateLimited);
       const timeout = AbortSignal.timeout(Math.max(1, Math.min(15_000, this.deadline - this.now())));
       const signal = this.signal ? AbortSignal.any([this.signal, timeout]) : timeout;
       try {
@@ -85,6 +86,7 @@ export class GitHubReader {
           this.rateLimited = true;
           this.retryAt = Math.max(this.retryAt, Number.isFinite(guidedTime) ? guidedTime : 0,
             primaryLimit && Number.isFinite(reset) ? reset + 1000 : 0, this.now() + (limited && !guidance && !primaryLimit ? 60_000 * 2 ** attempt : 1000));
+          this.options.cooldown?.extend(this.retryAt);
         }
         if (limited) {
           if (body.data != null) return { data: body.data, incomplete: true };
@@ -96,6 +98,7 @@ export class GitHubReader {
         if (response.status >= 500) {
           if (Number.isFinite(guidedTime) && guidedTime > this.now()) {
             if (guidedTime > this.retryAt) { this.retryAt = guidedTime; this.rateLimited = false; }
+            this.options.cooldown?.extend(this.retryAt);
             await this.pause(this.retryAt, this.rateLimited);
           }
           throw new GitHubReadError('network');

@@ -101,12 +101,15 @@ export class RuntimeStore {
         if (prior.id !== input.id || prior.packageDigest !== pkg.digest || prior.profile !== input.profile || json(prior.reviewers) !== json(input.reviewers)) throw new RuntimeError('Repository is already registered. Configuration activation is not available in analysis mode.');
         return prior;
       }
-      const repo: RepositoryRecord = { id: input.id, name: input.name, package: ref, packageDigest: pkg.digest, profile: input.profile, reviewers: input.reviewers, paused: false, nextPollAt: now, diagnostic: null };
+      const repo: RepositoryRecord = { id: input.id, name: input.name, package: ref, packageDigest: pkg.digest, profile: input.profile, reviewers: input.reviewers, paused: false, nextPollAt: now, diagnostic: null, lastPolledPr: 0 };
       this.db.prepare('INSERT INTO repositories VALUES (?,?,?)').run(repo.id, repo.name, json(repo)); return repo;
     });
   }
   pollFinished(id: string, nextPollAt: number, diagnostic: string | null): void {
     this.transaction(() => { const repo = this.repository(id); repo.nextPollAt = nextPollAt; repo.diagnostic = diagnostic; this.saveRepository(repo); });
+  }
+  pollProgress(id: string, number: number): void {
+    this.transaction(() => { const repo = this.repository(id); repo.lastPolledPr = number; this.saveRepository(repo); });
   }
   cooldown(until?: number): number {
     if (until !== undefined) this.db.prepare("INSERT INTO metadata VALUES ('github_cooldown',?) ON CONFLICT(key) DO UPDATE SET value=MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER))").run(String(until));
@@ -127,7 +130,7 @@ export class RuntimeStore {
       if (!row) {
         run = { id: randomUUID(), repositoryId: repo.id, subjectKind: 'pull_request', subjectId: pr.id, number: pr.number,
           package: repo.package, packageDigest: repo.packageDigest, inspection: ref, evidenceKey: key, headSha: pr.headSha, baseSha: pr.baseSha, control: { memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } },
-          status: 'ready', reason: 'New PR observed.', dueAt: now, nextAction: null, token: 0, owner: null, leaseUntil: null, notesRevision: 0, retries: 0, steps: 0, agents: 0, suppression: null, evidenceAvailable: true };
+          status: 'ready', reason: 'New PR observed.', dueAt: now, nextAction: null, token: 0, owner: null, leaseUntil: null, notesRevision: 0, retries: 0, steps: 0, agents: 0, suppression: null, evidenceAvailable: true, failedActions: {}, retryAction: null };
         this.db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run(run.id, repo.id, pr.id, json(run));
       } else {
         run = decode(row); run.inspection = ref;
@@ -139,6 +142,7 @@ export class RuntimeStore {
           run.control = { ...run.control, memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } };
           delete run.control.review; delete run.control.classification;
           run.nextAction = null; run.suppression = null; run.steps = 0; run.agents = 0;
+          run.failedActions = {}; run.retryAction = null;
           if (run.status !== 'cancelled') { run.status = 'ready'; run.reason = 'Evidence changed.'; run.dueAt = now; }
         }
         this.saveRun(run);
@@ -208,7 +212,7 @@ export class RuntimeStore {
       const run = this.requireCurrent(claim, now), limits = input.package.workflow.limits;
       if (run.packageDigest !== input.package.digest || this.repository(run.repositoryId).paused) throw new RuntimeError('The repository is paused or package is not current.');
       if (!['agent.classify', 'agent.review'].includes(input.package.workflow.actions[input.actionId]?.uses ?? '')) throw new RuntimeError('Analysis mode cannot reserve this action.');
-      if (run.suppression === run.evidenceKey) throw new RuntimeError('Unchanged work is suppressed. Use a bounded retry or wait for new evidence.');
+      if (run.suppression === run.evidenceKey || run.failedActions?.[input.actionId] === run.evidenceKey) throw new RuntimeError('Unchanged work is suppressed. Use a bounded retry or wait for new evidence.');
       if (this.db.prepare("SELECT id FROM attempts WHERE run_id=? AND state='running'").get(run.id)) throw new RuntimeError('This run already has a reserved attempt.');
       const count = this.db.prepare('SELECT COUNT(*) AS total, SUM(CASE WHEN head_sha=? THEN 1 ELSE 0 END) AS head FROM attempts WHERE run_id=?').get(run.headSha, run.id) as { total: number; head: number };
       if (count.total >= this.limits.maxAttemptsPerLifecycle || count.head >= limits.maxAttemptsPerHead || run.agents >= limits.maxAgentActionsPerWake) throw new RuntimeError('Lifecycle, per-head, or per-wake attempt limit reached.');
@@ -253,12 +257,15 @@ export class RuntimeStore {
         if (action.uses === 'agent.review') { run.control.memory = { ...run.control.memory, reviewCurrent: true }; run.control.review = { coverage: payload.coverage, verdict: payload.verdict } as NonNullable<ControlState['review']>; }
         else { run.control.memory = { ...run.control.memory, classificationCurrent: true }; run.control.classification = { uncertain: payload.uncertain as boolean }; }
         run.nextAction = action.onSuccess;
+        if (run.failedActions) delete run.failedActions[job.actionId];
+        if (run.retryAction === job.actionId) run.retryAction = null;
       } else {
-        run.nextAction = job.actionId; run.suppression = run.evidenceKey; run.status = 'blocked'; run.dueAt = null;
+        run.failedActions = { ...run.failedActions, [job.actionId]: run.evidenceKey };
+        run.retryAction = job.actionId; run.nextAction = action.onFailure;
       }
       for (const request of effects) this.insertEffect(run, claim.token, request);
       run.owner = null; run.leaseUntil = null;
-      if (result.provider.outcome === 'completed') { run.status = 'ready'; run.dueAt = now; }
+      run.status = 'ready'; run.dueAt = now;
       this.saveRun(run); return true;
     });
   }
@@ -272,7 +279,9 @@ export class RuntimeStore {
     return this.transaction(() => {
       const run = this.run(runId);
       if (run.owner || run.status === 'closed' || run.retries >= this.limits.maxRetries) throw new RuntimeError('Retry requires an idle, open run with remaining operator retries.');
-      run.retries++; run.suppression = null; run.status = 'ready'; run.reason = 'Bounded retry requested; all attempt and cost limits are retained.'; run.dueAt = now; run.steps = 0; run.agents = 0; this.saveRun(run); return run;
+      run.retries++; run.suppression = null; run.failedActions = {}; run.nextAction = run.retryAction ?? null;
+      if (!run.retryAction) { run.control.memory = { classificationCurrent: false, reviewCurrent: false, packetCurrent: false }; delete run.control.review; delete run.control.classification; }
+      run.status = 'ready'; run.reason = 'Bounded retry requested; all attempt and cost limits are retained.'; run.dueAt = now; run.steps = 0; run.agents = 0; this.saveRun(run); return run;
     });
   }
   private insertEffect(run: RunRecord, token: number, request: EffectRequest): string {

@@ -16,6 +16,7 @@ export const defaultLimits: RuntimeLimits = {
 export interface RepositoryRecord {
   id: string; name: string; package: ArtifactRef; packageDigest: string; profile: string;
   reviewers: string[]; paused: boolean; nextPollAt: number; diagnostic: string | null;
+  lastPolledPr: number;
 }
 export type RunStatus = 'ready' | 'running' | 'waiting' | 'blocked' | 'cancelled' | 'closed';
 export interface RunRecord {
@@ -26,6 +27,7 @@ export interface RunRecord {
   token: number; owner: string | null; leaseUntil: number | null; notesRevision: number;
   retries: number; steps: number; agents: number; suppression: string | null;
   evidenceAvailable: boolean;
+  failedActions: Record<string, string>; retryAction: string | null;
 }
 export interface Claim { runId: string; owner: string; token: number; until: number; evidenceKey: string; notesRevision: number }
 export interface AnalysisJob {

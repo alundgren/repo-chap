@@ -91,7 +91,9 @@ the current inspection, attempts, reservations, results, notes revisions and
 effect receipts. Text output summarizes the work; `--json` returns version-1
 data. Exit 7 means the daemon command failed. Pause stops new dispatch while
 active analysis can finish. Cancel invalidates ownership and stops the provider.
-Retry authorizes another bounded attempt without clearing earlier charges.
+Retry authorizes another bounded attempt without clearing earlier charges. It
+selects the last failed analysis action when one exists; otherwise it clears
+analysis readiness and asks the evaluator to select work again.
 If a limit is exhausted, retry reports or retains the block.
 
 ## Limits and restart accounting
@@ -123,9 +125,13 @@ Every PR has one durable run ID scoped to its stable repository and PR IDs.
 New heads, own commits, closure/reopening, worker replacement and explicit retries
 retain lifecycle and repository totals. Returning to an earlier head retains that
 head's prior attempt count. A future configuration activation must preserve those
-same records. Unchanged failed/blocked work is suppressed until relevant evidence
-changes or the operator requests an allowed retry. Prompt edits alone do not
-authorize retry.
+same records. Unchanged failed analysis actions are suppressed individually until
+relevant evidence changes or the operator requests an allowed retry. A failed
+action still follows its configured `onFailure`, including another analysis
+action, a control action, `$wait` or `$blocked`. The failed result and invalidated
+readiness remain recorded. A deferred repair/publication action reached through
+failure produces the same visible analysis-mode stop as one reached through
+success. Prompt edits alone do not authorize retry.
 
 A daemon attempt invokes its selected provider at most once, even if the profile
 permits two adapter attempts. Invalid output is retained as a failed attempt;
@@ -139,6 +145,17 @@ PR listing and every inspection collection are paginated. Tracked PRs are inspec
 even when they disappear from the open list, so absence cannot be mistaken for
 closure. Partial lists and collections retain unknown coverage. An unavailable
 repository blocks its affected runs while other repositories continue.
+
+The listing and each PR inspection have separate bounded readers, so earlier
+PRs cannot consume later PRs' per-collection request allowance. Every attempted
+PR inspection records its PR number as the repository's polling position.
+The next cycle starts after that number in the sorted discovered/tracked PR list,
+then wraps. That position survives restarts and lets later PRs receive evidence
+after a rate limit interrupts a cycle. Repositories with the oldest due poll are
+visited first. All readers obey the installation's persisted server cooldown
+before every query; creating a reader cannot bypass it. Registration and polling
+readers share the same runtime callbacks, including readers created before the
+server returned its guidance.
 
 The prior inspection is persisted and supplied on the next poll. First-observed
 head time and original reviewer reaction times therefore survive restarts.

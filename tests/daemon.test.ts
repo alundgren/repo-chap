@@ -12,7 +12,7 @@ import { DaemonService, fetchSources, serveControl, requestControl, type Control
 import { setup } from './helpers/provider-fixture.ts';
 
 const cli = resolve('apps/cli/dist/cli.js');
-function remote(inspection: Inspection) {
+function remote(inspection: Inspection, count = 1) {
   const calls: string[] = [];
   let draft = false, closed = false, unavailable = false, reviewer = false, incomplete = false;
   const page = (nodes: unknown[]) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
@@ -23,9 +23,9 @@ function remote(inspection: Inspection) {
     if (incomplete && operation === 'Inspectreviews') return Response.json({ data: null, errors: [{ message: 'Fictional incomplete review collection.' }] });
     const pr = inspection.evidence.pullRequest!, repo = inspection.evidence.repository!;
     let data: unknown;
-    if (operation === 'PollPullRequests') data = { repository: { id: repo.id, nameWithOwner: repo.name, isPrivate: true, pullRequests: page(closed ? [] : [{ number: 42 }]) } };
+    if (operation === 'PollPullRequests') data = { repository: { id: repo.id, nameWithOwner: repo.name, isPrivate: true, pullRequests: page(closed ? [] : Array.from({ length: count }, (_, index) => ({ number: 42 + index }))) } };
     else if (operation === 'InspectMetadata') data = { repository: { id: repo.id, nameWithOwner: repo.name, isPrivate: true, pullRequest: {
-      id: pr.id, number: pr.number, url: pr.url, title: pr.title, body: pr.body, author: { login: pr.author }, state: closed ? 'CLOSED' : 'OPEN', isDraft: draft,
+      id: `PR_${request.variables.number}`, number: request.variables.number, url: pr.url.replace(/\d+$/, String(request.variables.number)), title: pr.title, body: pr.body, author: { login: pr.author }, state: closed ? 'CLOSED' : 'OPEN', isDraft: draft,
       headRefOid: pr.headSha, baseRefOid: pr.baseSha, headRefName: pr.headRef, baseRefName: pr.baseRef, headRepository: { id: repo.id, nameWithOwner: repo.name },
       createdAt: pr.createdAt, updatedAt: pr.updatedAt, mergeable: 'MERGEABLE', reviewDecision: null,
     } } };
@@ -85,7 +85,7 @@ test('draft, closure and missing access stop analysis without stopping the daemo
 test('provider failures remain visible and suppressed until a bounded explicit retry', async () => {
   const s = await fixture({ failing: true });
   try {
-    await s.tick(); s.advance(31_000); await s.tick(); const run = s.store.runs()[0]!;
+    await s.tick(); s.advance(31_000); await s.tick(); await s.tick(); const run = s.store.runs()[0]!;
     assert.equal(run.status, 'blocked'); assert.equal(s.jobs.length, 1); assert.ok(!JSON.stringify(s.store.inspect(run.id)).includes('credential-not-for-output'));
     s.advance(61_000); await s.tick(); await s.restart(); s.advance(61_000); await s.tick(); assert.equal(s.jobs.length, 1);
     s.store.retry(run.id, s.now); await s.tick(); assert.equal(s.jobs.length, 2); assert.equal(s.store.inspect(run.id).reservations.length, 2);
@@ -185,7 +185,7 @@ test('one repository provider failure does not stop another repository analysis'
       inspection.evidenceDigest = digest(canonicalJson(inspection.evidence)); inspection.fixture.observations[0]!.evidenceDigest = inspection.evidenceDigest;
       await store.observe(repo.id, inspection, now);
     }
-    service.dispatch(); await service.idle();
+    service.dispatch(); await service.idle(); service.dispatch(); await service.idle();
     assert.equal(store.runs('R_paperboat')[0]!.status, 'blocked'); assert.equal(store.runs('R_sailboat')[0]!.control.memory?.classificationCurrent, true);
   } finally { await service.stop(); store.close(); await s.cleanup(); }
 });
@@ -229,4 +229,86 @@ test('source provisioning fetches pinned commits with ephemeral credentials and 
     assert.deepEqual(await readdir(cache), []);
     const calls = await readFile(record, 'utf8'); assert.ok(!calls.includes('fictional-app-access')); assert.ok(!calls.includes('Authorization:')); assert.ok(!calls.includes('push'));
   } finally { process.env.PATH = oldPath; await s.cleanup(); }
+});
+test('forty PRs each receive complete bounded inspections, including cooldown and restart recovery', async () => {
+  const s = await setup(), directory = join(s.temporary, 'state'), fake = remote(s.inspection, 40);
+  let now = Date.parse('2026-09-16T12:00:00Z'), limited = false;
+  const visited: number[] = [];
+  const fetch: typeof globalThis.fetch = async (url, init) => {
+    const { query, variables } = JSON.parse(String(init?.body));
+    if (query.includes('query InspectMetadata')) {
+      visited.push(variables.number);
+      if (variables.number === 55 && !limited) { limited = true; return Response.json({}, { status: 429, headers: { 'retry-after': '600' } }); }
+    }
+    return fake.fetch(url, init);
+  };
+  let store = await RuntimeStore.open(directory);
+  const dependencies = { directory, credentials: tokenCredentials('fictional'), profile: async () => s.profile, now: () => now, readOptions: { fetch, sleep: async () => {} } };
+  let service = new DaemonService(store, dependencies);
+  try {
+    const repo = await service.register({ name: 'reef-labs/paperboat', package: s.pkg, profile: 'pilot', reviewers: [] });
+    await service.poll(repo); assert.equal(limited, true); assert.equal(store.repository(repo.id).lastPolledPr, 55);
+    const retry = store.cooldown(), before = visited.length; assert.equal(retry, now + 600_000);
+    await service.stop(); store.close(); store = await RuntimeStore.open(directory); service = new DaemonService(store, dependencies);
+    await service.poll(store.repository(repo.id)); assert.equal(visited.length, before);
+    now = retry + 1; await service.poll(store.repository(repo.id));
+    assert.equal(visited[before], 56); assert.equal(store.runs().length, 40);
+    for (const run of store.runs()) assert.equal((await store.artifacts.get<Inspection>(run.inspection)).status, 'complete', `PR ${run.number}`);
+    now += 61_000; await service.poll(store.repository(repo.id));
+    assert.equal(store.runs().length, 40); assert.ok(store.runs().some(run => run.number === 81));
+    for (const run of store.runs()) assert.equal((await store.artifacts.get<Inspection>(run.inspection)).status, 'complete', `PR ${run.number}`);
+  } finally { await service.stop(); store.close(); await s.cleanup(); }
+});
+test('failed analysis resumes each configured failure continuation after restart and keeps its charge', async () => {
+  for (const continuation of ['review', '$wait', '$blocked', 'park']) {
+    const s = await setup(), directory = join(s.temporary, 'state'), now = Date.now(), jobs: string[] = [];
+    const workflow = structuredClone(s.pkg.workflow); workflow.actions.classify!.onFailure = continuation;
+    const pkg = buildPackage(s.pkg.workflowPath, Object.fromEntries(s.pkg.files.map(file => [file.path, file.path === s.pkg.workflowPath ? JSON.stringify(workflow) : file.text])));
+    const inspection = { ...s.inspection, packageDigest: pkg.digest };
+    let store = await RuntimeStore.open(directory);
+    const dependencies = { directory, credentials: tokenCredentials('fictional'), profile: async () => s.profile, now: () => now,
+      sources: () => collectSources(s.repository, s.head, s.base), execute: async (job: AnalysisJob) => { jobs.push(job.actionId); if (job.actionId === 'classify') throw new Error('Fictional failure'); return completed(job); } };
+    let service = new DaemonService(store, dependencies);
+    try {
+      const repo = await store.register({ id: 'R_paperboat', name: 'reef-labs/paperboat', package: pkg, profile: 'pilot', reviewers: [] }, now);
+      const run = (await store.observe(repo.id, inspection, now))!;
+      service.dispatch(); await service.idle(); assert.equal(store.run(run.id).nextAction, continuation); assert.equal(store.run(run.id).control.memory?.classificationCurrent, false);
+      await service.stop(); store.close(); store = await RuntimeStore.open(directory); service = new DaemonService(store, dependencies);
+      service.dispatch(); await service.idle();
+      const simulated = replay(pkg, { ...inspection.fixture, control: { memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } }, results: { classify: [{ status: 'failure', reason: 'Fictional failure' }] } });
+      if (continuation === 'review') {
+        assert.deepEqual(jobs, ['classify', 'review']); assert.match(simulated.reason, /results.review/);
+        assert.equal(store.run(run.id).control.memory?.reviewCurrent, true); assert.equal(store.run(run.id).control.memory?.classificationCurrent, false);
+      } else { assert.deepEqual(jobs, ['classify']); assert.equal(store.run(run.id).status, simulated.status); }
+      assert.equal(store.inspect(run.id).reservations.length, jobs.length);
+      assert.equal(store.run(run.id).failedActions.classify, run.evidenceKey);
+    } finally { await service.stop(); store.close(); await s.cleanup(); }
+  }
+});
+test('failed-action suppression permits its alternative but stops unchanged repetition', async () => {
+  const s = await setup(), directory = join(s.temporary, 'state');
+  let now = Date.now(); const jobs: string[] = [];
+  const workflow = structuredClone(s.pkg.workflow); workflow.actions.classify!.onFailure = 'review'; workflow.limits.maxAttemptsPerHead = 4;
+  const pkg = buildPackage(s.pkg.workflowPath, Object.fromEntries(s.pkg.files.map(file => [file.path, file.path === s.pkg.workflowPath ? JSON.stringify(workflow) : file.text])));
+  const inspection = { ...s.inspection, packageDigest: pkg.digest }, store = await RuntimeStore.open(directory);
+  const service = new DaemonService(store, { directory, credentials: tokenCredentials('fictional'), profile: async () => s.profile, now: () => now,
+    sources: () => collectSources(s.repository, s.head, s.base), execute: async job => { jobs.push(job.actionId); if (job.actionId === 'classify') throw new Error('Fictional failure'); return completed(job); } });
+  const step = async () => { service.dispatch(); await service.idle(); };
+  try {
+    const repo = await store.register({ id: 'R_paperboat', name: 'reef-labs/paperboat', package: pkg, profile: 'pilot', reviewers: [] }, now);
+    const run = (await store.observe(repo.id, inspection, now))!;
+    await step(); await step(); await step(); now += 61_000; await step();
+    assert.deepEqual(jobs, ['classify', 'review']); assert.match(store.run(run.id).reason, /Unchanged work is suppressed/);
+    store.retry(run.id, now); await step(); assert.deepEqual(jobs, ['classify', 'review', 'classify']);
+    assert.equal(store.inspect(run.id).reservations.length, 3); assert.equal(store.run(run.id).retries, 1);
+  } finally { await service.stop(); store.close(); await s.cleanup(); }
+});
+test('already-created readers observe another reader cooldown before their next request', async () => {
+  const now = Date.now(); let until = 0, requests = 0;
+  const options = { now: () => now, cooldown: { read: () => until, extend: (value: number) => { until = Math.max(until, value); } },
+    fetch: async () => { requests++; return Response.json({}, { status: 429, headers: { 'retry-after': '600' } }); } };
+  const first = new GitHubReader(tokenCredentials('fictional'), options), second = new GitHubReader(tokenCredentials('fictional'), options);
+  await assert.rejects(first.query('query Fictional { viewer { login } }', {}));
+  assert.equal(until, now + 600_000); await assert.rejects(second.query('query Fictional { viewer { login } }', {}));
+  assert.equal(requests, 1);
 });

@@ -96,6 +96,12 @@ with the retry time. Secondary rate limits without a timestamp wait at least one
 minute. Limits may be lowered or raised only up to the package's fixed ceilings.
 See GitHub's [rate-limit guidance](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
 
+Callers managing several readers can supply `ReadOptions.cooldown` with `read`
+and `extend` callbacks. A reader checks that shared deadline before each query
+and extends it as soon as it receives server guidance. The daemon persists those
+callbacks in its runtime store, so concurrent registration and polling readers
+share cooldowns even when their individual request allowances are separate.
+
 The initial metadata response records when this process first observed the head.
 It does not infer a push time from commit author or committer dates. A daemon must
 persist and pass `previous` to keep that time across polls and restarts. Reuse

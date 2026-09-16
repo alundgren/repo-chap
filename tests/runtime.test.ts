@@ -174,7 +174,8 @@ test('one durable daemon attempt makes one provider invocation even when its pro
     const actual = await executeAnalysis(job, { artifacts: s.store.artifacts, profile: s.profile, workerDirectory: join(s.directory, 'workers'), isCurrent: () => s.store.isCurrent(claim, Date.now()) });
     assert.equal(actual.provider.outcome, 'invalid_output'); assert.equal(actual.provider.attempts.length, 1);
     await s.store.complete(claim, actual, Date.now()); assert.equal(s.store.inspect(s.run.id).reservations.length, 1);
-    assert.equal(s.store.run(s.run.id).status, 'blocked');
+    assert.equal(s.store.run(s.run.id).nextAction, 'handoff');
+    assert.equal(s.store.run(s.run.id).failedActions.classify, job.evidenceKey);
   } finally { await s.cleanup(); }
 });
 test('result, notes and planned effects commit together or roll back together', async () => {
