@@ -21,6 +21,7 @@ const finish = () => {
   text('The waiting rule uses the recorded test clock.');
   if (provider === 'codex') notify('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
   else send({ type: 'result', subtype: 'success', is_error: false, session_id: session, permission_denials: [] });
+  if (mode === 'unfinished-session') setInterval(() => {}, 1000);
 };
 const run = async () => {
   if (mode === 'exit') { process.exit(1); return; }

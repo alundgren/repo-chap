@@ -89,6 +89,8 @@ export async function runClaudeConversation(runtime: ConversationRuntime): Promi
     const initialized = await peer.control({ subtype: 'initialize' });
     if (!record(initialized.account) || (!initialized.account.tokenSource || initialized.account.tokenSource === 'none') && (!initialized.account.apiKeySource || initialized.account.apiKeySource === 'none')) throw new ConversationError('login', 'Claude Code is not logged in. Use its supported local login, then start fresh.');
     peer.send({ type: 'user', message: { role: 'user', content: runtime.input } });
-    return await Promise.race([completed, peer.closed]);
+    const finished = await Promise.race([completed, peer.closed]);
+    await peer.finishInput();
+    return finished;
   } finally { runtime.signal.removeEventListener('abort', cancel); bridge.close(); }
 }

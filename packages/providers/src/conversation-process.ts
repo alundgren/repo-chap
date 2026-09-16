@@ -12,6 +12,10 @@ export class ConversationProcess {
   private events = 0;
   private ended = false;
   private exited = false;
+  private finishing = false;
+  private exitCode: number | null = null;
+  private resolveExit!: (code: number | null) => void;
+  private readonly exit: Promise<number | null>;
   private scheduled = false;
   private nextId = 1;
   private readonly pending = new Map<string | number, { resolve(value: Record<string, any>): void; reject(error: Error): void }>();
@@ -20,6 +24,7 @@ export class ConversationProcess {
   onMessage: (message: Record<string, any>) => void = () => {};
 
   constructor(executable: string, args: string[], cwd: string, private readonly maxBytes: number) {
+    this.exit = new Promise(resolve => { this.resolveExit = resolve; });
     this.closed = new Promise((_, reject) => { this.failClosed = reject; });
     // A process can exit while the caller is still preparing another resource.
     void this.closed.catch(() => {});
@@ -33,7 +38,7 @@ export class ConversationProcess {
     this.child.stderr.on('data', (data: Buffer) => this.count(data.length));
     this.child.stdin.on('error', () => this.fail(new ConversationError('provider', 'The provider input closed. Start a fresh conversation.')));
     this.child.once('error', () => this.fail(new ConversationError('unavailable', 'Cannot start the selected local CLI. Check its executable path and installation.')));
-    this.child.once('close', () => { this.exited = true; this.drain(); });
+    this.child.once('close', code => { this.exitCode = code; this.exited = true; this.drain(); });
   }
 
   private count(bytes: number): boolean {
@@ -48,7 +53,10 @@ export class ConversationProcess {
       const end = this.buffer.indexOf('\n');
       if (end < 0) {
         if (Buffer.byteLength(this.buffer) > conversationLimits.protocolLineBytes) this.fail(new ConversationError('limit', 'The provider sent an oversized protocol message.'));
-        else if (this.exited) this.fail(new ConversationError('provider', 'The provider exited before the turn completed. Check local login, then start a fresh conversation.'));
+        else if (this.exited) {
+          this.resolveExit(this.exitCode);
+          if (!this.finishing) this.fail(new ConversationError('provider', 'The provider exited before the turn completed. Check local login, then start a fresh conversation.'));
+        }
         return;
       }
       const line = this.buffer.slice(0, end); this.buffer = this.buffer.slice(end + 1);
@@ -101,6 +109,18 @@ export class ConversationProcess {
       this.pending.set(id, { resolve, reject });
       try { this.send(message); } catch (error) { this.pending.delete(id); reject(error); }
     });
+  }
+  /** A result can precede the provider's transcript flush. EOF lets it finish that write. */
+  async finishInput(): Promise<void> {
+    this.finishing = true;
+    this.child.stdin.end();
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const code = await Promise.race([this.exit, this.closed, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new ConversationError('session', 'The answer arrived, but the provider did not finish saving its session. Start a fresh conversation.')), 2000);
+      })]);
+      if (code !== 0) throw new ConversationError('session', 'The answer arrived, but the provider could not close its session cleanly. Start a fresh conversation.');
+    } finally { clearTimeout(timer); }
   }
   fail(error: Error): void {
     if (this.ended) return;

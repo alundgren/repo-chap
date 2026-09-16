@@ -102,6 +102,15 @@ for (const provider of ['codex', 'claude'] as const) {
       assert(inputCancelled);
     } finally { await f.cleanup(); }
   });
+  test(`${provider} keeps the answer but refuses resume when session completion does not finish`, async () => {
+    const f = await setup(provider, 'unfinished-session');
+    try {
+      const result = await runConversationTurn(f.request);
+      assert.equal(result.status, 'error'); if (result.status === 'error') assert.equal(result.code, 'session');
+      assert(f.events.some(event => event.type === 'text'));
+      assert(!f.events.some(event => event.type === 'completed'));
+    } finally { await f.cleanup(); }
+  });
 }
 
 test('Claude local-tool approval denial returns the supported protocol response', async () => {

@@ -90,6 +90,8 @@ export async function runCodexConversation(runtime: ConversationRuntime): Promis
     const turn = await peer.request('turn/start', { threadId: session.id, model: request.profile.model, effort, input: [{ type: 'text', text: runtime.input, text_elements: [] }] });
     if (!record(turn.turn) || typeof turn.turn.id !== 'string') throw new ConversationError('protocol', 'Codex did not start a supported turn.');
     turnId ??= turn.turn.id;
-    return await Promise.race([completed, peer.closed]);
+    const finished = await Promise.race([completed, peer.closed]);
+    await peer.finishInput();
+    return finished;
   } finally { runtime.signal.removeEventListener('abort', cancel); }
 }

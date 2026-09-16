@@ -87,6 +87,12 @@ Tool and input waits receive an abort signal. Native session files and working
 directories stay outside Git. The provider package does not persist desktop
 conversation text or write managed repository files.
 
+A successful provider answer closes stdin and allows up to two seconds for a
+clean process exit before the host reports a reusable session. Claude can emit
+its result before flushing the native transcript. If the process does not finish
+cleanly, the answer remains visible and the host reports that a fresh session is
+required. Cancellation and timeouts still terminate the owned process group.
+
 ## Verification limits
 
 Fake executable tests exercise host behavior without credentials or model calls.
