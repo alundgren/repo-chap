@@ -3,9 +3,9 @@ import { lstat, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { prepareCaptureDirectory, validateTarget, type Inspection } from '@repo-chap/github';
-import { buildPackage, canonicalJson, digest, parseFixture, validateActionPayload, type ControlState, type WorkflowPackage } from '@repo-chap/workflow';
+import { buildPackage, canonicalJson, digest, parseFixture, referencePath, supportedCapabilities, validateActionPayload, type ControlState, type Diagnostic, type WorkflowPackage } from '@repo-chap/workflow';
 import { ArtifactStore, RuntimeError } from './artifacts.js';
-import { defaultLimits, type AnalysisJob, type AnalysisResult, type ArtifactRef, type Claim, type EffectRecord, type EffectRequest, type EffectState, type Registration, type RepositoryRecord, type RunRecord, type RuntimeLimits } from './types.js';
+import { defaultLimits, type AnalysisJob, type AnalysisResult, type ArtifactRef, type Claim, type EffectRecord, type EffectRequest, type EffectState, type MigrationRecord, type Registration, type RepositoryRecord, type RunRecord, type RuntimeLimits, type SourceRegistration, type WorkflowVersion } from './types.js';
 
 const json = (value: unknown): string => canonicalJson(JSON.parse(JSON.stringify(value)));
 const day = (now: number) => new Date(now).toISOString().slice(0, 10);
@@ -25,7 +25,7 @@ export class RuntimeStore {
     this.artifacts = new ArtifactStore(join(directory, 'artifacts'));
     if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='metadata'").get()) {
       const version = db.prepare("SELECT value FROM metadata WHERE key='schema'").get() as { value: string } | undefined;
-      if (version?.value !== '1') { db.close(); throw new RuntimeError('Unsupported runtime database version.'); }
+      if (!['1', '2'].includes(version?.value ?? '')) { db.close(); throw new RuntimeError('Unsupported runtime database version.'); }
     }
     db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -36,11 +36,21 @@ export class RuntimeStore {
       CREATE TABLE IF NOT EXISTS reservations (attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), repository_id TEXT NOT NULL REFERENCES repositories(id), day TEXT NOT NULL, units INTEGER NOT NULL, runtime_ms INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS notes (run_id TEXT NOT NULL REFERENCES runs(id), revision INTEGER NOT NULL, artifact TEXT NOT NULL, PRIMARY KEY(run_id, revision));
       CREATE TABLE IF NOT EXISTS effects (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), state TEXT NOT NULL, token INTEGER NOT NULL, request TEXT NOT NULL, receipt TEXT);
+      CREATE TABLE IF NOT EXISTS workflow_versions (id TEXT PRIMARY KEY, repository_id TEXT NOT NULL REFERENCES repositories(id), data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS migrations (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS attempt_run ON attempts(run_id, head_sha);
       CREATE INDEX IF NOT EXISTS budget_day ON reservations(day, repository_id);`);
-    const schema = db.prepare("SELECT value FROM metadata WHERE key='schema'").get() as { value: string } | undefined;
-    if (schema && schema.value !== '1') { db.close(); throw new RuntimeError('Unsupported runtime database version.'); }
-    db.prepare("INSERT OR IGNORE INTO metadata VALUES ('schema','1')").run();
+    this.transaction(() => {
+      const schema = db.prepare("SELECT value FROM metadata WHERE key='schema'").get() as { value: string } | undefined;
+      if (schema?.value === '1') {
+        for (const repo of this.repositories()) {
+          const version = this.saveVersion(repo.id, repo.package!, repo.packageDigest!, null, null, 0);
+          repo.activeVersionId = version.id; repo.source = null; this.saveRepository(repo);
+          for (const run of this.runs(repo.id)) { run.workflowVersionId = version.id; run.waitTiming = null; this.saveRun(run); }
+        }
+      }
+      db.prepare("INSERT INTO metadata VALUES ('schema','2') ON CONFLICT(key) DO UPDATE SET value='2'").run();
+    });
   }
   static async open(directory: string, input: Partial<RuntimeLimits> = {}): Promise<RuntimeStore> {
     const limits = validateLimits(input), root = await prepareCaptureDirectory(directory), file = join(root, 'runtime.sqlite');
@@ -98,11 +108,136 @@ export class RuntimeStore {
       const existing = this.db.prepare('SELECT data FROM repositories WHERE id=? OR name=? COLLATE NOCASE').get(input.id, input.name);
       if (existing) {
         const prior = decode<RepositoryRecord>(existing);
-        if (prior.id !== input.id || prior.packageDigest !== pkg.digest || prior.profile !== input.profile || json(prior.reviewers) !== json(input.reviewers)) throw new RuntimeError('Repository is already registered. Configuration activation is not available in analysis mode.');
+        if (prior.source || prior.id !== input.id || prior.packageDigest !== pkg.digest || prior.profile !== input.profile || json(prior.reviewers) !== json(input.reviewers)) throw new RuntimeError('Repository is already registered with different immutable settings. Inspect its workflow versions.');
         return prior;
       }
-      const repo: RepositoryRecord = { id: input.id, name: input.name, package: ref, packageDigest: pkg.digest, profile: input.profile, reviewers: input.reviewers, paused: false, nextPollAt: now, diagnostic: null, lastPolledPr: 0 };
+      const repo: RepositoryRecord = { id: input.id, name: input.name, package: ref, packageDigest: pkg.digest, profile: input.profile, reviewers: input.reviewers, paused: false, nextPollAt: now, diagnostic: null, lastPolledPr: 0, activeVersionId: null, source: null };
+      this.db.prepare('INSERT INTO repositories VALUES (?,?,?)').run(repo.id, repo.name, json(repo));
+      repo.activeVersionId = this.saveVersion(repo.id, ref, pkg.digest, null, null, now).id; this.saveRepository(repo); return repo;
+    });
+  }
+  registerSource(input: SourceRegistration, now: number): RepositoryRecord {
+    validateTarget(input.name, 1);
+    const path = referencePath('workflow.json', input.workflowPath);
+    if (path.fragment || !input.id || !input.profile || input.reviewers.some(value => !/^[a-z0-9][a-z0-9-]*(\[bot\])?$/i.test(value)) ||
+      input.maximumCapabilities.some(value => !supportedCapabilities.includes(value))) throw new RuntimeError('Source registration requires a workflow path, operator profile and valid reviewer settings.');
+    if (input.branch !== null && (typeof input.branch !== 'string' || !input.branch || input.branch.length > 255 || /[\s\x00-\x1f~^:?*\[\\]/.test(input.branch) || input.branch.includes('..') || input.branch.includes('@{') || input.branch.split('/').some(part => !part || part.startsWith('.') || part.endsWith('.') || part.endsWith('.lock')))) throw new RuntimeError('Use a Git branch name such as main or team/workflows.');
+    return this.transaction(() => {
+      const row = this.db.prepare('SELECT data FROM repositories WHERE id=? OR name=? COLLATE NOCASE').get(input.id, input.name);
+      if (row) {
+        const prior = decode<RepositoryRecord>(row);
+        if (prior.id !== input.id || !prior.source || prior.source.workflowPath !== path.path || prior.source.branch !== input.branch || prior.profile !== input.profile ||
+          json(prior.reviewers) !== json(input.reviewers) || json(prior.source.maximumCapabilities) !== json(input.maximumCapabilities)) throw new RuntimeError('Repository is already registered with different immutable settings. Inspect its workflow versions.');
+        return prior;
+      }
+      const repo: RepositoryRecord = { id: input.id, name: input.name, package: null, packageDigest: null, activeVersionId: null,
+        profile: input.profile, reviewers: input.reviewers, paused: false, nextPollAt: now, diagnostic: null, lastPolledPr: 0,
+        source: { workflowPath: path.path, branch: input.branch, maximumCapabilities: input.maximumCapabilities, resolvedBranch: null, observedRevision: null,
+          checkedAt: null, status: 'pending', diagnostics: [], held: false } };
       this.db.prepare('INSERT INTO repositories VALUES (?,?,?)').run(repo.id, repo.name, json(repo)); return repo;
+    });
+  }
+  private saveVersion(repositoryId: string, pkg: ArtifactRef, packageDigest: string, sourceRevision: string | null, sourceBranch: string | null, now: number): WorkflowVersion {
+    const id = digest(json({ repositoryId, artifact: pkg.digest, sourceRevision, sourceBranch })).slice(7);
+    const version: WorkflowVersion = { id, repositoryId, package: pkg, packageDigest, sourceRevision, sourceBranch, createdAt: now };
+    this.db.prepare('INSERT OR IGNORE INTO workflow_versions VALUES (?,?,?)').run(id, repositoryId, json(version));
+    return this.version(repositoryId, id);
+  }
+  versions(repository: string): { repository: RepositoryRecord; versions: WorkflowVersion[] } {
+    const repo = this.repository(repository);
+    return { repository: repo, versions: this.db.prepare('SELECT data FROM workflow_versions WHERE repository_id=? ORDER BY json_extract(data,\'$.createdAt\'),id').all(repo.id).map(row => decode<WorkflowVersion>(row)) };
+  }
+  version(repositoryId: string, id: string): WorkflowVersion {
+    const row = this.db.prepare('SELECT data FROM workflow_versions WHERE repository_id=? AND id=?').get(repositoryId, id);
+    if (!row) throw new RuntimeError('Retained workflow version does not exist for this repository. Use daemon versions.'); return decode(row);
+  }
+  private selectVersion(repo: RepositoryRecord, version: WorkflowVersion): void {
+    repo.activeVersionId = version.id; repo.package = version.package; repo.packageDigest = version.packageDigest;
+  }
+  sourceFailure(repositoryId: string, revision: string | null, branch: string | null, status: 'invalid' | 'unavailable', diagnostics: Diagnostic[], now: number): void {
+    this.transaction(() => {
+      const repo = this.repository(repositoryId);
+      if (!repo.source) throw new RuntimeError('Repository has no workflow source.');
+      Object.assign(repo.source, { observedRevision: revision, resolvedBranch: branch, status, diagnostics, checkedAt: now }); this.saveRepository(repo);
+    });
+  }
+  async activateSource(repositoryId: string, revision: string, branch: string, candidate: WorkflowPackage, now: number): Promise<WorkflowVersion> {
+    const repo = this.repository(repositoryId);
+    if (!repo.source || !/^[a-f0-9]{40}$/.test(revision) || repo.source.branch !== null && repo.source.branch !== branch || candidate.workflowPath !== repo.source.workflowPath) throw new RuntimeError('Workflow source identity does not match its registration.');
+    const pkg = buildPackage(candidate.workflowPath, Object.fromEntries(candidate.files.map(file => [file.path, file.text])), { maximumCapabilities: repo.source.maximumCapabilities });
+    if (pkg.digest !== candidate.digest) throw new RuntimeError('Workflow package digest mismatch.');
+    const ref = await this.artifacts.put(pkg);
+    return this.transaction(() => {
+      const current = this.repository(repositoryId), version = this.saveVersion(repo.id, ref, pkg.digest, revision, branch, now);
+      Object.assign(current.source!, { observedRevision: revision, resolvedBranch: branch, checkedAt: now, status: 'valid', diagnostics: [] });
+      if (!current.source!.held) this.selectVersion(current, version);
+      this.saveRepository(current); return version;
+    });
+  }
+  sourceUnchanged(repositoryId: string, revision: string, branch: string, now: number): void {
+    this.transaction(() => {
+      const repo = this.repository(repositoryId);
+      if (!repo.source || repo.source.observedRevision !== revision || repo.source.resolvedBranch !== branch) throw new RuntimeError('Source changed before activation. Poll it again.');
+      repo.source.checkedAt = now;
+      if (!repo.source.held && repo.source.status === 'valid') {
+        const version = this.versions(repo.id).versions.find(value => value.sourceRevision === revision && value.sourceBranch === branch);
+        if (!version) throw new RuntimeError('Validated source version is unavailable. Inspect private artifacts.');
+        this.selectVersion(repo, version);
+      }
+      this.saveRepository(repo);
+    });
+  }
+  rollback(repository: string, versionId: string): RepositoryRecord {
+    return this.transaction(() => {
+      const repo = this.repository(repository);
+      if (!repo.source) throw new RuntimeError('Rollback requires a repository-owned workflow source.');
+      this.selectVersion(repo, this.version(repo.id, versionId)); repo.source.held = true; this.saveRepository(repo); return repo;
+    });
+  }
+  resumeAuto(repository: string, now: number): RepositoryRecord {
+    return this.transaction(() => {
+      const repo = this.repository(repository);
+      if (!repo.source) throw new RuntimeError('Repository has no automatic workflow source.');
+      repo.source.held = false; repo.nextPollAt = now; this.saveRepository(repo); return repo;
+    });
+  }
+  async migrate(runId: string, versionId: string, now: number): Promise<MigrationRecord> {
+    const prior = this.run(runId), version = this.version(prior.repositoryId, versionId);
+    if (['closed', 'cancelled'].includes(prior.status)) throw new RuntimeError('Migration requires an open run. A cancelled run needs an explicit bounded retry first.');
+    const [old, next, inspection] = await Promise.all([this.artifacts.get<WorkflowPackage>(prior.package), this.artifacts.get<WorkflowPackage>(version.package), this.artifacts.get<Inspection>(prior.inspection)]);
+    const rebound = await this.artifacts.put({ ...inspection, packageDigest: next.digest });
+    return this.transaction(() => {
+      const run = this.run(runId);
+      if (json(run) !== json(prior)) throw new RuntimeError('Run advanced during migration. Inspect its checkpoint and retry migration.');
+      const changed = run.packageDigest !== version.packageDigest, observation = inspection.fixture.observations[0]!;
+      const timing = run.waitTiming;
+      run.waitTiming = {
+        youngUntil: timing?.youngUntil ?? (observation.createdAt ? Date.parse(observation.createdAt) + old.workflow.settings.newPrDelaySeconds * 1000 : null),
+        head: timing?.head?.headSha === run.headSha && timing.head.baseSha === run.baseSha ? timing.head : observation.headChangedAt ? { headSha: run.headSha, baseSha: run.baseSha, until: Date.parse(observation.headChangedAt) + old.workflow.settings.headDebounceSeconds * 1000 } : null,
+        reviewer: timing?.reviewer && timing.reviewer.startedAt === observation.externalReviewStartedAt ? timing.reviewer : observation.externalReviewStartedAt ? { startedAt: observation.externalReviewStartedAt, until: Date.parse(observation.externalReviewStartedAt) + old.workflow.settings.reviewDeadlineSeconds * 1000 } : null,
+      };
+      // Migration fences workers without changing any effect receipt or semantic identity.
+      run.token++; run.owner = null; run.leaseUntil = null;
+      this.db.prepare("UPDATE attempts SET state='superseded' WHERE run_id=? AND state='running'").run(run.id);
+      this.db.prepare("UPDATE effects SET state='unknown' WHERE run_id=? AND state='sending'").run(run.id);
+      if (changed) {
+        run.control.memory = { ...run.control.memory, classificationCurrent: false, reviewCurrent: false, packetCurrent: false };
+        delete run.control.review; delete run.control.classification;
+        for (const [id, evidence] of Object.entries(run.failedActions)) for (const [nextId, action] of Object.entries(next.workflow.actions))
+          if (old.workflow.actions[id]?.uses === action.uses) run.failedActions[nextId] = evidence;
+        const continuation = run.nextAction;
+        const failure = run.retryAction && run.failedActions[run.retryAction] === run.evidenceKey;
+        if (!failure) run.nextAction = null;
+        else if (continuation && !continuation.startsWith('$') && old.workflow.actions[continuation]?.uses !== next.workflow.actions[continuation]?.uses) {
+          run.nextAction = '$blocked'; run.status = 'blocked'; run.dueAt = null;
+        }
+        if (run.retryAction && old.workflow.actions[run.retryAction]?.uses !== next.workflow.actions[run.retryAction]?.uses) run.retryAction = null;
+      }
+      run.package = version.package; run.packageDigest = version.packageDigest; run.workflowVersionId = version.id; run.inspection = rebound;
+      if (run.status === 'running' || run.status === 'ready') { run.status = 'waiting'; run.dueAt = now; }
+      run.reason = `Migrated at an operator checkpoint. ${changed ? 'Derived analysis was invalidated.' : 'Compatible analysis was retained.'} Existing waits, suppression, receipts and charges remain recorded.`;
+      const checkpoint: MigrationRecord = { id: randomUUID(), runId, fromVersionId: prior.workflowVersionId, toVersionId: version.id, at: now, ownershipToken: run.token, notesRevision: run.notesRevision, evidenceKey: run.evidenceKey, invalidatedResults: changed };
+      this.db.prepare('INSERT INTO migrations VALUES (?,?,?)').run(checkpoint.id, runId, json(checkpoint)); this.saveRun(run); return checkpoint;
     });
   }
   pollFinished(id: string, nextPollAt: number, diagnostic: string | null): void {
@@ -118,7 +253,7 @@ export class RuntimeStore {
   async observe(repositoryId: string, inspection: Inspection, now: number): Promise<RunRecord | null> {
     const repo = this.repository(repositoryId), pr = inspection.evidence.pullRequest;
     parseFixture(inspection.fixture);
-    if (inspection.packageDigest !== repo.packageDigest || inspection.evidenceDigest !== digest(json(inspection.evidence))) throw new RuntimeError('Observation digest or package mismatch.');
+    if (inspection.evidenceDigest !== digest(json(inspection.evidence))) throw new RuntimeError('Observation evidence digest mismatch.');
     if (!pr) return null;
     if (inspection.evidence.repository?.id !== repo.id || inspection.evidence.requested.repository.toLowerCase() !== repo.name.toLowerCase()) throw new RuntimeError('Observation belongs to another repository.');
     const observation = inspection.fixture.observations[0]!;
@@ -126,10 +261,12 @@ export class RuntimeStore {
     const ref = await this.artifacts.put(inspection), key = digest(json({ head: pr.headSha, base: pr.baseSha, evidence: inspection.evidenceDigest }));
     return this.transaction(() => {
       const row = this.db.prepare('SELECT data FROM runs WHERE repository_id=? AND subject_id=?').get(repo.id, pr.id);
+      const currentRepo = this.repository(repo.id), pinned = row ? decode<RunRecord>(row).packageDigest : currentRepo.packageDigest;
+      if (!pinned || inspection.packageDigest !== pinned) throw new RuntimeError('Observation package does not match the pinned run or active configuration.');
       let run: RunRecord;
       if (!row) {
         run = { id: randomUUID(), repositoryId: repo.id, subjectKind: 'pull_request', subjectId: pr.id, number: pr.number,
-          package: repo.package, packageDigest: repo.packageDigest, inspection: ref, evidenceKey: key, headSha: pr.headSha, baseSha: pr.baseSha, control: { memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } },
+          package: currentRepo.package!, packageDigest: pinned, workflowVersionId: currentRepo.activeVersionId!, waitTiming: null, inspection: ref, evidenceKey: key, headSha: pr.headSha, baseSha: pr.baseSha, control: { memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } },
           status: 'ready', reason: 'New PR observed.', dueAt: now, nextAction: null, token: 0, owner: null, leaseUntil: null, notesRevision: 0, retries: 0, steps: 0, agents: 0, suppression: null, evidenceAvailable: true, failedActions: {}, retryAction: null };
         this.db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run(run.id, repo.id, pr.id, json(run));
       } else {
@@ -224,7 +361,7 @@ export class RuntimeStore {
       const id = randomUUID(), deadline = Math.min(claim.until, now + limits.maxAttemptSeconds * 1000);
       const job: AnalysisJob = { schemaVersion: 1, runId: run.id, attemptId: id, ownershipToken: claim.token, deadline: new Date(deadline).toISOString(),
         repositoryId: run.repositoryId, subjectId: run.subjectId, actionId: input.actionId, headSha: run.headSha!, baseSha: run.baseSha!, package: run.package, packageDigest: run.packageDigest,
-        inspection: run.inspection, sources: input.sources, evidenceKey: run.evidenceKey, notesRevision: run.notesRevision, profile: input.profile, profileDigest: input.profileDigest };
+        inspection: run.inspection, sources: input.sources, evidenceKey: run.evidenceKey, notesRevision: run.notesRevision, profile: input.profile, profileDigest: input.profileDigest, workflowVersionId: run.workflowVersionId };
       this.db.prepare('INSERT INTO attempts VALUES (?,?,?,?,?,?,NULL)').run(id, run.id, job.headSha, claim.token, 'running', json(job));
       this.db.prepare('INSERT INTO reservations VALUES (?,?,?,?,?)').run(id, run.repositoryId, day(now), units, deadline - now);
       run.agents++; run.nextAction = input.actionId; run.control.attemptsThisHead = count.head + 1;
@@ -301,8 +438,9 @@ export class RuntimeStore {
       return this.db.prepare('UPDATE effects SET state=?,receipt=?,token=? WHERE id=? AND run_id=? AND state=?').run(next, receipt == null ? null : json(receipt), claim.token, id, claim.runId, expected).changes === 1;
     });
   }
-  inspect(runId: string): { run: RunRecord; attempts: unknown[]; reservations: unknown[]; notes: unknown[]; effects: EffectRecord[] } {
+  inspect(runId: string): { run: RunRecord; version: WorkflowVersion; migrations: MigrationRecord[]; attempts: unknown[]; reservations: unknown[]; notes: unknown[]; effects: EffectRecord[] } {
     return { run: this.run(runId), attempts: this.db.prepare('SELECT * FROM attempts WHERE run_id=?').all(runId).map(row => ({ ...row, job: JSON.parse(String(row.job)), result: row.result ? JSON.parse(String(row.result)) : null })),
+      version: this.version(this.run(runId).repositoryId, this.run(runId).workflowVersionId), migrations: this.db.prepare('SELECT data FROM migrations WHERE run_id=? ORDER BY json_extract(data,\'$.at\')').all(runId).map(row => decode<MigrationRecord>(row)),
       reservations: this.db.prepare('SELECT reservations.* FROM reservations JOIN attempts ON attempts.id=attempt_id WHERE attempts.run_id=?').all(runId),
       notes: this.db.prepare('SELECT revision,artifact FROM notes WHERE run_id=? ORDER BY revision').all(runId).map(row => ({ revision: row.revision, artifact: JSON.parse(String(row.artifact)) })), effects: this.effects(runId) };
   }

@@ -6,6 +6,11 @@ export const daemonHelp = `Daemon commands use a private local Unix socket. The 
 
   repo-chap daemon start --state-dir <private-directory> --config <private-installation.json>
   repo-chap daemon register <workflow.json> --repo <owner/name> --profile <name> --state-dir <directory> [--repo-root <directory>] [--reviewers <login,login>] [--json]
+  repo-chap daemon register-source <repository-workflow-path> --repo <owner/name> --profile <name> --state-dir <directory> [--branch <name>] [--reviewers <login,login>] [--json]
+  repo-chap daemon versions --repo <owner/name-or-id> --state-dir <directory> [--json]
+  repo-chap daemon rollback <version-id> --repo <owner/name-or-id> --state-dir <directory> [--json]
+  repo-chap daemon resume-auto --repo <owner/name-or-id> --state-dir <directory> [--json]
+  repo-chap daemon migrate <run-id> --version <version-id> --state-dir <directory> [--json]
   repo-chap daemon status --state-dir <directory> [--json]
   repo-chap daemon inspect <run-id> --state-dir <directory> [--json]
   repo-chap daemon pause --repo <owner/name-or-id> --state-dir <directory> [--json]
@@ -16,6 +21,9 @@ export const daemonHelp = `Daemon commands use a private local Unix socket. The 
 Start stays in the foreground. Ctrl-C stops the daemon and active providers.
 Pause stops new dispatch for a repository; active analysis can finish.
 Cancel fences a run and stops its provider. Retry retains every attempt and budget charge.
+Register-source watches the repository default branch unless --branch is supplied.
+Rollback holds the selected version until resume-auto. It does not migrate existing runs.
+Migrate records a checkpoint, stops active analysis and retains all receipts and charges.
 Analysis never pushes, publishes, sends messages, or merges. Exit 7 means a daemon command failed.
 `;
 export async function daemonCommand(args: string[]): Promise<void> {
@@ -23,11 +31,13 @@ export async function daemonCommand(args: string[]): Promise<void> {
   try {
     const command = args.shift();
     if (!command || args.includes('--help') || command === '--help') { process.stdout.write(daemonHelp); return; }
-    if (!['start', 'register', 'status', 'inspect', 'pause', 'resume', 'cancel', 'retry'].includes(command)) throw new Error('Unknown daemon command. See repo-chap daemon --help.');
-    const positional = ['register', 'inspect', 'cancel', 'retry'].includes(command) ? args.shift() : undefined;
-    if (['register', 'inspect', 'cancel', 'retry'].includes(command) && (!positional || positional.startsWith('-'))) throw new Error(`${command} requires ${command === 'register' ? 'a workflow path' : 'a run ID'}.`);
+    if (!['start', 'register', 'register-source', 'versions', 'rollback', 'resume-auto', 'migrate', 'status', 'inspect', 'pause', 'resume', 'cancel', 'retry'].includes(command)) throw new Error('Unknown daemon command. See repo-chap daemon --help.');
+    const requiresValue = ['register', 'register-source', 'rollback', 'migrate', 'inspect', 'cancel', 'retry'].includes(command);
+    const positional = requiresValue ? args.shift() : undefined;
+    if (requiresValue && (!positional || positional.startsWith('-'))) throw new Error(`${command} requires ${command.startsWith('register') ? 'a workflow path' : command === 'rollback' ? 'a version ID' : 'a run ID'}.`);
     const options: Record<string, string> = {}, seen = new Set<string>();
-    const allowed = ['--state-dir', '--json', ...(command === 'start' ? ['--config'] : []), ...(['pause', 'resume', 'register'].includes(command) ? ['--repo'] : []), ...(command === 'register' ? ['--profile', '--repo-root', '--reviewers'] : [])];
+    const allowed = ['--state-dir', '--json', ...(command === 'start' ? ['--config'] : []), ...(['pause', 'resume', 'register', 'register-source', 'versions', 'rollback', 'resume-auto'].includes(command) ? ['--repo'] : []),
+      ...(command.startsWith('register') ? ['--profile', '--reviewers'] : []), ...(command === 'register' ? ['--repo-root'] : []), ...(command === 'register-source' ? ['--branch'] : []), ...(command === 'migrate' ? ['--version'] : [])];
     while (args.length) {
       const option = args.shift()!;
       if (!allowed.includes(option) || seen.has(option)) throw new Error(`Unknown or repeated option: ${option}. See repo-chap daemon --help.`);
@@ -46,12 +56,17 @@ export async function daemonCommand(args: string[]): Promise<void> {
       }); return;
     }
     let request: ControlRequest;
-    if (command === 'register') {
+    if (command === 'register' || command === 'register-source') {
       if (!options['--repo'] || !options['--profile']) throw new Error('Register requires --repo and --profile.');
-      request = { method: 'register', name: options['--repo'], profile: options['--profile'], reviewers: options['--reviewers']?.split(',').map(value => value.trim()) ?? [], package: await loadWorkflow(positional!, { repositoryRoot: options['--repo-root'] }) };
-    } else if (command === 'pause' || command === 'resume') {
+      const common = { name: options['--repo'], profile: options['--profile'], reviewers: options['--reviewers']?.split(',').map(value => value.trim()) ?? [] };
+      request = command === 'register' ? { method: command, ...common, package: await loadWorkflow(positional!, { repositoryRoot: options['--repo-root'] }) } :
+        { method: command, ...common, workflowPath: positional!, branch: options['--branch'] ?? null };
+    } else if (command === 'migrate') {
+      if (!options['--version']) throw new Error('Migrate requires --version <retained-version-id>. Use daemon versions.');
+      request = { method: command, runId: positional!, versionId: options['--version'] };
+    } else if (command === 'pause' || command === 'resume' || command === 'versions' || command === 'resume-auto' || command === 'rollback') {
       if (!options['--repo']) throw new Error(`${command} requires --repo <registered-name-or-id>.`);
-      request = { method: command, repository: options['--repo'] };
+      request = command === 'rollback' ? { method: command, repository: options['--repo'], versionId: positional! } : { method: command, repository: options['--repo'] };
     } else if (command === 'status') request = { method: command };
     else request = { method: command as 'inspect' | 'cancel' | 'retry', runId: positional! };
     const response = await requestControl(directory, request);
@@ -67,13 +82,25 @@ export async function daemonCommand(args: string[]): Promise<void> {
 function humanResult(command: string, value: unknown): string {
   const data = value as Record<string, any>;
   if (command === 'status') return ['Daemon analysis mode', ...(data.githubRetryAt ? [`GitHub retry after ${new Date(data.githubRetryAt).toISOString()}`] : []),
-    ...data.repositories.map((repo: any) => `${repo.name}: ${repo.paused ? 'paused' : 'active'}${repo.diagnostic ? `. ${repo.diagnostic}` : ''}`),
+    ...data.repositories.flatMap((repo: any) => repositoryLines(repo)),
     ...data.runs.map((run: any) => `${run.id} PR #${run.number}: ${run.status}. ${run.reason}${run.dueAt ? ` Next wake ${new Date(run.dueAt).toISOString()}.` : ''}`),
     ...(data.repositories.length ? [] : ['No repositories registered. Use daemon register.'])].join('\n') + '\n';
-  if (command === 'inspect') return [`Run ${data.run.id}: ${data.run.status}`, data.run.reason, `Head ${data.run.headSha ?? 'unknown'}`, `Package ${data.run.packageDigest}`,
+  if (command === 'inspect') return [`Run ${data.run.id}: ${data.run.status}`, data.run.reason, `Head ${data.run.headSha ?? 'unknown'}`, `Package ${data.run.packageDigest}`, `Run workflow version ${data.version.id}; source ${data.version.sourceRevision ?? 'explicit local package'}`,
+    `Migration checkpoints ${data.migrations.length}`,
     `Attempts ${data.attempts.length}; reservations ${data.reservations.reduce((sum: number, entry: any) => sum + entry.units, 0)} cost units; operator retries ${data.run.retries}`,
     ...data.results.map((note: any) => `${note.result.job.actionId}: ${note.result.provider.outcome}. ${note.result.provider.diagnostic}`), 'Use --json for complete evidence, results, and receipts.'].join('\n') + '\n';
   if (command === 'register') return `Registered ${data.name} in analysis mode. Package ${data.packageDigest}.\n`;
+  if (command === 'versions') return [...repositoryLines(data.repository), ...data.versions.map((version: any) =>
+    `${version.id}${version.id === data.repository.activeVersionId ? ' ACTIVE' : ''}: source ${version.sourceRevision ?? 'explicit local package'}; package ${version.packageDigest}`),
+    ...(data.versions.length ? ['Use rollback <version-id> to select and hold a version; resume-auto permits source activation again.'] : ['No valid package yet. Correct the source files and commit a new source revision.'])].join('\n') + '\n';
+  if (command === 'register-source' || command === 'rollback' || command === 'resume-auto') return repositoryLines(data).join('\n') + '\n';
+  if (command === 'migrate') return [`Run ${data.run.id}: ${data.run.status}. ${data.run.reason}`, `Checkpoint ${data.checkpoint.id}`, `Run workflow version ${data.version.id}; source ${data.version.sourceRevision ?? 'explicit local package'}`, `Package ${data.run.packageDigest}`].join('\n') + '\n';
   if (command === 'pause' || command === 'resume') return `${data.name}: ${data.paused ? 'paused' : 'active'}.\n`;
   return `Run ${data.id}: ${data.status}. ${data.reason}\n`;
+}
+function repositoryLines(repo: any): string[] {
+  return [`${repo.name}: ${repo.paused ? 'paused' : !repo.package ? 'blocked, no valid workflow' : 'active'}${repo.diagnostic ? `. ${repo.diagnostic}` : ''}`,
+    `Active workflow version ${repo.activeVersionId ?? 'none'}; package ${repo.packageDigest ?? 'none'}`,
+    ...(repo.source ? [`Source ${repo.source.resolvedBranch ?? repo.source.branch ?? 'repository default branch'} at ${repo.source.observedRevision ?? 'unknown'}: ${repo.source.status}; automatic activation ${repo.source.held ? 'held, use resume-auto to release' : 'enabled'}`,
+      ...repo.source.diagnostics.map((item: any) => `${item.path}: ${item.message}`)] : [])];
 }

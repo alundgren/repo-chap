@@ -1,4 +1,4 @@
-import type { ControlState, WorkflowPackage } from '@repo-chap/workflow';
+import type { Capability, ControlState, Diagnostic, WorkflowPackage } from '@repo-chap/workflow';
 import type { Inspection } from '@repo-chap/github';
 import type { ProviderResult } from '@repo-chap/providers';
 
@@ -14,9 +14,28 @@ export const defaultLimits: RuntimeLimits = {
   maxAttemptSeconds: 300, maxImmediateSteps: 32, pollSeconds: 60,
 };
 export interface RepositoryRecord {
-  id: string; name: string; package: ArtifactRef; packageDigest: string; profile: string;
+  id: string; name: string; package: ArtifactRef | null; packageDigest: string | null; profile: string;
   reviewers: string[]; paused: boolean; nextPollAt: number; diagnostic: string | null;
   lastPolledPr: number;
+  activeVersionId: string | null; source: WorkflowSource | null;
+}
+export interface WorkflowSource {
+  workflowPath: string; branch: string | null; maximumCapabilities: Capability[];
+  resolvedBranch: string | null; observedRevision: string | null; checkedAt: number | null;
+  status: 'pending' | 'valid' | 'invalid' | 'unavailable'; diagnostics: Diagnostic[]; held: boolean;
+}
+export interface WorkflowVersion {
+  id: string; repositoryId: string; package: ArtifactRef; packageDigest: string;
+  sourceRevision: string | null; sourceBranch: string | null; createdAt: number;
+}
+export interface MigrationRecord {
+  id: string; runId: string; fromVersionId: string; toVersionId: string; at: number;
+  ownershipToken: number; notesRevision: number; evidenceKey: string; invalidatedResults: boolean;
+}
+export interface WaitTiming {
+  youngUntil: number | null;
+  head: { headSha: string | null; baseSha: string | null; until: number } | null;
+  reviewer: { startedAt: string; until: number } | null;
 }
 export type RunStatus = 'ready' | 'running' | 'waiting' | 'blocked' | 'cancelled' | 'closed';
 export interface RunRecord {
@@ -28,6 +47,7 @@ export interface RunRecord {
   retries: number; steps: number; agents: number; suppression: string | null;
   evidenceAvailable: boolean;
   failedActions: Record<string, string>; retryAction: string | null;
+  workflowVersionId: string; waitTiming: WaitTiming | null;
 }
 export interface Claim { runId: string; owner: string; token: number; until: number; evidenceKey: string; notesRevision: number }
 export interface AnalysisJob {
@@ -35,6 +55,7 @@ export interface AnalysisJob {
   repositoryId: string; subjectId: string; actionId: string; headSha: string; baseSha: string;
   package: ArtifactRef; packageDigest: string; inspection: ArtifactRef; sources: ArtifactRef;
   evidenceKey: string; notesRevision: number; profile: string; profileDigest: string;
+  workflowVersionId?: string;
 }
 export interface AnalysisResult {
   schemaVersion: 1; job: AnalysisJob; provider: ProviderResult;
@@ -45,4 +66,5 @@ export interface EffectRequest {
 export type EffectState = 'planned' | 'sending' | 'confirmed' | 'rejected' | 'unknown';
 export interface EffectRecord extends EffectRequest { id: string; runId: string; token: number; state: EffectState; receipt: unknown | null }
 export interface Registration { id: string; name: string; package: WorkflowPackage; profile: string; reviewers: string[] }
+export interface SourceRegistration { id: string; name: string; workflowPath: string; branch: string | null; profile: string; reviewers: string[]; maximumCapabilities: Capability[] }
 export interface ObservationInput { repositoryId: string; inspection: Inspection; package: ArtifactRef }

@@ -109,3 +109,19 @@ analysis finish. Cancel fences the active worker. Retry retains every limit and
 charge. Exit 7 indicates a failed daemon command with a corrective diagnostic.
 Deferred repair/publication actions are visible stops. No CLI output calls
 analysis success merge permission. See [daemon operation](daemon-analysis.md).
+
+`register-source` names a repository-relative workflow path and optional branch.
+It reports a first invalid source as a registered repository with no valid workflow,
+so the operator can fix and commit the files without registering again. `versions`
+shows active and observed source revisions, retained version IDs, exact validation
+diagnostics, and whether automatic activation is held. `inspect` names the run's
+own workflow source revision, package digest and migration checkpoints.
+
+`rollback` selects a retained version and holds automatic activation. `resume-auto`
+releases that hold; a separately paused repository stays paused. Polling continues
+to validate source changes during both hold and pause. `migrate` requires a run ID
+and explicit retained version ID. Its output names the checkpoint and resulting
+version, states that derived analysis was invalidated when needed, and confirms
+that existing waits, suppression, receipts and charges remain recorded. Help warns
+that migration stops active analysis. These are text controls with JSON equivalents;
+there is no new visual application flow.
