@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "prNodeId": "PR_EXAMPLE_42",
+  "repositoryNodeId": "REPO_EXAMPLE_1",
+  "lifecycleGeneration": 1,
+  "revision": 9,
+  "workflowDigest": "sha256:example-package-digest",
+  "policyRevision": 1,
+  "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+  "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "phase": "waiting_human",
+  "nextWakeAt": null,
+  "reason": "Current decision packet requires human merge.",
+  "repairsThisLifecycle": 1,
+  "notesRevision": 2,
+  "artifactRefs": [
+    "review:current-head",
+    "effect:conditional-push",
+    "packet:REQUEST_EXAMPLE_1"
+  ],
+  "repairSuppression": null
+}

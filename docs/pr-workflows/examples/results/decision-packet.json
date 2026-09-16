@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "requestId": "REQUEST_EXAMPLE_1",
+  "repository": "example-org/sample-app",
+  "prNumber": 42,
+  "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+  "workflowVersion": "0.1.0",
+  "outcome": "ready_for_human_merge",
+  "reason": "The requested ownership check is pushed and the current review has no blocking findings.",
+  "recommendedDecision": "Review the authorization change and merge on GitHub if the evidence is sufficient.",
+  "labels": [
+    "auth"
+  ],
+  "checks": [
+    {
+      "name": "ownership-check",
+      "status": "passed",
+      "evidenceRef": "check:ownership-check:candidate"
+    },
+    {
+      "name": "typecheck",
+      "status": "passed",
+      "evidenceRef": "check:typecheck:candidate"
+    }
+  ],
+  "findings": [],
+  "attemptedFixes": [
+    "Added ownership validation and a regression test; conditional push confirmed."
+  ],
+  "uncertainty": [
+    "The engine cannot verify production authorization configuration."
+  ],
+  "evidenceRefs": [
+    "review:current-head",
+    "effect:conditional-push",
+    "thread:THREAD_EXAMPLE_1"
+  ],
+  "reviewUrl": "https://github.com/example-org/sample-app/pull/42",
+  "expiresAt": "2026-09-15T12:00:00Z"
+}

@@ -1,0 +1,12 @@
+node_modules/
+.venv/
+dist/
+coverage/
+test-results/
+playwright-report/
+.DS_Store
+.env
+.env.*
+*.pem
+*.sqlite
+*.sqlite-*

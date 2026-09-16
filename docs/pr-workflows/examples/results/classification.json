@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "labels": [
+    {
+      "name": "auth",
+      "reason": "The change adds an ownership check.",
+      "evidence": [
+        {
+          "path": "src/records/get-record.ts",
+          "side": "head",
+          "startLine": 18,
+          "endLine": 24,
+          "explanation": "Rejects records belonging to another user."
+        }
+      ]
+    }
+  ],
+  "uncertain": false
+}

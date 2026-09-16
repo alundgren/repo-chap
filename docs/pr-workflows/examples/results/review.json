@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "summary": "The authorization helper checks ownership before returning a record.",
+  "verdict": "acceptable",
+  "coverage": "complete",
+  "missingEvidence": [],
+  "findings": []
+}

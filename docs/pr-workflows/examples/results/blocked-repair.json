@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "outcome": "blocked",
+  "expectedHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "reason": "Two reviewers requested incompatible authorization behavior. A product decision is required.",
+  "threads": [
+    {
+      "threadId": "THREAD_EXAMPLE_2",
+      "disposition": "blocked",
+      "response": "Please choose whether records can be shared across groups.",
+      "evidenceRefs": [
+        "thread:THREAD_EXAMPLE_2"
+      ]
+    }
+  ],
+  "notesMarkdown": "# Working notes\n\nNo code was changed. Waiting for a decision about cross-group access.\n"
+}
