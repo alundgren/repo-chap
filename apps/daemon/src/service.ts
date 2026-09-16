@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { controlDecision, currentFacts, evaluate, hasCompleteEvidence, WorkflowError, type Capability, type WorkflowPackage, type Observation, type Workflow } from '@repo-chap/workflow';
-import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions, type PushCredentials, type PushTransport } from '@repo-chap/github';
+import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions, type PushCredentials, type PushTransport, type PullRequestWriteCredentials, type ThreadTransport } from '@repo-chap/github';
 import { ExecutionError, validateTestedCandidate, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
 import type { ProviderProfile, SourceBundle } from '@repo-chap/providers';
 import { RuntimeError, RuntimeStore, StaleObservationError, requireApplyPolicy, applyPolicyDigest, type ApplyPolicy, type EffectRecord, type RepairAttemptJob, type RepairAttemptResult, type AnalysisJob, type AnalysisResult, type Claim, type Registration, type RepositoryRecord, type RunRecord, type SourceRegistration } from '@repo-chap/runtime';
 import { executeAnalysis, fetchSources, executeRepair, fetchRepairSources, profileDigest } from './worker.js';
 import { dispatchCandidatePush, reconcilePendingPushes } from './push.js';
+import { dispatchThreadResolutions, reconcilePendingThreads } from './threads.js';
 import { fetchWorkflowCommit } from './source.js';
 
 export interface DaemonDependencies {
@@ -16,6 +17,8 @@ export interface DaemonDependencies {
   workflowSource?: (repository: string, revision: string, path: string, maximumCapabilities: readonly Capability[], signal: AbortSignal) => Promise<WorkflowPackage>;
   applyPolicy?: (repository: string) => Promise<ApplyPolicy | null>;
   pushCredentials?: (repository: string) => Promise<PushCredentials>;
+  threadCredentials?: (repository: string) => Promise<PullRequestWriteCredentials>;
+  threadTransport?: (repository: string, signal: AbortSignal) => Promise<ThreadTransport>;
   repairSources?: (repository: string, inspection: Inspection, signal: AbortSignal) => Promise<ExecutionArtifact>;
   repair?: (job: RepairAttemptJob, profile: ProviderProfile, signal: AbortSignal, isCurrent: () => boolean) => Promise<RepairAttemptResult>;
   pushTransport?: (repository: string, checkout: string, signal: AbortSignal) => Promise<PushTransport>;
@@ -94,6 +97,7 @@ export class DaemonService {
     try {
       this.store.recover(this.now()); this.abortStale();
       await reconcilePendingPushes(this.store, this.dependencies, this.now, this.shutdown.signal);
+      await reconcilePendingThreads(this.store, this.dependencies, () => this.reader(), this.now);
       for (const repo of this.store.repositories().sort((a, b) => a.nextPollAt - b.nextPollAt)) {
         if (this.dependencies.target && repo.name.toLowerCase() !== this.dependencies.target.repository.toLowerCase()) continue;
         if (this.stopped || this.store.cooldown() > this.now()) break;
@@ -180,8 +184,13 @@ export class DaemonService {
       return;
     }
     const repairing = ['agent.resolve_conflict', 'agent.address_review'].includes(action.uses);
-    const applying = repairing || ['checks.validate_candidate', 'github.push_candidate'].includes(action.uses);
+    const applying = repairing || ['checks.validate_candidate', 'github.push_candidate', 'github.resolve_eligible_threads'].includes(action.uses);
     if (!['agent.classify', 'agent.review'].includes(action.uses) && !(applying && this.dependencies.applyPolicy)) { park('blocked', `Analysis mode stopped before ${action.uses}. Review retained analysis locally.`, null, actionId, true); return; }
+    if (action.uses === 'github.resolve_eligible_threads') {
+      try { await dispatchThreadResolutions(this.store, claim, actionId, pkg, this.dependencies, () => this.reader(), this.now, signal); }
+      catch (error) { if (this.store.isCurrent(claim, this.now())) park('blocked', error instanceof RuntimeError ? error.message : 'Thread resolution could not validate its retained repair and receipts. Inspect the individual concerns.', null, actionId); }
+      return;
+    }
     const facts = currentFacts(workflow, observation, clock);
     if (!hasCompleteEvidence(facts) || facts.lifecycle !== 'open' || facts.draft !== false || facts.young !== false || facts.headDebouncing !== false) {
       park('waiting', 'Analysis requires complete evidence and an open, non-draft PR after its delays.', Math.max(this.now() + this.store.limits.pollSeconds * 1000, retryAt(inspection))); return;

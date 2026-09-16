@@ -20,7 +20,7 @@ process.stdin.on('end', () => {
   }
   if (!fs.readFileSync('AGENTS.md','utf8').includes('numeric')) throw new Error('Missing pinned instructions');
   const threads = data.evidence.threads.items.filter(thread => !thread.resolved).map(thread => ({ threadId: thread.id,
-    disposition: mode === 'blocked' || mode === 'blocked_thread' ? 'blocked' : mode === 'no_change' || mode === 'declined' ? 'declined' : 'addressed',
+    disposition: mode === 'blocked' || mode === 'blocked_thread' ? 'blocked' : mode === 'no_change' || mode === 'declined' || mode === 'mixed_threads' && thread.id === 'THREAD_declined' ? 'declined' : 'addressed',
     response: mode === 'blocked' ? 'Should the public value be three or four? Product intent is unknown.' : 'Changed the value as requested.', evidenceRefs: [`thread:${thread.id}`] }));
   let result;
   if (['blocked', 'no_change'].includes(mode)) result = { schemaVersion: 1, outcome: mode, expectedHeadSha: data.sources.headSha,

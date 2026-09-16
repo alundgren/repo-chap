@@ -5,6 +5,7 @@ import { prepareCaptureDirectory } from '@repo-chap/github';
 import { RuntimeError } from '@repo-chap/runtime';
 import type { WorkflowPackage } from '@repo-chap/workflow';
 import type { DaemonService } from './service.js';
+import { threadResolutionSummary } from './threads.js';
 
 const maximum = 20 * 1024 * 1024;
 export type ControlRequest = { method: 'status' } | { method: 'inspect' | 'cancel' | 'retry'; runId: string } |
@@ -28,7 +29,7 @@ export async function handleControl(service: DaemonService, request: ControlRequ
     case 'inspect': {
       if (typeof request.runId !== 'string') throw new RuntimeError('Inspect requires a run ID.');
       const details = service.store.inspect(request.runId);
-      return { ...details, inspection: await service.store.artifacts.get(details.run.inspection), results: await Promise.all(details.notes.map(async item => {
+      return { ...details, threadResolution: await threadResolutionSummary(service.store, request.runId), inspection: await service.store.artifacts.get(details.run.inspection), results: await Promise.all(details.notes.map(async item => {
         const note = item as { revision: number; artifact: Parameters<typeof service.store.artifacts.get>[0] };
         return { revision: note.revision, result: await service.store.artifacts.get(note.artifact) };
       })) };

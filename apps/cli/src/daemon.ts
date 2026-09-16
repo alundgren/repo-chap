@@ -92,6 +92,8 @@ export function humanResult(command: string, value: unknown): string {
     `Attempts ${data.attempts.length}; reservations ${data.reservations.reduce((sum: number, entry: any) => sum + entry.units, 0)} cost units; operator retries ${data.run.retries}`,
     ...data.results.map((note: any) => { const result = note.result.repair ?? note.result.provider ?? note.result; return `${note.result.job.actionId}: ${result.status ?? result.outcome}. ${result.diagnostic}`; }),
     ...(data.run.repair ? [`Candidate ${data.run.repair.candidateSha ?? 'none'}; required checks ${data.run.repair.checksCurrent ? 'validated' : 'not validated'}`] : []),
+    ...(data.threadResolution ? [`Push ${data.threadResolution.pushConfirmed ? 'confirmed' : 'unconfirmed'}: ${data.threadResolution.candidateSha}; ${data.threadResolution.remainingConcerns.length} concerns need attention.`,
+      ...data.threadResolution.concerns.map((concern: any) => `Thread ${concern.threadId}: ${concern.state}, ${concern.disposition}. ${concern.reason}`)] : []),
     ...data.effects.map((effect: any) => `Effect ${effect.id}: ${effect.state}. ${effect.kind} to ${effect.destination}; expected ${effect.expectedRevision}. ${effect.receipt?.reason ?? 'Planned effect retained locally.'}`), 'Use --json for complete evidence, results, and receipts.'].join('\n') + '\n';
   if (command === 'register') return `Registered ${data.name}. Private installation policy controls apply permissions. Package ${data.packageDigest}.\n`;
   if (command === 'versions') return [...repositoryLines(data.repository), ...data.versions.map((version: any) =>

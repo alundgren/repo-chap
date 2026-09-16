@@ -153,3 +153,19 @@ for unknown outcomes and never starts a provider or sends. `--retry` requests a
 bounded retry of the retained failed action; the output keeps previous charges
 and send attempts visible. Local commands stop when work waits or blocks and
 explain when to rerun using the same private state directory.
+
+## Review-thread outcomes
+
+Apply and daemon inspection name the confirmed pushed candidate and list each
+thread's disposition, state and reason. Eligible plans, skipped decisions,
+confirmed remote state, rejections, unknown results and stale concerns remain
+distinct. The remaining-concern count does not imply every listed concern is
+still open remotely; a thread resolved during a concurrent edit still needs
+inspection. JSON records `remoteResolved` and `evidenceCurrent` separately.
+
+An ambiguous send does not offer an automatic repeat just because a later read
+finds the thread open. The output explains that it may have been reopened or
+the first request may still finish. Read-only reconciliation can confirm a
+resolved thread after a crash. A later reopened concern stays visible beside
+its historical receipt. Failed resolution retains the tested repair, so another
+model call is not part of recovery. See [thread resolution](thread-resolution.md).

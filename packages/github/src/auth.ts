@@ -46,6 +46,15 @@ export interface InstallationOptions {
   now?: () => number;
 }
 export interface PushCredentials extends CredentialSource { repository: string; permission: 'contents:write' }
+export interface PullRequestWriteCredentials extends CredentialSource { repository: string; permission: 'pull_requests:write' }
+export async function localPullRequestWriteCredentials(repository: string, options: Parameters<typeof localCredentials>[0] = {}): Promise<PullRequestWriteCredentials> {
+  validateRepository(repository);
+  return { ...await localCredentials(options), repository, permission: 'pull_requests:write' };
+}
+export function installationPullRequestWriteCredentials(options: InstallationOptions, repository: string): PullRequestWriteCredentials {
+  validateRepository(repository);
+  return { ...installationToken(options, { contents: 'read', pull_requests: 'write' }, [repository.split('/')[1]!]), repository, permission: 'pull_requests:write' };
+}
 export async function localPushCredentials(repository: string, options: Parameters<typeof localCredentials>[0] = {}): Promise<PushCredentials> {
   validateRepository(repository);
   return { ...await localCredentials(options), repository, permission: 'contents:write' };
@@ -97,6 +106,7 @@ function installationToken(options: InstallationOptions, permissions: Record<str
       if (typeof data.token !== 'string' || !data.token || typeof data.expires_at !== 'string' || Date.parse(data.expires_at) <= now() + 60_000 || !Number.isFinite(Date.parse(data.expires_at)))
         throw new GitHubReadError('credentials');
       if (permissions.contents === 'write' && data.permissions?.contents !== 'write') throw new GitHubReadError('credentials');
+      if (permissions.pull_requests === 'write' && data.permissions?.pull_requests !== 'write') throw new GitHubReadError('credentials');
       cached = { token: vault.add(data.token), expires: Date.parse(data.expires_at) };
       return cached.token;
     } catch (error) {

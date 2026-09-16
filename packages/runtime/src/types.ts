@@ -49,7 +49,17 @@ export interface RunRecord {
   evidenceAvailable: boolean;
   failedActions: Record<string, string>; retryAction: string | null;
   workflowVersionId: string; waitTiming: WaitTiming | null;
-  repair?: { job: RepairAttemptJob; result: ExecutionArtifact; candidateSha: string | null; checksCurrent: boolean; pushEffectId: string | null } | null;
+  repair?: RetainedRepair | null;
+  threadResolution?: ThreadResolutionProgress | null;
+}
+export interface RetainedRepair { job: RepairAttemptJob; result: ExecutionArtifact; candidateSha: string | null; checksCurrent: boolean; pushEffectId: string | null }
+export interface ThreadConcern {
+  threadId: string; disposition: 'addressed' | 'declined' | 'blocked' | 'unrelated'; effectId: string | null;
+  state: 'eligible' | 'skipped' | 'confirmed' | 'rejected' | 'unknown' | 'stale'; reason: string;
+  remoteResolved: boolean | null; evidenceCurrent: boolean | null;
+}
+export interface ThreadResolutionProgress {
+  actionId: string; pushEffectId: string; repair: RetainedRepair; packageDigest: string; completed: boolean; concerns: ThreadConcern[]; continuation?: string;
 }
 export interface Claim { runId: string; owner: string; token: number; until: number; evidenceKey: string; notesRevision: number }
 export interface AnalysisJob {

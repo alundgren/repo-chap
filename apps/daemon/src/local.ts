@@ -1,9 +1,10 @@
-import { validateTarget } from '@repo-chap/github';
+import { GitHubReader, validateTarget } from '@repo-chap/github';
 import { RuntimeError, RuntimeStore } from '@repo-chap/runtime';
 import type { WorkflowPackage } from '@repo-chap/workflow';
 import { DaemonService, type DaemonDependencies } from './service.js';
 import { handleControl } from './control.js';
 import { reconcilePendingPushes } from './push.js';
+import { reconcilePendingThreads } from './threads.js';
 
 export interface LocalApplyOptions {
   directory: string; repository: string; number: number; package: WorkflowPackage; profile: string;
@@ -53,7 +54,11 @@ export async function inspectLocalApply(directory: string, runId: string, depend
     const access = dependencies ?? { credentials: { token: async () => { throw new RuntimeError('Inspect does not request credentials.'); }, redact: (value: string) => value }, profile: async () => { throw new RuntimeError('Inspect does not start a provider.'); } };
     const scoped = { ...access, directory, target: { repository: repository.name, number: run.number } };
     service = new DaemonService(store, scoped);
-    if (dependencies) { store.recover(service.now()); await reconcilePendingPushes(store, scoped, service.now, signal ?? new AbortController().signal); }
+    if (dependencies) {
+      store.recover(service.now()); await reconcilePendingPushes(store, scoped, service.now, signal ?? new AbortController().signal);
+      await reconcilePendingThreads(store, scoped, () => new GitHubReader(scoped.credentials, { ...scoped.readOptions, signal, now: service!.now,
+        cooldown: { read: () => store.cooldown(), extend: until => { store.cooldown(until); } } }), service.now);
+    }
     return await handleControl(service, { method: 'inspect', runId });
   } finally {
     await service?.stop(); if (ownership) store.releaseDaemon(ownership); store.close();
