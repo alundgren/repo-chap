@@ -388,3 +388,119 @@ test('restored unknown post uses the explicitly reconciled receipt instead of cr
     assert.equal(s.store.slack.request(request.id).status, 'open'); assert.equal(s.store.effectAttempts(original.id)[0]!.state, 'unknown'); assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
   } finally { await s.cleanup(); }
 });
+
+for (const cleanup of ['pending', 'confirmed']) test(`a new decision after a route return reuses the latest receipt after ${cleanup} cleanup and restart`, async () => {
+  const s = await fixture();
+  try {
+    const a = await s.queue(); await s.deliver(); const receipt = s.store.slack.request(a.id).receipt!;
+    await s.revise(); const b = await s.queue({ outcome: 'needs_team', reason: 'Decision B for the team.' }); await s.deliver();
+    await s.store.observe(s.repo.id, s.inspection, s.now); const restored = await s.queue(); await s.deliver();
+    assert.equal(restored.id, a.id); assert.deepEqual(restored.receipt, receipt);
+    const teamCalls = s.calls.filter(call => call.body.channel === 'CPAPERBOAT').length;
+    await s.revise(); s.store.slack.supersedeStale(s.now);
+    if (cleanup === 'confirmed') await s.deliver();
+    await s.reopen(); const c = await s.queue({ reason: 'Decision C in the private channel.' }); await s.deliver();
+    assert.equal(c.activation, 3); assert.deepEqual(c.receipt, receipt);
+    assert.deepEqual(s.store.slack.requests(s.run.id).filter(request => request.status === 'open').map(request => request.id), [c.id]);
+    assert.equal(s.store.slack.request(b.id).status, 'superseded');
+    assert.equal(s.calls.filter(call => call.method === 'chat.postMessage' && call.body.channel === 'GENGINEERS').length, 1);
+    assert.equal(s.calls.filter(call => call.body.channel === 'CPAPERBOAT').length, teamCalls);
+    assert.equal(s.calls.at(-1)!.method, 'chat.update'); assert.equal(s.calls.at(-1)!.body.ts, receipt.timestamp); assert.match(s.calls.at(-1)!.body.text, /Decision C in the private channel/);
+    assert.equal(s.store.inspect(s.run.id).attempts.length, 0); assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
+  } finally { await s.cleanup(); }
+});
+
+test('several intent changes at one clock time retain queue order through restart', async () => {
+  const s = await fixture();
+  try {
+    const a = await s.queue(); await s.deliver(); const receipt = s.store.slack.request(a.id).receipt!, at = s.now;
+    await s.revise(); const b = await s.queue({ outcome: 'needs_team', reason: 'Decision B.' });
+    await s.store.observe(s.repo.id, s.inspection, s.now); const restored = await s.queue();
+    await s.revise(); s.store.slack.supersedeStale(s.now); const c = await s.queue({ reason: 'Decision C.' });
+    assert.equal(s.now, at); assert.deepEqual([a.activation, b.activation, restored.activation, c.activation], [0, 1, 2, 3]);
+    await s.reopen(); await s.deliver();
+    assert.deepEqual(s.store.slack.request(c.id).receipt, receipt); assert.deepEqual(s.store.slack.requests(s.run.id).filter(request => request.status === 'open').map(request => request.id), [c.id]);
+    assert.deepEqual(s.calls.filter(call => call.method.startsWith('chat.')).map(call => call.method), ['chat.postMessage', 'chat.update']);
+    assert.equal(s.calls.at(-1)!.body.ts, receipt.timestamp); assert.match(s.calls.at(-1)!.body.text, /Decision C/);
+    assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
+  } finally { await s.cleanup(); }
+});
+
+test('late cleanup reconciliation cannot replace the latest intent or authorize an unknown retry', async () => {
+  const s = await fixture();
+  try {
+    const a = await s.queue(); await s.deliver(); const privateReceipt = s.store.slack.request(a.id).receipt!;
+    await s.revise(); const b = await s.queue({ outcome: 'needs_team', reason: 'Decision B.' }); await s.deliver(); const teamReceipt = s.store.slack.request(b.id).receipt!;
+    await s.store.observe(s.repo.id, s.inspection, s.now); await s.queue();
+    const cleanup = s.store.slack.deliveries().find(delivery => delivery.requestId === b.id && delivery.operation === 'supersede')!;
+    const lease = s.store.slack.begin(cleanup.id, teamReceipt.channelId, 'cleanup-worker', s.now)!; assert.ok(lease);
+    assert.equal(s.store.slack.finish(lease, { status: 'unknown', reason: 'Slack accepted cleanup but the response was lost.' }, s.now), true);
+    await s.revise(); s.store.slack.supersedeStale(s.now); const c = await s.queue({ reason: 'Decision C.' });
+    const sent = s.calls.length; await s.reopen(); await s.deliver(); assert.equal(s.calls.length, sent);
+    s.store.slack.reconcile(cleanup.id, { action: 'delivered', receipt: teamReceipt }, s.now);
+    assert.equal(s.store.slack.request(b.id).activation, 1); assert.equal(s.store.slack.request(c.id).activation, 3);
+    const d = await s.queue({ reason: 'Decision D after the older receipt was recorded.' }); await s.deliver();
+    assert.equal(d.activation, 4); assert.deepEqual(d.receipt, privateReceipt);
+    assert.deepEqual(s.store.slack.requests(s.run.id).filter(request => request.status === 'open').map(request => request.id), [d.id]);
+    assert.equal(s.calls.filter(call => call.method === 'chat.postMessage').length, 2); assert.equal(s.calls.at(-1)!.method, 'chat.update'); assert.equal(s.calls.at(-1)!.body.ts, privateReceipt.timestamp);
+    assert.match(s.calls.at(-1)!.body.text, /Decision D after the older receipt/);
+    assert.equal(s.store.slack.delivery(cleanup.id).state, 'confirmed'); assert.equal(s.store.effectAttempts(cleanup.id)[0]!.state, 'unknown');
+    assert.ok(s.store.slack.requests(s.run.id).every(request => request.resends === 0));
+    assert.equal(s.store.inspect(s.run.id).attempts.length, 0); assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
+  } finally { await s.cleanup(); }
+});
+
+test('distinct complete packets with identical bounded previews keep their own delivery work', async () => {
+  const s = await fixture();
+  try {
+    const prefix = 'A retained finding. '.repeat(30);
+    const a = await s.queue({ findings: [prefix + 'First ending.'] });
+    const b = await s.queue({ findings: [prefix + 'Second ending.'] });
+    assert.notEqual(a.id, b.id); assert.notEqual(a.packet.digest, b.packet.digest); assert.equal(a.preview.digest, b.preview.digest);
+    await s.deliver(); const receipt = s.store.slack.request(b.id).receipt!; assert.ok(receipt);
+    const c = await s.queue({ findings: [prefix + 'Third ending.'] }); await s.deliver();
+    assert.deepEqual(c.receipt, receipt); assert.equal(c.preview.digest, b.preview.digest);
+    assert.equal((await s.queue({ findings: [prefix + 'Third ending.'] })).id, c.id); await s.reopen(); await s.deliver();
+    const inbox = await s.store.slack.inbox(s.run.id) as { id: string; packet: DecisionPacket }[];
+    assert.equal(inbox.find(request => request.id === c.id)!.packet.findings[0], prefix + 'Third ending.');
+    assert.deepEqual(s.calls.filter(call => call.method.startsWith('chat.')).map(call => call.method), ['chat.postMessage', 'chat.update']);
+    assert.equal(s.store.slack.deliveries().filter(delivery => delivery.state === 'confirmed').length, 2);
+    assert.deepEqual(s.store.slack.requests(s.run.id).filter(request => request.status === 'open').map(request => request.id), [c.id]);
+    assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
+  } finally { await s.cleanup(); }
+});
+
+test('requests without activation metadata retain their receipts and enter the ordered history on restoration', async () => {
+  const s = await fixture();
+  try {
+    const a = await s.queue(); await s.deliver(); const receipt = s.store.slack.request(a.id).receipt!;
+    await s.revise(); await s.queue({ outcome: 'needs_team', reason: 'Decision B.' }); await s.deliver();
+    const db = new DatabaseSync(join(s.directory, 'runtime.sqlite'));
+    db.exec("UPDATE slack_requests SET data=json_remove(data,'$.activation'); UPDATE slack_deliveries SET data=json_remove(data,'$.activation');"); db.close();
+    await s.reopen(); await s.store.observe(s.repo.id, s.inspection, s.now); const restored = await s.queue(); await s.deliver();
+    assert.equal(restored.activation, 1); assert.deepEqual(restored.receipt, receipt);
+    await s.revise(); s.store.slack.supersedeStale(s.now); const c = await s.queue({ reason: 'Decision C.' }); await s.deliver();
+    assert.equal(c.activation, 2); assert.deepEqual(c.receipt, receipt);
+    assert.equal(s.calls.filter(call => call.method === 'chat.postMessage' && call.body.channel === receipt.channelId).length, 1);
+    assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
+  } finally { await s.cleanup(); }
+});
+
+test('restoring an earlier request keeps its exhausted explicit-resend allowance', async () => {
+  const s = await fixture();
+  try {
+    const a = await s.queue(); s.failure('access'); await s.deliver();
+    let delivery = s.store.slack.deliveries()[0]!;
+    for (let count = 0; count < 3; count++) {
+      delivery = s.store.slack.reconcile(delivery.id, { action: 'resend' }, s.now); await s.deliver();
+      assert.equal(s.store.slack.delivery(delivery.id).state, 'rejected');
+    }
+    await s.revise(); await s.queue({ outcome: 'needs_team', reason: 'Decision B.' });
+    await s.store.observe(s.repo.id, s.inspection, s.now); const restored = await s.queue(); await s.deliver();
+    assert.equal(restored.id, a.id); assert.equal(restored.activation, 2); assert.equal(restored.resends, 3);
+    const latest = s.store.slack.deliveries().find(item => item.requestId === a.id && item.activation === restored.activation)!;
+    assert.equal(latest.state, 'rejected'); assert.throws(() => s.store.slack.reconcile(latest.id, { action: 'resend' }, s.now), /three explicit resends/);
+    await s.reopen(); await s.deliver(); assert.equal(s.calls.filter(call => call.method === 'chat.postMessage').length, 5);
+    assert.equal(s.store.inspect(s.run.id).attempts.length, 0); assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
+  } finally { await s.cleanup(); }
+});

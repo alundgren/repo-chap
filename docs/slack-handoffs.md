@@ -193,10 +193,16 @@ heads, cancellation and closure still supersede obsolete requests.
 
 When genuinely changed inputs later return to an earlier decision, its existing
 request becomes open again. A private `activation` ordinal starts at zero and
-increments transactionally under a current claim when that superseded request is
-restored. It distinguishes a restoring update from an already completed update
-of the same content; it does not create a new semantic packet or erase attempts.
-The integer must remain safe, and each delivery retains its activation. Old
-unsent cleanup is cancelled. Known receipts are reused, while any sending or
-unknown operation blocks all later delivery until recovery or explicit
-reconciliation. An activation cannot authorize an unknown operation to retry.
+increases across the run whenever a new or previously superseded request becomes
+current. Queueing assigns it transactionally under a current claim. Repeating the
+already open request preserves its ordinal. The greatest ordinal identifies the
+latest decision even after supersession or restart; equal clock times and later
+cleanup or receipt writes cannot change that order. Records without an ordinal
+default to zero and retain their original insertion order until first activated.
+
+Each delivery keeps its activation. This distinguishes restoring updates and
+complete packets whose bounded previews are identical, without changing semantic
+packet IDs or erasing attempts. The integer must remain safe. Old unsent cleanup
+is cancelled, and compatible known receipts are reused. Any sending or unknown
+operation still blocks later delivery until recovery or explicit reconciliation.
+Activation does not authorize retries or reset the three explicit-resend limit.

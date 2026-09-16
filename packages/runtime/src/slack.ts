@@ -78,14 +78,15 @@ export class SlackOutbox {
       const id = digest(json({ runId: run.id, evidenceKey: run.evidenceKey, destination, packet: packetRef.digest, preview: previewRef.digest })).slice(7);
       const requests = this.requests(run.id), existing = requests.find(request => request.id === id);
       if (existing?.status === 'open') return existing;
-      const prior = requests.findLast(request => request.status === 'open') ?? requests.at(-1);
+      const prior = requests.reduce<SlackRequestRecord | undefined>((latest, request) =>
+        !latest || (request.activation ?? 0) >= (latest.activation ?? 0) ? request : latest, undefined);
       const shared = prior?.headSha === packet.headSha && prior.destination === destination ? prior.receipt : null;
       const reuse = shared ?? existing?.receipt ?? null;
       if (prior && prior.id !== id) {
         this.supersede(prior, now, !shared);
         if (shared) this.cancelCleanup(prior.id, now);
       }
-      const activation = existing ? (existing.activation ?? 0) + 1 : 0;
+      const activation = prior ? (prior.activation ?? 0) + 1 : 0;
       if (!Number.isSafeInteger(activation) || activation < 0) throw new RuntimeError('Slack request activation limit reached. Inspect its retained history.');
       const request: SlackRequestRecord = existing ? { ...existing, status: 'open', receipt: reuse, activation } :
         { id, runId: run.id, evidenceKey: run.evidenceKey, headSha: packet.headSha, destination, packet: packetRef, preview: previewRef, supersededPreview: supersededRef, status: 'open', receipt: reuse, resends: 0, activation };
