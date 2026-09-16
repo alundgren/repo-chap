@@ -26,6 +26,7 @@ export class GitHubReader {
   private requests = 0;
   private bytes = 0;
   private retryAt = 0;
+  private rateLimited = true;
   constructor(credentials: CredentialSource, options: ReadOptions = {}) {
     this.credentials = credentials; this.now = options.now ?? Date.now; this.signal = options.signal;
     this.options = { ...options, maxRequests: options.maxRequests ?? 200, maxDurationMs: options.maxDurationMs ?? 120_000, maxResponseBytes: options.maxResponseBytes ?? 2_097_152 };
@@ -42,7 +43,7 @@ export class GitHubReader {
   private async pause(until: number, rateLimited: boolean): Promise<void> {
     this.check();
     const delay = Math.max(0, until - this.now());
-    if (until >= this.deadline) throw new GitHubReadError(rateLimited ? 'rate_limit' : 'timeout', rateLimited ? new Date(until).toISOString() : undefined);
+    if (until >= this.deadline) throw new GitHubReadError(rateLimited ? 'rate_limit' : 'timeout', new Date(until).toISOString());
     if (delay) {
       try { await (this.options.sleep ?? ((ms, signal) => sleep(ms, undefined, { signal })))(delay, this.signal); }
       catch { throw new GitHubReadError(this.signal?.aborted ? 'cancelled' : 'timeout'); }
@@ -53,7 +54,7 @@ export class GitHubReader {
     if (!/^query\s/.test(query)) throw new GitHubReadError('invalid_response');
     let refreshed = false;
     for (let attempt = 0; attempt < 3; attempt++) {
-      this.check(); await this.pause(this.retryAt, true);
+      this.check(); await this.pause(this.retryAt, this.rateLimited);
       const timeout = AbortSignal.timeout(Math.max(1, Math.min(15_000, this.deadline - this.now())));
       const signal = this.signal ? AbortSignal.any([this.signal, timeout]) : timeout;
       try {
@@ -79,8 +80,11 @@ export class GitHubReader {
         const errors = Array.isArray(body.errors) ? body.errors : [];
         const graphRate = errors.some(e => object(e).type === 'RATE_LIMITED');
         const limited = response.status === 429 || graphRate || response.status === 403 && (primaryLimit || guidance != null || /rate limit/i.test(String(body.message)));
-        if (primaryLimit || limited) this.retryAt = Math.max(this.retryAt, Number.isFinite(guidedTime) ? guidedTime : 0,
-          primaryLimit && Number.isFinite(reset) ? reset + 1000 : 0, this.now() + (limited && !guidance && !primaryLimit ? 60_000 * 2 ** attempt : 1000));
+        if (primaryLimit || limited) {
+          this.rateLimited = true;
+          this.retryAt = Math.max(this.retryAt, Number.isFinite(guidedTime) ? guidedTime : 0,
+            primaryLimit && Number.isFinite(reset) ? reset + 1000 : 0, this.now() + (limited && !guidance && !primaryLimit ? 60_000 * 2 ** attempt : 1000));
+        }
         if (limited) {
           if (body.data != null) return { data: body.data, incomplete: true };
           if (attempt === 2) throw new GitHubReadError('rate_limit', new Date(this.retryAt).toISOString());
@@ -89,7 +93,10 @@ export class GitHubReader {
         if (response.status === 401) throw new GitHubReadError('credentials');
         if (response.status === 403 || response.status === 404) throw new GitHubReadError('access');
         if (response.status >= 500) {
-          if (Number.isFinite(guidedTime) && guidedTime > this.now()) await this.pause(guidedTime, false);
+          if (Number.isFinite(guidedTime) && guidedTime > this.now()) {
+            if (guidedTime > this.retryAt) { this.retryAt = guidedTime; this.rateLimited = false; }
+            await this.pause(this.retryAt, this.rateLimited);
+          }
           throw new GitHubReadError('network');
         }
         if (!response.ok) throw new GitHubReadError('invalid_response');

@@ -206,7 +206,9 @@ export async function inspectPullRequest(reader: GitHubReader, pkg: WorkflowPack
   const observation: Observation = {
     facts: { lifecycle: pr?.lifecycle ?? null, draft: pr?.draft ?? null, evidenceComplete: complete,
       young: null, headDebouncing: null, conflict: pr ? pr.mergeability === 'unknown' ? null : pr.mergeability === 'conflicting' : null,
-      unaddressedReview: reviewKnown ? [...latest.values()].some(r => r.state === 'CHANGES_REQUESTED') || safe.threads.items.some(t => !t.resolved) : null,
+      unaddressedReview: reviewKnown ? pr?.reviewDecision === 'CHANGES_REQUESTED' ||
+        safe.reviews.items.some(r => r.author === null && r.state === 'CHANGES_REQUESTED') ||
+        [...latest.values()].some(r => r.state === 'CHANGES_REQUESTED') || safe.threads.items.some(t => !t.resolved) : null,
       externalReviewPending: activityKnown ? pending.length > 0 : null },
     ...(pr ? { headSha: pr.headSha, baseSha: pr.baseSha, createdAt: pr.createdAt, headChangedAt } : {}), evidenceDigest,
     ...(activityKnown && pending.length ? { externalReviewStartedAt: pending.map(r => r.createdAt).sort()[0]! } : {}),

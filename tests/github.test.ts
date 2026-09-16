@@ -390,3 +390,37 @@ test('CLI interruption saves a partial capture and returns 130', async () => {
     assert.equal((await readCapture(result.capture.directory, pkg)).fixture.observations[0]?.facts.evidenceComplete, false);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('a collection server retry deadline blocks every later read and preserves its retry timestamp', async () => {
+  const fake = githubFixture(); let requests = 0;
+  const result = await inspect(async (url, init) => {
+    requests++;
+    if (String(init?.body).includes('Inspectlabels')) return Response.json({ message: 'temporarily unavailable' }, { status: 503, headers: { 'retry-after': '600' } });
+    return fake.fetch(url, init);
+  }, {}, { maxDurationMs: 1000 });
+  assert.equal(requests, 2, 'Only metadata and the first labels request may reach GitHub.');
+  assert.equal(result.status, 'partial');
+  assert.equal(result.evidence.labels.coverage.failure?.code, 'timeout');
+  assert.equal(result.evidence.labels.coverage.failure?.retryAt, '2026-05-01T12:10:00.000Z');
+  for (const coverage of [result.evidence.checks.coverage, result.evidence.reviews.coverage, result.evidence.threads.coverage, result.evidence.reviewerActivity.coverage]) {
+    assert.equal(coverage.status, 'unknown');
+    assert.equal(coverage.failure?.retryAt, '2026-05-01T12:10:00.000Z');
+  }
+  assert.equal(result.evidence.revision.status, 'unknown');
+  assert.equal(result.evidence.revision.failure?.retryAt, '2026-05-01T12:10:00.000Z');
+  assert.equal(result.fixture.observations[0]?.facts.evidenceComplete, false);
+});
+
+test('a deleted review author and GitHub aggregate changes-requested state remain unaddressed', async () => {
+  for (const deletedAuthor of [true, false]) {
+    const fake = githubFixture();
+    const result = await inspect(async (url, init) => {
+      const body = await (await fake.fetch(url, init)).json();
+      if (deletedAuthor && String(init?.body).includes('Inspectreviews')) Object.assign(body.data.repository.pullRequest.reviews.nodes[0], { author: null, state: 'CHANGES_REQUESTED' });
+      if (!deletedAuthor && String(init?.body).includes('InspectMetadata')) body.data.repository.pullRequest.reviewDecision = 'CHANGES_REQUESTED';
+      return Response.json(body);
+    });
+    assert.equal(result.fixture.observations[0]?.facts.unaddressedReview, true);
+    assert.equal(result.status, 'complete');
+  }
+});

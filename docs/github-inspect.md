@@ -74,6 +74,12 @@ initial read. A mismatch is `revision.status: changed`; a failed final read is
 `unknown`. Neither permits complete evidence. This is a bounded observation across
 several requests, not an atomic GitHub snapshot.
 
+Captures contain PR metadata and review bodies, not changed-file lists, diffs,
+repository source files, or a checkout. `complete` certifies the requested GitHub
+collections only. Later provider analysis must obtain the code inputs it needs
+at the recorded head/base and bind their revisions and digests to its result.
+It must not interpret this collection status as complete source-code evidence.
+
 Every collection has `items` and `coverage` with `status`, `pages`, and an optional
 fixed failure code/message and `retryAt`. `complete` certifies collection, not a
 passing check or an acceptable review. `partial` retains successful pages or nodes
