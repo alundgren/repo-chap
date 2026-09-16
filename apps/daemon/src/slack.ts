@@ -1,28 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { SlackApi } from '@repo-chap/slack/web-api';
-import type { DecisionPacket, PacketPreview } from '@repo-chap/slack';
-import type { AnalysisResult, RuntimeStore, RunRecord, EffectLease } from '@repo-chap/runtime';
-import { currentFacts, hasCompleteEvidence, type WorkflowPackage } from '@repo-chap/workflow';
-import type { Inspection } from '@repo-chap/github';
+import type { PacketPreview } from '@repo-chap/slack';
+import type { RuntimeStore, RunRecord, EffectLease } from '@repo-chap/runtime';
 
-export async function packetForRun(store: RuntimeStore, run: RunRecord, pkg: WorkflowPackage, inspection: Inspection, now: number): Promise<DecisionPacket> {
-  const facts = currentFacts(pkg.workflow, inspection.fixture.observations[0]!, new Date(now).toISOString());
-  const completed: AnalysisResult[] = [];
-  for (const entry of store.inspect(run.id).notes as { artifact: Parameters<typeof store.artifacts.get>[0] }[]) {
-    const result = await store.artifacts.get<AnalysisResult>(entry.artifact);
-    if ('provider' in result && result.job.evidenceKey === run.evidenceKey) completed.push(result);
-  }
-  const review = completed.findLast(result => pkg.workflow.actions[result.job.actionId]?.uses === 'agent.review' && result.provider.outcome === 'completed')?.provider.payload as { summary: string; findings: { severity: string; title: string; reason: string }[]; missingEvidence: string[] } | undefined;
-  const failed = completed.filter(result => result.provider.outcome !== 'completed');
-  const uncertainty = [...(review?.missingEvidence ?? []), ...(!hasCompleteEvidence(facts) ? ['Current PR evidence is incomplete.'] : []), ...(run.control.classification?.uncertain !== false ? ['Classification is missing or uncertain.'] : [])];
-  const checks = inspection.evidence.checks.items.map(check => ({ name: check.name, status: (check.status !== 'COMPLETED' && check.kind === 'CheckRun' || check.status === 'PENDING') ? 'pending' as const : ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(check.conclusion ?? check.status) ? 'passed' as const : 'failed' as const, evidence: `GitHub ${check.kind}: ${check.conclusion ?? check.status}.` }));
-  const ready = hasCompleteEvidence(facts) && facts.lifecycle === 'open' && facts.draft === false && facts.conflict === false && facts.unaddressedReview === false && run.control.memory?.reviewCurrent === true && run.control.memory?.classificationCurrent === true && run.control.review?.coverage === 'complete' && run.control.review.verdict === 'acceptable' && run.control.classification?.uncertain === false && checks.length > 0 && checks.every(check => check.status === 'passed') && !failed.length;
-  const outcome = !hasCompleteEvidence(facts) || failed.length ? 'blocked_execution' : facts.conflict === true ? 'needs_author' : facts.unaddressedReview === true || run.control.review?.verdict === 'concerns' || run.control.review?.verdict === 'blocking' ? 'needs_team' : ready ? 'ready_for_human_merge' : 'blocked_execution';
-  const reason = outcome === 'ready_for_human_merge' ? review?.summary ?? 'Current complete review is acceptable.' : outcome === 'needs_author' ? 'The PR has a conflict that needs the author.' : outcome === 'needs_team' ? review?.summary ?? 'Unresolved review concerns need a team decision.' : failed.at(-1)?.provider.diagnostic ?? 'Current evidence does not establish a ready handoff.';
-  const decisions = { ready_for_human_merge: 'Review the current GitHub checks and changes. Merge on GitHub if the evidence is sufficient.', needs_author: 'Resolve the conflict or explain the intended change on the pull request.', needs_team: 'Decide how to address the remaining concerns on the pull request.', blocked_execution: 'Inspect the local run evidence and resolve the execution or access problem before retrying.' };
-  if (!checks.length) uncertainty.push('No GitHub check results were recorded. Confirm required checks before merging.');
-  return { schemaVersion: 1, repository: store.repository(run.repositoryId).name, prNumber: run.number, headSha: run.headSha!, authorLogin: inspection.evidence.pullRequest?.author ?? null, outcome, reason, recommendedDecision: decisions[outcome], findings: review?.findings.map(finding => `${finding.severity}: ${finding.title}. ${finding.reason}`) ?? [], attemptedFixes: [], checks, uncertainty, evidenceLinks: [] };
-}
+export { packetForRun } from './packet.js';
 
 export async function deliverSlack(store: RuntimeStore, api: SlackApi, now: () => number, signal: AbortSignal, permitted: (run: RunRecord) => Promise<boolean>, selected: (run: RunRecord) => boolean = () => true): Promise<void> {
   store.slack.recover(now()); store.slack.supersedeStale(now());

@@ -5,8 +5,8 @@ import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadWorkflow, validateWorkflow } from '@repo-chap/workflow';
-import { memberMappings, previewPacket, previewRoute, previewHtml, validatePacket, type PacketOutcome } from '@repo-chap/slack';
+import { loadWorkflow, validateWorkflow, parseFixture, replay } from '@repo-chap/workflow';
+import { memberMappings, previewReplayHandoffs, previewPacket, previewRoute, previewHtml, validatePacket, type PacketOutcome } from '@repo-chap/slack';
 import { SlackApi, type SlackRateStore } from '@repo-chap/slack/web-api';
 import { decisionPacket, slackConfig } from './helpers/slack-fixture.ts';
 import { build } from 'esbuild';
@@ -148,4 +148,25 @@ test('invalid receipt types and incomplete rejection responses remain unknown', 
   await s.api.verify(); s.advance();
   assert.equal((await s.api.send('CPAPERBOAT', previewPacket(decisionPacket, slackConfig).message)).status, 'unknown'); s.advance();
   assert.equal((await s.api.send('CPAPERBOAT', previewPacket(decisionPacket, slackConfig).message)).status, 'unknown');
+});
+
+test('replay composes the same bounded renderer with matching fictional packet context in the built CLI', async () => {
+  const pkg = await loadWorkflow('docs/pr-workflows/examples/team-pr/workflow.json');
+  const fixture = parseFixture(JSON.parse(await readFile('fixtures/replay/handoff.json', 'utf8'))), result = replay(pkg, fixture);
+  const packet = { ...decisionPacket, headSha: fixture.observations[0]!.headSha! };
+  const previews = previewReplayHandoffs(result, [packet], pkg.workflow.slack);
+  assert.equal(previews.length, 1); assert.deepEqual(previews[0]!.preview, previewPacket(packet, pkg.workflow.slack));
+  assert.throws(() => previewReplayHandoffs(result, [{ ...packet, headSha: 'f'.repeat(40) }], pkg.workflow.slack), /exactly one packet/);
+  assert.throws(() => previewReplayHandoffs(result, [{ ...packet, outcome: 'needs_author' }], pkg.workflow.slack), /exactly one packet/);
+  assert.throws(() => previewReplayHandoffs(result, [packet, packet], pkg.workflow.slack), /exactly one packet/);
+  const directory = await mkdtemp(join(tmpdir(), 'repo-chap-replay-packet-'));
+  try {
+    const file = join(directory, 'packet.json'); await writeFile(file, JSON.stringify(packet));
+    const args = ['apps/cli/dist/cli.js', 'replay', 'docs/pr-workflows/examples/team-pr/workflow.json', '--fixture', 'fixtures/replay/handoff.json', '--packet', file];
+    const { stdout } = await promisify(execFile)(process.execPath, [...args, '--json']);
+    assert.deepEqual(JSON.parse(stdout).handoffs, previews);
+    assert.match((await promisify(execFile)(process.execPath, args)).stdout, /Local Slack preview\. Simulation sent nothing\./);
+    await writeFile(file, JSON.stringify({ ...packet, headSha: 'f'.repeat(40) }));
+    await assert.rejects(promisify(execFile)(process.execPath, [...args, '--json']), error => (error as { code: number }).code === 3);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

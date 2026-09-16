@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { controlDecision, currentFacts, evaluate, hasCompleteEvidence, WorkflowError, type Capability, type WorkflowPackage, type Observation, type Workflow } from '@repo-chap/workflow';
-import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions, type PushCredentials, type PushTransport, type PullRequestWriteCredentials, type ThreadTransport, type PublicationCapability, type PublicationCredentials, type PublicationRemote } from '@repo-chap/github';
+import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions, type PushCredentials, type PushTransport, type PullRequestWriteCredentials, type ThreadTransport, type PublicationCapability, type PublicationCredentials, type PublicationRemote, type PushReceipt } from '@repo-chap/github';
 import { ExecutionError, validateTestedCandidate, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
 import type { ProviderProfile, SourceBundle } from '@repo-chap/providers';
 import { RuntimeError, RuntimeStore, StaleObservationError, requireApplyPolicy, applyPolicyDigest, type ApplyPolicy, type EffectRecord, type RepairAttemptJob, type RepairAttemptResult, type AnalysisJob, type AnalysisResult, type Claim, type Registration, type RepositoryRecord, type RunRecord, type SourceRegistration } from '@repo-chap/runtime';
@@ -130,9 +130,11 @@ export class DaemonService {
   private async slackPermitted(run: RunRecord): Promise<boolean> {
     const repo = this.store.repository(run.repositoryId), target = this.dependencies.target;
     if (!this.dependencies.applyPolicy || this.dependencies.planOnly || repo.paused || target && (repo.name.toLowerCase() !== target.repository.toLowerCase() || run.number !== target.number)) return false;
-    const policy = requireApplyPolicy(await this.dependencies.applyPolicy(repo.name), repo.name, ['notify.send']);
-    const profile = await this.dependencies.profile(repo.profile), pkg = await this.store.artifacts.get<WorkflowPackage>(run.package);
-    return policy.capabilities.includes('notify.send') && profile.maximumCapabilities.includes('notify.send') && pkg.workflow.requestedCapabilities.includes('notify.send') && (!repo.source || repo.source.maximumCapabilities.includes('notify.send'));
+    try {
+      const policy = requireApplyPolicy(await this.dependencies.applyPolicy(repo.name), repo.name, ['notify.send']);
+      const profile = await this.dependencies.profile(repo.profile), pkg = await this.store.artifacts.get<WorkflowPackage>(run.package);
+      return policy.capabilities.includes('notify.send') && profile.maximumCapabilities.includes('notify.send') && pkg.workflow.requestedCapabilities.includes('notify.send') && (!repo.source || repo.source.maximumCapabilities.includes('notify.send'));
+    } catch { return false; }
   }
   async poll(repo: RepositoryRecord): Promise<void> {
     if (this.store.cooldown() > this.now()) return;
@@ -212,7 +214,27 @@ export class DaemonService {
       return;
     }
     if (action.uses === 'human.publish_packet') {
-      const packet = await packetForRun(this.store, run, pkg, inspection, this.now());
+      let packetInspection = inspection;
+      const push = this.store.effects(run.id).findLast(effect => effect.kind === 'github.push_candidate' && effect.state === 'confirmed')?.receipt as PushReceipt | undefined;
+      if (push && push.candidateSha !== run.headSha || run.threadResolution?.completed && Date.parse(inspection.fixture.now) < (run.threadResolution.observedAt ?? 0)) {
+        const repo = this.store.repository(run.repositoryId), reader = this.reader();
+        packetInspection = await inspectPullRequest(reader, pkg, { repository: repo.name, pr: run.number, reviewers: repo.reviewers, previous: inspection });
+        this.store.cooldown(Math.max(reader.nextRequestAt, retryAt(packetInspection)));
+        if (!packetInspection.evidence.pullRequest) { this.store.unavailable(run.id, 'Refresh the post-repair PR evidence before preparing its decision packet.', this.now() + this.store.limits.pollSeconds * 1000); return; }
+        await this.store.observe(repo.id, packetInspection, this.now());
+        if (!this.store.isCurrent(claim, this.now())) {
+          const current = this.store.run(run.id);
+          // Preserve only this human handoff after observing the exact confirmed bot commit.
+          // Analysis authority remains invalidated by observe; concurrent human heads follow normal evaluation.
+          if (push?.candidateSha === current.headSha && current.packageDigest === pkg.digest && current.status === 'ready' && current.nextAction === null) {
+            const continuation = this.store.claim(current.id, this.owner, this.now(), this.store.limits.maxAttemptSeconds);
+            if (continuation) this.store.park(continuation, 'ready', 'Post-push evidence refreshed for the retained human handoff.', this.now(), current.control, actionId, this.now());
+          }
+          return;
+        }
+        run = this.store.run(run.id);
+      }
+      const packet = await packetForRun(this.store, run, pkg, packetInspection, this.now());
       const request = await this.store.slack.queue(claim, packet, pkg.workflow.slack, this.now());
       const effect = this.store.effects(run.id).find(value => this.store.slack.deliveries(run.id).some(delivery => delivery.requestId === request.id && delivery.id === value.id));
       if (effect?.state === 'planned') await this.dependencies.onPlannedEffect?.(effect);

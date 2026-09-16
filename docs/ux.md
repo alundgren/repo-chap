@@ -233,3 +233,16 @@ no remote writes and retains the request for inspection. `apply inbox` and
 `apply slack-reconcile` use the same complete content and explicit receipt/resend
 wording as daemon controls, without requiring a running daemon. JSON distinguishes
 a confirmed logical delivery from its retained unknown historical send attempt.
+
+The replay CLI optionally takes complete fictional packets through `--packet`.
+It renders only proposed handoffs with matching heads and outcomes, naming a
+fixture error when context is absent or ambiguous. Text labels the result as a
+local preview and says simulation sent nothing. Its route/message are identical
+to the standalone preview for the same packet and configuration.
+
+A host packet labels retained repair/check revisions and each push, publication
+and thread outcome. Current freshness is separate from historical acceptance.
+A candidate alone does not produce “Ready for human merge.” A direct post-push
+handoff refreshes the PR before displaying its current head. Reopened and stale
+resolved threads remain visible as concerns needing attention. Failed or unknown
+notification attempts keep the complete packet and do not repeat provider work.

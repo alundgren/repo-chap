@@ -143,3 +143,45 @@ running daemon. `apply slack-reconcile` accepts the same receipt or explicit res
 options as its daemon counterpart and does not send a message or run a provider.
 Use the same private local state directory as the original apply invocation.
 `apply inspect` and `apply reconcile` retain their offline/read-only distinctions.
+
+## Replay composition
+
+`repo-chap replay workflow.json --fixture fixture.json --packet packet.json`
+adds resolved handoff previews to the normal offline replay. The optional packet
+file contains one complete fictional packet, or an array for multiple proposed
+heads/outcomes. Each proposed handoff must match exactly one packet's head and
+outcome. Missing or mismatched packet context produces a fixture error; the
+command does not invent a repository, author or evidence.
+
+Text output shows the resolved route and accessible message. JSON adds `handoffs`
+with the action ID, complete supplied packet and bounded preview. This uses
+`previewReplayHandoffs(replayResult, packets, configuration)`, exported from the
+browser-safe Slack package. The evaluator adds the observed `headSha` to each
+proposed handoff but imports no renderer or host code. Electron can call the same
+composition. `slack-preview` remains available for inspecting a standalone packet
+or producing its local HTML. Neither path contacts Slack or executes fixture actions.
+
+## Current and retained evidence
+
+The host's `packetForRun` builds the existing version-1 `DecisionPacket` from
+accepted runtime artifacts. It selects current review/classification through
+`currentAnalysis`, includes repair dispositions, exact candidate/check revisions,
+conditional push receipts, `threadResolutionSummary` and
+`summarizePublications`. The renderer receives ordinary serializable packet data;
+it imports no daemon or runtime module. The complete packet remains in the inbox
+when the bounded Slack message omits details.
+
+Current readiness needs complete acceptable review, non-uncertain classification,
+complete PR evidence, current passing GitHub checks, and no current action or
+publication failure. A retained successful check or old confirmed publication
+cannot supply those conditions. Each publication reports current freshness beside
+historical acceptance. Thread outcomes retain their individual dispositions,
+remote state and evidence currency, including reopened or stale resolved concerns.
+
+A handoff directly following a confirmed push or completed thread operation first
+refreshes known post-repair evidence. Existing observation and ownership checks
+invalidate old authority. The exact confirmed bot head can retain its pending
+human handoff using the existing claim/park operations; a concurrent human head
+follows normal evaluation. This adds no provider reservation. Notification retry
+and reconciliation operate on the saved request independently of analysis and
+repair.

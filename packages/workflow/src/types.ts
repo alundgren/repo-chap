@@ -54,7 +54,7 @@ export interface Decision {
   actionId: string; ruleId: string | null;
   rules: { id: string; selected: boolean; condition: ConditionTrace }[];
 }
-export interface ProposedEffect { actionId: string; uses: string; capabilities: Capability[]; outcome?: PacketOutcome; destination?: string; reason: string }
+export interface ProposedEffect { actionId: string; uses: string; capabilities: Capability[]; outcome?: PacketOutcome; headSha?: string | null; destination?: string; reason: string }
 export interface ReplayResult {
   schemaVersion: 1; packageDigest: string; now: string;
   status: 'waiting' | 'closed' | 'blocked' | 'needs_observation' | 'needs_result';
