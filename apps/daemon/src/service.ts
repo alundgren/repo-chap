@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { controlDecision, currentFacts, evaluate, hasCompleteEvidence, WorkflowError, type Capability, type WorkflowPackage, type Observation, type Workflow } from '@repo-chap/workflow';
 import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions } from '@repo-chap/github';
 import type { ProviderProfile, SourceBundle } from '@repo-chap/providers';
-import { RuntimeError, RuntimeStore, type AnalysisJob, type AnalysisResult, type Claim, type Registration, type RepositoryRecord, type RunRecord, type SourceRegistration } from '@repo-chap/runtime';
+import { RuntimeError, RuntimeStore, StaleObservationError, type AnalysisJob, type AnalysisResult, type Claim, type Registration, type RepositoryRecord, type RunRecord, type SourceRegistration } from '@repo-chap/runtime';
 import { executeAnalysis, fetchSources, profileDigest } from './worker.js';
 import { fetchWorkflowCommit } from './source.js';
 
@@ -64,8 +64,8 @@ export class DaemonService {
       const profile = await this.dependencies.profile(repo.profile), maximum = source.maximumCapabilities.filter(cap => profile.maximumCapabilities.includes(cap));
       if (this.store.cooldown() > this.now()) throw new GitHubReadError('rate_limit', new Date(this.store.cooldown()).toISOString());
       const signal = AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(120_000)]);
-      const pkg = await (this.dependencies.workflowSource?.(repo.name, revision, source.workflowPath, maximum, signal) ??
-        fetchWorkflowCommit(join(this.dependencies.directory, 'git-cache'), repo.name, revision, source.workflowPath, maximum, this.dependencies.credentials, signal, () => this.store.cooldown() <= this.now()));
+      const pkg = await (this.dependencies.workflowSource?.(repo.name, revision, source.workflowPath, source.maximumCapabilities, signal) ??
+        fetchWorkflowCommit(join(this.dependencies.directory, 'git-cache'), repo.name, revision, source.workflowPath, source.maximumCapabilities, this.dependencies.credentials, signal, () => this.store.cooldown() <= this.now()));
       if (pkg.workflow.requestedCapabilities.some(cap => !maximum.includes(cap))) throw new RuntimeError('Operator capabilities no longer permit this workflow.');
       await this.store.activateSource(repo.id, revision, branch, pkg, this.now());
     } catch (error) {
@@ -105,11 +105,17 @@ export class DaemonService {
       for (const number of numbers) {
         if (this.stopped || this.store.cooldown() > this.now()) break;
         const inspectionReader = this.reader();
-        const prior = known.find(run => run.number === number), previous = prior && await this.store.artifacts.get<Inspection>(prior.inspection);
+        const prior = this.store.runs(repo.id).find(run => run.number === number), previous = prior && await this.store.artifacts.get<Inspection>(prior.inspection);
         const pkg = await this.store.artifacts.get<WorkflowPackage>(prior?.package ?? this.store.repository(repo.id).package!);
-        const inspection = await inspectPullRequest(inspectionReader, pkg, { repository: repo.name, pr: number, reviewers: repo.reviewers, previous });
+        const inspection = await inspectPullRequest(inspectionReader, pkg, { repository: repo.name, pr: number, reviewers: repo.reviewers, previous, reviewerDeadline: prior?.waitTiming?.reviewer ?? undefined });
         this.store.cooldown(Math.max(inspectionReader.nextRequestAt, retryAt(inspection)));
-        if (inspection.evidence.pullRequest) await this.store.observe(repo.id, inspection, this.now());
+        if (inspection.evidence.pullRequest) {
+          try { await this.store.observe(repo.id, inspection, this.now()); }
+          catch (error) {
+            if (!(error instanceof StaleObservationError)) throw error;
+            diagnostic ??= 'A workflow changed during PR collection. The affected PR will refresh on the next poll.';
+          }
+        }
         else if (prior) this.store.unavailable(prior.id, 'GitHub evidence is unavailable. Refresh access before analysis continues.', next());
         if (inspection.status !== 'complete') diagnostic ??= 'Some PR evidence is incomplete. Inspect the run for collection coverage.';
         this.store.pollProgress(repo.id, number);

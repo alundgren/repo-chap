@@ -27,7 +27,7 @@ may include an existing relative `review.md`; symlinks, missing files, invalid
 UTF-8, oversized inputs and invalid packages are rejected. Shared `buildPackage`
 validation applies schema, action, cycle and capability checks. The source cannot
 raise the operator ceiling retained at registration. Current provider permissions
-also apply before validation and execution.
+also apply before a newly validated candidate activates and before execution.
 
 Versions record both a source commit and the shared package digest. The source
 commit identifies where the bytes came from. The digest identifies executable
@@ -41,6 +41,9 @@ temporary access or storage failures are retried on later polls. Without any
 valid version, the repository remains registered and visibly blocked. Other
 repositories continue. Source reads honor the installation cooldown. The existing
 polling position and PR inspection timing remain persisted.
+An otherwise valid source denied by the current provider permissions is unavailable,
+rather than cached as invalid source. Restoring those private permissions allows
+the same commit to activate without requiring an unrelated repository change.
 
 Rollback selects a retained valid version for new runs and holds automatic
 activation. Polling still validates and retains newer source versions, but cannot
@@ -57,6 +60,10 @@ for later observations and jobs, even after source activation or rollback. The
 stable repository/PR identity also preserves that run through closure and reopen.
 An automatic activation does not change an attempt's ownership, job, reservation,
 results or cancellation signal. A bot-authored source edit has the same behavior.
+If migration changes a run's package while its poll is in flight,
+`RuntimeStore.observe` rejects that observation with `StaleObservationError`.
+The daemon discards only that PR's stale observation and refreshes it on the next
+poll. Other runs retain their evidence, ownership and active attempts.
 
 `migrate` is an explicit operator action against a retained version for the run's
 repository. It accepts a waiting, ready, blocked or running open run. A cancelled
@@ -115,6 +122,8 @@ notes and effect receipts remain unchanged. The old schema-1 daemon cannot open
 schema 2; preserve a consistent database backup before changing installed binaries.
 Workflow packages and all runtime records stay outside Git. No activation,
 rollback, migration or local result recording creates a repository commit.
+Workflow rollback selects configuration bytes; it does not downgrade the database
+or make an older daemon binary compatible with schema 2.
 
 Linux tests use local Git repositories, fake GitHub responses and provider
 executables. They cover source validation, exact commit reads, local trials,

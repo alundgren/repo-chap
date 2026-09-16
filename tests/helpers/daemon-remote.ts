@@ -25,7 +25,7 @@ export function remote(inspection: Inspection, count = 1) {
     else throw new Error('Unexpected query');
     return Response.json({ data });
   };
-  return { calls, fetch, pullRequests: (value: number) => { count = value; }, draft: (value: boolean) => { draft = value; }, close: () => { closed = true; }, access: (value: boolean) => { unavailable = !value; }, reviewer: () => { reviewer = true; }, incomplete: () => { incomplete = true; } };
+  return { calls, fetch, pullRequests: (value: number) => { count = value; }, draft: (value: boolean) => { draft = value; }, close: () => { closed = true; }, access: (value: boolean) => { unavailable = !value; }, reviewer: (value = true) => { reviewer = value; }, incomplete: () => { incomplete = true; } };
 }
 export function completed(job: AnalysisJob): AnalysisResult {
   const payload = job.actionId === 'classify' ? { schemaVersion: 1, headSha: job.headSha, labels: [], uncertain: false } :

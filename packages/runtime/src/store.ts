@@ -10,6 +10,9 @@ import { defaultLimits, type AnalysisJob, type AnalysisResult, type ArtifactRef,
 const json = (value: unknown): string => canonicalJson(JSON.parse(JSON.stringify(value)));
 const day = (now: number) => new Date(now).toISOString().slice(0, 10);
 const decode = <T>(row: unknown): T => JSON.parse((row as { data: string }).data) as T;
+export class StaleObservationError extends RuntimeError {
+  constructor() { super('Workflow changed during PR collection. Discard this observation and collect its current pinned package.'); this.name = 'StaleObservationError'; }
+}
 export function validateLimits(input: Partial<RuntimeLimits> = {}): RuntimeLimits {
   const limits = { ...defaultLimits, ...input };
   const ceilings: RuntimeLimits = { concurrency: 32, repositoryConcurrency: 32, maxAttemptsPerLifecycle: 1000, maxRetries: 100,
@@ -262,7 +265,7 @@ export class RuntimeStore {
     return this.transaction(() => {
       const row = this.db.prepare('SELECT data FROM runs WHERE repository_id=? AND subject_id=?').get(repo.id, pr.id);
       const currentRepo = this.repository(repo.id), pinned = row ? decode<RunRecord>(row).packageDigest : currentRepo.packageDigest;
-      if (!pinned || inspection.packageDigest !== pinned) throw new RuntimeError('Observation package does not match the pinned run or active configuration.');
+      if (!pinned || inspection.packageDigest !== pinned) throw new StaleObservationError();
       let run: RunRecord;
       if (!row) {
         run = { id: randomUUID(), repositoryId: repo.id, subjectKind: 'pull_request', subjectId: pr.id, number: pr.number,

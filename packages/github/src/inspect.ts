@@ -117,6 +117,7 @@ export function validateTarget(repository: string, pr: number): void {
 }
 export async function inspectPullRequest(reader: GitHubReader, pkg: WorkflowPackage, options: {
   repository: string; pr: number; reviewers?: string[]; previous?: Inspection;
+  reviewerDeadline?: { startedAt: string; until: number };
 }): Promise<Inspection> {
   validateTarget(options.repository, options.pr);
   const reviewers = [...new Set((options.reviewers ?? []).map(s => s.trim().toLowerCase()))].sort();
@@ -213,7 +214,10 @@ export async function inspectPullRequest(reader: GitHubReader, pkg: WorkflowPack
     ...(pr ? { headSha: pr.headSha, baseSha: pr.baseSha, createdAt: pr.createdAt, headChangedAt } : {}), evidenceDigest,
     ...(activityKnown && pending.length ? { externalReviewStartedAt: pending.map(r => r.createdAt).sort()[0]! } : {}),
   };
-  observation.facts = currentFacts(pkg.workflow, observation, now);
+  const retained = options.reviewerDeadline;
+  const workflow = retained && retained.startedAt === observation.externalReviewStartedAt && Number.isFinite(retained.until) && retained.until >= Date.parse(retained.startedAt)
+    ? { ...pkg.workflow, settings: { ...pkg.workflow.settings, reviewDeadlineSeconds: (retained.until - Date.parse(retained.startedAt)) / 1000 } } : pkg.workflow;
+  observation.facts = currentFacts(workflow, observation, now);
   const fixture = parseFixture({ schemaVersion: 1, now, observations: [observation] });
   return { schemaVersion: 1, status: !pr ? 'unavailable' : complete ? 'complete' : 'partial', packageDigest: pkg.digest, evidenceDigest, evidence: safe, fixture };
 }

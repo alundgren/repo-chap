@@ -13,7 +13,7 @@ import { git, setup } from './helpers/provider-fixture.ts';
 import { completed, remote } from './helpers/daemon-remote.ts';
 
 const cli = resolve('apps/cli/dist/cli.js');
-async function fixture(options: { invalid?: boolean; hold?: boolean; limits?: Partial<RuntimeLimits>; branch?: string; reviewers?: string[] } = {}) {
+async function fixture(options: { invalid?: boolean; hold?: boolean; limits?: Partial<RuntimeLimits>; branch?: string; reviewers?: string[]; blockedPermissions?: boolean } = {}) {
   const s = await setup(), directory = join(s.temporary, 'state');
   const files: Record<string, string> = Object.fromEntries(s.pkg.files.map(file => [file.path, file.text]));
   const write = async (changes: Record<string, string | null>) => {
@@ -33,15 +33,20 @@ async function fixture(options: { invalid?: boolean; hold?: boolean; limits?: Pa
   healthy.evidence.pullRequest!.headRepository = { id: 'R_healthy', name: 'reef-labs/healthy' };
   const other = remote(healthy);
   const releases: (() => void)[] = [];
+  let metadataGate: { number: number; started: () => void; wait: Promise<void> } | null = null;
+  let blockedPermissions = options.blockedPermissions ?? false, profileReads = 0;
   let store = await RuntimeStore.open(directory, options.limits);
   const sources = await collectSources(s.repository, s.head, s.base);
-  const deps: DaemonDependencies = { directory, credentials: tokenCredentials('fictional-source-token'), profile: async () => s.profile, now: () => now,
+  const deps: DaemonDependencies = { directory, credentials: tokenCredentials('fictional-source-token'), profile: async () => ({ ...s.profile, maximumCapabilities: blockedPermissions && ++profileReads > 1 ? [] : s.profile.maximumCapabilities }), now: () => now,
     readOptions: { sleep: async () => {}, fetch: async (url, init) => {
       const request = JSON.parse(String(init?.body));
       if (request.query.includes('query WorkflowSource')) {
         branches.push(request.variables.ref);
         return Response.json({ data: { repository: { id: 'R_paperboat', defaultBranchRef: { name: 'main', target: { oid: revision } },
           ref: { name: request.variables.ref.slice('refs/heads/'.length), target: { oid: revision } } } } });
+      }
+      if (request.query.includes('query InspectMetadata') && metadataGate && metadataGate.number === request.variables.number) {
+        const gate = metadataGate; metadataGate = null; gate.started(); await gate.wait;
       }
       return request.variables.name === 'healthy' ? other.fetch(url, init) : fake.fetch(url, init);
     } },
@@ -53,6 +58,12 @@ async function fixture(options: { invalid?: boolean; hold?: boolean; limits?: Pa
   return { ...s, directory, files, firstRevision, fake, other, reads, branches, jobs, signals, repo, deps, write,
     get revision() { return revision; }, get now() { return now; }, get store() { return store; }, get service() { return service; },
     advance: (ms = 61_000) => { now += ms; }, release: () => { for (const done of releases.splice(0)) done(); },
+    permissions: (allowed: boolean) => { blockedPermissions = !allowed; },
+    gatePoll: (number: number) => {
+      let started!: () => void, release!: () => void;
+      const signal = new Promise<void>(done => { started = done; }), wait = new Promise<void>(done => { release = done; });
+      metadataGate = { number, started, wait }; return { started: signal, release };
+    },
     tick: async () => { await service.tick(); await service.idle(); },
     restart: async () => { await service.stop(); store.close(); store = await RuntimeStore.open(directory, options.limits); service = new DaemonService(store, deps); },
     cleanup: async () => { for (const done of releases.splice(0)) done(); await service.stop(); store.close(); await s.cleanup(); } };
@@ -63,9 +74,9 @@ async function call(directory: string, args: string[], json = true) {
   const code = await new Promise<number | null>(done => child.once('exit', done));
   return { code, stdout, stderr, output: json ? JSON.parse(stdout) : null };
 }
-async function waitForJob(jobs: AnalysisJob[]): Promise<void> {
-  for (let count = 0; !jobs.length && count < 1000; count++) await new Promise(done => setTimeout(done, 1));
-  assert.ok(jobs.length, 'The analysis job was not dispatched.');
+async function waitForJob(jobs: AnalysisJob[], total = 1): Promise<void> {
+  for (let count = 0; jobs.length < total && count < 1000; count++) await new Promise(done => setTimeout(done, 1));
+  assert.equal(jobs.length, total, 'The expected analysis jobs were not dispatched.');
 }
 
 test('workflow Git reader pins all referenced bytes including review.md to one commit', async () => {
@@ -248,7 +259,7 @@ test('source capability ceilings remain operator-owned and failed explicit re-re
     s.profile.maximumCapabilities = [];
     const prompt = s.pkg.files.find(file => file.path.endsWith('.md'))!.path;
     await s.write({ [prompt]: `${s.files[prompt]}\nMore instructions.\n` }); s.advance(); await s.service.poll(s.store.repository(s.repo.id));
-    assert.equal(s.store.repository(s.repo.id).source!.status, 'invalid'); assert.equal(s.store.repository(s.repo.id).packageDigest, s.pkg.digest);
+    assert.equal(s.store.repository(s.repo.id).source!.status, 'unavailable'); assert.equal(s.store.repository(s.repo.id).packageDigest, s.pkg.digest);
     assert.deepEqual(s.store.repository(s.repo.id).source!.maximumCapabilities, before.source!.maximumCapabilities);
   } finally { await s.cleanup(); }
 });
@@ -312,4 +323,52 @@ const result=cp.spawnSync(${JSON.stringify(realGit)},args,{stdio:'inherit',env:p
     await assert.rejects(fetchWorkflowCommit(cache, s.repo.name, s.firstRevision, s.pkg.workflowPath, supportedCapabilities, tokenCredentials('fictional-workflow-token'), new AbortController().signal, () => false), /cooldown/);
     assert.deepEqual(await readdir(cache), []);
   } finally { process.env.PATH = oldPath; await s.cleanup(); }
+});
+test('shortening a migrated reviewer deadline preserves the current hint until its original deadline or removal', async () => {
+  const s = await fixture({ reviewers: ['willow-bot'] });
+  try {
+    s.fake.reviewer(); await s.tick(); s.advance(31_000); await s.tick(); const run = s.store.runs()[0]!;
+    const document = structuredClone(s.pkg.workflow); document.settings.reviewDeadlineSeconds = 60;
+    await s.write({ [s.pkg.workflowPath]: JSON.stringify(document) }); await s.service.poll(s.store.repository(s.repo.id));
+    await s.store.migrate(run.id, s.store.repository(s.repo.id).activeVersionId!, s.now);
+    await s.restart(); s.advance(400_000); await s.tick();
+    assert.equal(s.jobs.length, 0); assert.equal(s.store.run(run.id).status, 'waiting');
+    assert.equal((await s.store.artifacts.get<Inspection>(s.store.run(run.id).inspection)).fixture.observations[0]!.facts.externalReviewPending, true);
+    s.fake.reviewer(false); s.advance(); await s.tick(); assert.equal(s.jobs.length, 1);
+    assert.equal((await s.store.artifacts.get<Inspection>(s.store.run(run.id).inspection)).fixture.observations[0]!.facts.externalReviewPending, false);
+  } finally { await s.cleanup(); }
+});
+test('migration during polling discards only its stale observation and preserves a second active run', async () => {
+  const s = await fixture({ hold: true, limits: { repositoryConcurrency: 2 } }); let releasePoll: (() => void) | undefined;
+  try {
+    s.fake.pullRequests(2); await s.tick(); s.advance(31_000); await s.service.tick(); await waitForJob(s.jobs, 2);
+    const migrating = s.store.runs().find(run => run.number === 42)!, untouched = s.store.runs().find(run => run.number === 43)!;
+    const before = s.store.inspect(untouched.id), prompt = s.pkg.files.find(file => file.path.endsWith('.md'))!.path;
+    await s.write({ [prompt]: `${s.files[prompt]}\nNew source.\n` });
+    await s.service.registerSource({ name: s.repo.name, profile: 'pilot', reviewers: [], workflowPath: s.pkg.workflowPath, branch: null });
+    const gate = s.gatePoll(42); releasePoll = gate.release;
+    const poll = s.service.poll(s.store.repository(s.repo.id)); await gate.started;
+    await s.store.migrate(migrating.id, s.store.repository(s.repo.id).activeVersionId!, s.now); s.service.abortStale();
+    gate.release(); await poll;
+    const after = s.store.inspect(untouched.id);
+    assert.equal(after.run.evidenceAvailable, true); assert.equal(after.run.owner, before.run.owner); assert.equal(after.run.token, before.run.token);
+    assert.deepEqual(after.attempts, before.attempts); assert.deepEqual(after.reservations, before.reservations);
+    assert.equal(s.signals[s.jobs.findIndex(job => job.runId === untouched.id)]!.aborted, false);
+    assert.match(s.store.repository(s.repo.id).diagnostic!, /workflow changed during PR collection/);
+    s.release(); await s.service.idle();
+    assert.equal(s.store.inspect(untouched.id).notes.length, 1); assert.equal(s.store.run(untouched.id).control.memory?.classificationCurrent, true);
+    assert.equal(s.store.inspect(migrating.id).notes.length, 0);
+  } finally { releasePoll?.(); await s.cleanup(); }
+});
+test('restored live permissions activate a first valid source without a new commit', async () => {
+  const s = await fixture({ blockedPermissions: true });
+  try {
+    const blocked = s.store.repository(s.repo.id);
+    assert.equal(blocked.package, null); assert.equal(blocked.source!.status, 'unavailable'); assert.equal(s.reads.length, 1);
+    await s.restart(); s.permissions(true); s.advance(); await s.tick();
+    const recovered = s.store.repository(s.repo.id);
+    assert.equal(recovered.source!.observedRevision, blocked.source!.observedRevision); assert.equal(recovered.source!.status, 'valid');
+    assert.equal(recovered.packageDigest, s.pkg.digest); assert.equal(s.reads.length, 2);
+    assert.deepEqual(recovered.source!.maximumCapabilities, blocked.source!.maximumCapabilities);
+  } finally { await s.cleanup(); }
 });
