@@ -328,9 +328,15 @@ test('shortening a migrated reviewer deadline preserves the current hint until i
   const s = await fixture({ reviewers: ['willow-bot'] });
   try {
     s.fake.reviewer(); await s.tick(); s.advance(31_000); await s.tick(); const run = s.store.runs()[0]!;
-    const document = structuredClone(s.pkg.workflow); document.settings.reviewDeadlineSeconds = 60;
+    const document = structuredClone(s.pkg.workflow); document.settings.reviewDeadlineSeconds = 60; document.settings.reviewWaitSeconds = 30;
     await s.write({ [s.pkg.workflowPath]: JSON.stringify(document) }); await s.service.poll(s.store.repository(s.repo.id));
-    await s.store.migrate(run.id, s.store.repository(s.repo.id).activeVersionId!, s.now);
+    const activated = s.store.repository(s.repo.id);
+    assert.equal(activated.source!.status, 'valid'); assert.notEqual(activated.activeVersionId, run.workflowVersionId); assert.notEqual(activated.packageDigest, run.packageDigest);
+    const target = await s.store.artifacts.get<WorkflowPackage>(activated.package!);
+    assert.equal(target.workflow.settings.reviewDeadlineSeconds, 60); assert.equal(target.workflow.settings.reviewWaitSeconds, 30);
+    const checkpoint = await s.store.migrate(run.id, activated.activeVersionId!, s.now);
+    assert.equal(checkpoint.toVersionId, activated.activeVersionId); assert.equal(s.store.run(run.id).workflowVersionId, activated.activeVersionId);
+    assert.equal(s.store.run(run.id).packageDigest, activated.packageDigest);
     await s.restart(); s.advance(400_000); await s.tick();
     assert.equal(s.jobs.length, 0); assert.equal(s.store.run(run.id).status, 'waiting');
     assert.equal((await s.store.artifacts.get<Inspection>(s.store.run(run.id).inspection)).fixture.observations[0]!.facts.externalReviewPending, true);
