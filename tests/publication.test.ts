@@ -7,8 +7,9 @@ import { buildPackage, canonicalJson, digest, replay, type Workflow } from '@rep
 import { collectSources, type SourceBundle } from '@repo-chap/providers';
 import { GitHubPublicationClient, PublicationRemoteError, publishReview, setClassificationLabels, tokenCredentials, installationCredentials, installationPublicationCredentials,
   type LabelPublication, type PublicationDispatch, type PublicationRemote, type PublishedReview, type RemotePublicationTarget, type ReviewPublication } from '@repo-chap/github';
-import { prepareLabelPublication, prepareReviewPublication, RuntimeStore, type AnalysisResult, type PublicationInput } from '@repo-chap/runtime';
+import { prepareLabelPublication, prepareReviewPublication, summarizePublications, RuntimeStore, type AnalysisResult, type PublicationInput, type EffectRecord } from '@repo-chap/runtime';
 import { setup, git } from './helpers/provider-fixture.ts';
+import { publicationRemote } from './helpers/publication-remote.ts';
 
 const citation = (side = 'head', startLine = 1, path = 'src/value.js') => ({ path, side, startLine, endLine: startLine, explanation: 'The exported value changes here.' });
 const finding = (evidence = [citation()]) => ({ id: 'value', kind: 'bug', severity: 'medium', confidence: 0.9, title: 'Check the changed value', reason: 'The caller expects the previous value.', evidence });
@@ -76,6 +77,23 @@ function fakeRemote(publication: ReviewPublication | LabelPublication) {
 }
 const permitted = (phase: PublicationDispatch['phase'] = 'planned'): PublicationDispatch => ({ phase, authorize: async () => true, beforeSend: async () => true });
 
+test('current publication summaries distinguish historical receipt freshness from later observations', async () => {
+  const s = await fixture();
+  try {
+    const plan = prepareReviewPublication(s.input), receipt = await publishReview(plan, fakeRemote(plan).remote, permitted());
+    const effect: EffectRecord = { id: 'effect', runId: s.input.run.id, token: 1, state: 'confirmed', kind: plan.kind, destination: plan.target.repository,
+      expectedRevision: s.head, evidenceKey: s.input.run.evidenceKey, payload: await s.store.artifacts.put(plan), receipt };
+    const run = s.store.run(s.input.run.id);
+    assert.equal(summarizePublications(run, [effect])[0]!.freshness, 'current');
+    const unavailable = summarizePublications({ ...run, evidenceAvailable: false }, [effect])[0]!;
+    assert.equal(unavailable.freshness, 'unverified'); assert.equal(unavailable.currentAnalysisAvailable, false); assert.equal(unavailable.receipt!.freshness, 'current');
+    const changed = summarizePublications({ ...run, headSha: 'e'.repeat(40), evidenceKey: digest('new evidence') }, [effect])[0]!;
+    assert.equal(changed.state, 'confirmed'); assert.equal(changed.freshness, 'stale'); assert.equal(changed.receipt!.freshness, 'current');
+    const invalidated = summarizePublications({ ...run, control: { memory: { reviewCurrent: false } } }, [effect])[0]!;
+    assert.equal(invalidated.currentAnalysisAvailable, false); assert.equal(invalidated.state, 'confirmed');
+  } finally { await s.cleanup(); }
+});
+
 test('App publication credentials narrow the repository and validate the actual review or label write permission', async () => {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
   const requests: any[] = []; let allow = true;
@@ -112,6 +130,22 @@ test('publication final target read uses the acquired write credential and never
     });
     await client.publishReview(publication, async readTarget => { assert.equal((await readTarget()).headSha, s.head); return true; });
     assert.equal(finalReads, 1); assert.equal(writes, 1);
+  } finally { await s.cleanup(); }
+});
+
+test('REST publication refuses missing, wrong-repository and wrong-operation write credentials', async () => {
+  const s = await fixture();
+  try {
+    const plan = prepareReviewPublication(s.input);
+    for (const mode of ['missing', 'repository', 'permission'] as const) {
+      const client = new GitHubPublicationClient(tokenCredentials('fictional-read-token'), {
+        ...(mode === 'missing' ? {} : { writeCredentials: async () => ({ ...tokenCredentials('fictional-token'), repository: mode === 'repository' ? 'reef-labs/other' : plan.target.repository,
+          capability: 'review.publish' as const, permission: mode === 'permission' ? 'issues:write' as const : 'pull_requests:write' as const }) }),
+        fetch: async () => { assert.fail('Invalid scope must not send a request.'); },
+      });
+      await assert.rejects(client.publishReview(plan, async () => { assert.fail('Invalid scope must not enter the final send check.'); }),
+        (error: unknown) => error instanceof PublicationRemoteError && error.outcome === 'rejected');
+    }
   } finally { await s.cleanup(); }
 });
 
@@ -255,6 +289,58 @@ test('unknown results with no remote proof never trigger another review or label
       if (plan.kind === 'labels.set') { fake.state.labels.push('tests'); const found = await setClassificationLabels(plan, fake.remote, permitted('unknown')); assert.equal(found.outcome, 'confirmed'); assert.equal(fake.state.writes, 0); }
     } finally { await s.cleanup(); }
   }
+});
+
+test('bounded pagination finds review and label proof on later pages without another mutation', async () => {
+  for (const kind of ['review', 'classification'] as const) {
+    const s = await fixture(kind);
+    try {
+      const plan = kind === 'review' ? prepareReviewPublication(s.input) : prepareLabelPublication(s.input), fake = publicationRemote(s.inspection), pages: number[] = [];
+      const client = new GitHubPublicationClient(tokenCredentials('fictional-token'), { fetch: async (url, init) => {
+        const parsed = new URL(String(url));
+        if (parsed.pathname.endsWith('/reviews') || parsed.pathname.endsWith('/labels')) {
+          assert.equal(init?.method, 'GET'); const page = Number(parsed.searchParams.get('page')); pages.push(page);
+          if (plan.kind === 'labels.set') return Response.json(page === 1 ? Array.from({ length: 100 }, (_, index) => ({ name: `human-${index}` })) : [{ name: 'tests' }]);
+          return Response.json(page === 1 ? Array.from({ length: 100 }, (_, index) => ({ id: index + 1, html_url: `${s.inspection.evidence.pullRequest!.url}#pullrequestreview-${index + 1}`,
+            commit_id: s.head, state: 'COMMENTED', body: 'An earlier human review.' })) : [{ id: 101, html_url: `${s.inspection.evidence.pullRequest!.url}#pullrequestreview-101`, commit_id: s.head, state: 'COMMENTED', body: plan.body }]);
+        }
+        return fake.fetch(url, init);
+      } });
+      const result = plan.kind === 'review.publish' ? await publishReview(plan, client, permitted('unknown')) : await setClassificationLabels(plan, client, permitted('unknown'));
+      assert.equal(result.outcome, 'confirmed'); assert.deepEqual(pages, [1, 2]); assert.equal(fake.state.writes, 0);
+      if (plan.kind === 'labels.set') assert.equal(result.labels!.preserved.length, 100);
+    } finally { await s.cleanup(); }
+  }
+});
+
+test('incomplete pages and bounded read exhaustion never count as absence or authorize an unknown resend', async () => {
+  for (const mode of ['malformed', 'endless'] as const) {
+    const s = await fixture();
+    try {
+      const plan = prepareReviewPublication(s.input), fake = publicationRemote(s.inspection); let reads = 0;
+      const client = new GitHubPublicationClient(tokenCredentials('fictional-token'), { maxRequests: 4, fetch: async (url, init) => {
+        if (new URL(String(url)).pathname.endsWith('/reviews')) {
+          reads++;
+          return Response.json(mode === 'malformed' && reads > 1 ? { incomplete: true } : Array.from({ length: 100 }, (_, i) => ({ id: i + reads * 100,
+            html_url: `${s.inspection.evidence.pullRequest!.url}#pullrequestreview-${i + reads * 100}`, commit_id: s.head, state: 'COMMENTED', body: 'An earlier human review.' })));
+        }
+        return fake.fetch(url, init);
+      } });
+      const result = await publishReview(plan, client, permitted('unknown'));
+      assert.equal(result.outcome, 'unknown'); assert.equal(result.freshness, 'unverified'); assert.equal(fake.state.writes, 0); assert.ok(reads >= 2 && reads <= 3);
+    } finally { await s.cleanup(); }
+  }
+});
+
+test('a conflicting marked review stays unknown even beside an exact matching review', async () => {
+  const s = await fixture();
+  try {
+    const plan = prepareReviewPublication(s.input), fake = fakeRemote(plan);
+    fake.state.reviews = [{ id: 'review-1', url: `${s.inspection.evidence.pullRequest!.url}#pullrequestreview-1`, headSha: s.head, state: 'COMMENTED', body: plan.body },
+      { id: 'review-2', url: `${s.inspection.evidence.pullRequest!.url}#pullrequestreview-2`, headSha: s.head, state: 'COMMENTED', body: `Edited content.\n${plan.marker}` }];
+    const result = await publishReview(plan, fake.remote, permitted());
+    assert.equal(result.outcome, 'unknown'); assert.match(result.reason, /different review content/); assert.equal(fake.state.writes, 0);
+  } finally { await s.cleanup(); }
 });
 
 test('prompt-only package changes preserve identical publication markers and remote deduplication', async () => {

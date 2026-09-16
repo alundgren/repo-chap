@@ -15,8 +15,9 @@ current provider profile. Publication-only policies need neither repair nor push
 permission. Authorization is checked at dispatch and again after acquiring the
 write credential. Inspection credentials retain their existing read-only scope.
 
-Review writes require a repository-scoped `pull_requests:write` credential;
-labels require `issues:write`. App token responses must confirm the requested
+Review writes reuse `PullRequestWriteCredentials` and the shared local/App
+factories for repository-scoped `pull_requests:write`; labels require a separate
+`issues:write` credential. App token responses must confirm the requested
 write permission. The final target read uses the acquired operation credential;
 the complete evidence refresh uses the inspection credential for checks and
 other collections. Both reads finish before sending, followed by another current
@@ -82,13 +83,26 @@ Label receipts list requested, observed, and preserved names.
 | `retryable` | True only for a rejected request that may be attempted within retained limits |
 | `reconcileAfter` | Earliest next remote reconciliation time, when a follow-up read is due |
 
-Inspect exposes `effects`, `effectAttempts`, and accepted analysis in `results`.
+Inspect exposes `effects`, `effectAttempts`, `publications`, and accepted analysis
+in `results`. The shared `summarizePublications` function produces `publications`.
+Each entry has `effectId`, `kind`, `state`, current `freshness`,
+`currentAnalysisAvailable`, and the retained `receipt`. A later changed input
+makes the displayed freshness stale; unavailable current evidence makes it
+unverified. The receipt keeps its own historical observed freshness.
+
+`currentAnalysisAvailable` reports whether current analysis exists for that kind;
+it does not attribute the latest analysis to every historical publication.
+Use the current accepted result for findings and readiness, and display the
+individual effect outcomes without turning one old success into an aggregate
+publication success. Current action failures remain in `run.failedActions`.
 A local citation or completeness rejection creates a rejected effect with an
 inspectable reason and no send attempt; the complete analysis stays in results.
 Consumers must not present that rejection as a successful or clean review.
-Historical effects remain after new observations and workflow migrations, so a
-consumer must compare the effect's evidence key and expected revision with the
-current run before treating its receipt as current evidence.
+Historical effects remain after new observations and workflow migrations.
+Current input matching requires `run.evidenceAvailable`, matching effect/run
+evidence keys and expected head, plus the run's current analysis flags and pinned
+package when selecting the accepted result. An old confirmed receipt alone never
+establishes readiness after replacement analysis or migration.
 
 Send attempts use independent leases and survive release of provider ownership.
 Only proven stale inputs invalidate analysis and request a fresh observation.
@@ -96,6 +110,23 @@ Unavailable follow-up reads preserve the confirmed receipt with unverified
 freshness, then schedule read-only reconciliation. They do not rerun analysis or
 resend the effect. Individual send receipts remain in `effectAttempts` when the
 top-level confirmed receipt receives a later freshness update.
+
+The optional `run.publication` continuation records `actionId`, `packageDigest`,
+`evidenceKey`, `reviewCurrent`, `classificationCurrent`, and the accepted `review`
+and `classification` control projections. It is captured with accepted analysis
+before publication. A temporary evidence outage clears visible readiness while
+retaining that continuation. A complete observation of exactly the same inputs
+restores the accepted projections and resumes the saved action. New evidence,
+replacement analysis/repair, or a changed package clears this authority. Notes,
+effects and consumed budgets remain available throughout.
+
+Permission loss known to occur before sending is retryable within the retained
+attempt limit. The action remains blocked while policy denies it; after restoring
+permission, an explicit bounded retry reuses the saved analysis. The send still
+requires fresh evidence, current policy/profile and current effect ownership.
+Unknown delivery cannot use this retry path. A terminal publication rejection
+follows its configured failure continuation, and local apply exits 8 even when
+that continuation waits rather than blocks.
 
 Review markers bind the repository and PR identity, run, revisions, pinned diff,
 and validated review content. Workflow versions, prompt text, attempt numbers,
@@ -121,7 +152,3 @@ GitHub documents the review commit and comment event in
 and the additive label endpoint in
 [adding labels to an issue](https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue).
 Real GitHub App scope verification and account behavior require the human pilot.
-
-The shared apply integration is based on reviewed issue #9. Final integration
-with issue #10's shared pull request write-credential factory, completion review,
-and the complete inherited test suite remain pending in this preparation branch.

@@ -2,7 +2,7 @@ import { createConnection, createServer, type Server } from 'node:net';
 import { chmod, lstat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { prepareCaptureDirectory } from '@repo-chap/github';
-import { RuntimeError } from '@repo-chap/runtime';
+import { RuntimeError, summarizePublications } from '@repo-chap/runtime';
 import type { WorkflowPackage } from '@repo-chap/workflow';
 import type { DaemonService } from './service.js';
 import { threadResolutionSummary } from './threads.js';
@@ -29,7 +29,7 @@ export async function handleControl(service: DaemonService, request: ControlRequ
     case 'inspect': {
       if (typeof request.runId !== 'string') throw new RuntimeError('Inspect requires a run ID.');
       const details = service.store.inspect(request.runId);
-      return { ...details, threadResolution: await threadResolutionSummary(service.store, request.runId), inspection: await service.store.artifacts.get(details.run.inspection), results: await Promise.all(details.notes.map(async item => {
+      return { ...details, publications: summarizePublications(details.run, details.effects), threadResolution: await threadResolutionSummary(service.store, request.runId), inspection: await service.store.artifacts.get(details.run.inspection), results: await Promise.all(details.notes.map(async item => {
         const note = item as { revision: number; artifact: Parameters<typeof service.store.artifacts.get>[0] };
         return { revision: note.revision, result: await service.store.artifacts.get(note.artifact) };
       })) };

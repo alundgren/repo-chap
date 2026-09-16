@@ -60,8 +60,9 @@ export async function applyCommand(args: string[]): Promise<void> {
       });
     }
     process.stdout.write(json ? `${JSON.stringify({ schemaVersion: 1, mode: 'apply', ...details as object }, null, 2)}\n` : humanResult('inspect', details));
-    const result = details as { run: { status: string; repair?: { pushEffectId: string | null } }; effects: { id: string; state: string }[] };
-    if (!inspect && (result.run.status === 'blocked' || result.effects.some(effect => ['sending', 'unknown'].includes(effect.state) || effect.state === 'rejected' && effect.id === result.run.repair?.pushEffectId))) process.exitCode = 8;
+    const result = details as { run: { status: string; evidenceKey: string; failedActions: Record<string, string>; repair?: { pushEffectId: string | null } }; effects: { id: string; state: string }[] };
+    if (!inspect && (result.run.status === 'blocked' || Object.values(result.run.failedActions).includes(result.run.evidenceKey) ||
+      result.effects.some(effect => ['sending', 'unknown'].includes(effect.state) || effect.state === 'rejected' && effect.id === result.run.repair?.pushEffectId))) process.exitCode = 8;
     if (controller.signal.aborted) process.exitCode = 130;
   } catch (error) {
     process.exitCode = controller.signal.aborted ? 130 : 8;

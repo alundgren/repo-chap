@@ -64,20 +64,20 @@ export function installationPushCredentials(options: InstallationOptions, reposi
   return { ...installationToken(options, { contents: 'write', pull_requests: 'read' }, [repository.split('/')[1]!]), repository, permission: 'contents:write' };
 }
 export type PublicationCapability = 'review.publish' | 'labels.set';
-export interface PublicationCredentials extends CredentialSource {
-  repository: string; capability: PublicationCapability; permission: 'pull_requests:write' | 'issues:write';
-}
+interface LabelWriteCredentials extends CredentialSource { repository: string; permission: 'issues:write' }
+export type PublicationCredentials = (PullRequestWriteCredentials | LabelWriteCredentials) & { capability: PublicationCapability };
 export async function localPublicationCredentials(repository: string, capability: PublicationCapability,
   options: Parameters<typeof localCredentials>[0] = {}): Promise<PublicationCredentials> {
   validateRepository(repository);
   if (!['review.publish', 'labels.set'].includes(capability)) throw new GitHubReadError('credentials');
-  return { ...await localCredentials(options), repository, capability, permission: capability === 'review.publish' ? 'pull_requests:write' : 'issues:write' };
+  if (capability === 'review.publish') return { ...await localPullRequestWriteCredentials(repository, options), capability };
+  return { ...await localCredentials(options), repository, capability, permission: 'issues:write' };
 }
 export function installationPublicationCredentials(options: InstallationOptions, repository: string, capability: PublicationCapability): PublicationCredentials {
   validateRepository(repository);
   if (!['review.publish', 'labels.set'].includes(capability)) throw new GitHubReadError('credentials');
-  const permission = capability === 'review.publish' ? 'pull_requests' : 'issues';
-  return { ...installationToken(options, { contents: 'read', pull_requests: 'read', [permission]: 'write' }, [repository.split('/')[1]!]), repository, capability, permission: `${permission}:write` };
+  if (capability === 'review.publish') return { ...installationPullRequestWriteCredentials(options, repository), capability };
+  return { ...installationToken(options, { contents: 'read', pull_requests: 'read', issues: 'write' }, [repository.split('/')[1]!]), repository, capability, permission: 'issues:write' };
 }
 function validateRepository(repository: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9-]*\/[a-zA-Z0-9_.-]+$/.test(repository)) throw new GitHubReadError('credentials');

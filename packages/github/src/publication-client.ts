@@ -56,15 +56,15 @@ export class GitHubPublicationClient implements PublicationRemote {
     try {
       let credentials = readCredentials ?? this.credentials;
       if (method === 'POST') {
-        if (!write || !this.options.writeCredentials) throw new PublicationRemoteError('rejected', 'Publication requires explicit write credentials for this capability.');
+        if (!write || !this.options.writeCredentials) throw new PublicationRemoteError('rejected', 'Publication requires explicit write credentials for this capability.', true);
         const scoped = await this.options.writeCredentials(write.target.repository, write.capability);
         if (scoped.repository.toLowerCase() !== write.target.repository.toLowerCase() || scoped.capability !== write.capability ||
-          scoped.permission !== (write.capability === 'review.publish' ? 'pull_requests:write' : 'issues:write')) throw new PublicationRemoteError('rejected', 'Publication credentials do not match this repository and capability.');
+          scoped.permission !== (write.capability === 'review.publish' ? 'pull_requests:write' : 'issues:write')) throw new PublicationRemoteError('rejected', 'Publication credentials do not match this repository and capability.', true);
         credentials = scoped;
       }
       const token = await credentials.token(signal); this.check();
       if (write && !await write.beforeSend(() => this.targetUsing(write.target, { ...credentials, token: async () => token })))
-        throw new PublicationRemoteError('rejected', 'Publication no longer has current permission or ownership.');
+        throw new PublicationRemoteError('rejected', 'Publication no longer has current permission or ownership.', true);
       this.check();
       this.requests++; dispatched = true;
       const response = await (this.options.fetch ?? globalThis.fetch)(`https://api.github.com${path}`, {
@@ -83,7 +83,7 @@ export class GitHubPublicationClient implements PublicationRemote {
         const known = [400, 401, 403, 404, 405, 409, 422, 429].includes(response.status);
         throw new PublicationRemoteError(known ? 'rejected' : 'unknown', known
           ? 'GitHub rejected the publication request. Check permissions, configured labels, and rate guidance.'
-          : 'GitHub did not confirm the publication request. Reconcile before any retry.');
+          : 'GitHub did not confirm the publication request. Reconcile before any retry.', [401, 403, 429].includes(response.status));
       }
       const text = await responseText(response, 2 * 1024 * 1024); this.bytes += Buffer.byteLength(text);
       if (this.bytes > 16 * 1024 * 1024) throw new Error('Publication response limit exceeded.');

@@ -1,8 +1,22 @@
 import { canonicalJson, digest, validateActionPayload, type WorkflowPackage } from '@repo-chap/workflow';
 import { validateCitations, validateSourceBundle, type SourceBundle } from '@repo-chap/providers';
-import { validateTarget, type Inspection, type LabelPublication, type PublicationTarget, type ReviewPublication } from '@repo-chap/github';
-import type { AnalysisResult, RunRecord } from './types.js';
+import { validateTarget, type Inspection, type LabelPublication, type PublicationTarget, type PublicationReceipt, type ReviewPublication } from '@repo-chap/github';
+import type { AnalysisResult, EffectRecord, RunRecord } from './types.js';
 import { RuntimeError } from './artifacts.js';
+
+export interface PublicationStatus {
+  effectId: string; kind: PublicationReceipt['kind']; state: EffectRecord['state']; freshness: PublicationReceipt['freshness'];
+  currentAnalysisAvailable: boolean; receipt: PublicationReceipt | null;
+}
+export function summarizePublications(run: RunRecord, effects: EffectRecord[]): PublicationStatus[] {
+  return effects.filter(effect => ['review.publish', 'labels.set'].includes(effect.kind)).map(effect => {
+    const receipt = effect.receipt as PublicationReceipt | null, kind = effect.kind as PublicationReceipt['kind'];
+    return { effectId: effect.id, kind, state: effect.state,
+      freshness: !run.evidenceAvailable ? 'unverified' : effect.evidenceKey !== run.evidenceKey || effect.expectedRevision !== run.headSha ? 'stale' : receipt?.freshness ?? 'current',
+      currentAnalysisAvailable: run.evidenceAvailable && run.control.memory?.[kind === 'review.publish' ? 'reviewCurrent' : 'classificationCurrent'] === true,
+      receipt };
+  });
+}
 
 interface Citation { path: string; side: 'base' | 'head'; startLine: number; endLine: number; explanation: string }
 interface ReviewPayload {

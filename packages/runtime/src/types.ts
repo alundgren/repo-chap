@@ -51,6 +51,8 @@ export interface RunRecord {
   workflowVersionId: string; waitTiming: WaitTiming | null;
   repair?: RetainedRepair | null;
   threadResolution?: ThreadResolutionProgress | null;
+  publication?: { actionId: string; packageDigest: string; evidenceKey: string; reviewCurrent: boolean; classificationCurrent: boolean;
+    review?: ControlState['review']; classification?: ControlState['classification'] } | null;
 }
 export interface RetainedRepair { job: RepairAttemptJob; result: ExecutionArtifact; candidateSha: string | null; checksCurrent: boolean; pushEffectId: string | null }
 export interface ThreadConcern {

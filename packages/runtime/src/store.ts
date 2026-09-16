@@ -235,7 +235,7 @@ export class RuntimeStore {
       this.fenceEffects(run.id);
       if (changed) {
         run.control.memory = { ...run.control.memory, classificationCurrent: false, reviewCurrent: false, packetCurrent: false };
-        delete run.control.review; delete run.control.classification; run.repair = null;
+        delete run.control.review; delete run.control.classification; run.repair = null; run.publication = null;
         for (const [id, evidence] of Object.entries(run.failedActions)) for (const [nextId, action] of Object.entries(next.workflow.actions))
           if (old.workflow.actions[id]?.uses === action.uses) run.failedActions[nextId] = evidence;
         const continuation = run.nextAction;
@@ -284,13 +284,20 @@ export class RuntimeStore {
         this.db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run(run.id, repo.id, pr.id, json(run));
       } else {
         run = decode(row); run.inspection = ref;
-        if (!run.evidenceAvailable && run.status !== 'cancelled') { run.status = 'ready'; run.dueAt = now; run.suppression = null; }
+        if (!run.evidenceAvailable && run.status !== 'cancelled') {
+          if (run.evidenceKey === key && inspection.status === 'complete' && this.publicationContinuation(run)) {
+            const saved = run.publication!;
+            run.control.memory = { ...run.control.memory, reviewCurrent: saved.reviewCurrent, classificationCurrent: saved.classificationCurrent, packetCurrent: false };
+            run.control.review = saved.review; run.control.classification = saved.classification;
+          }
+          run.status = 'ready'; run.dueAt = now; run.suppression = null;
+        }
         run.evidenceAvailable = true;
         if (run.evidenceKey !== key) {
           this.invalidate(run, 'superseded');
           run.evidenceKey = key; run.headSha = pr.headSha; run.baseSha = pr.baseSha;
           run.control = { ...run.control, memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } };
-          delete run.control.review; delete run.control.classification; run.repair = null;
+          delete run.control.review; delete run.control.classification; run.repair = null; run.publication = null;
           run.nextAction = this.threadContinuation(run);
           run.suppression = null; run.steps = 0; run.agents = 0;
           run.failedActions = {}; run.retryAction = null;
@@ -314,12 +321,21 @@ export class RuntimeStore {
     if (!resolution.completed) return resolution.actionId;
     return resolution.continuation === run.nextAction && !run.nextAction?.startsWith('$') ? run.nextAction : null;
   }
+  private publicationContinuation(run: RunRecord): string | null {
+    const saved = run.publication;
+    return saved?.packageDigest === run.packageDigest && saved.evidenceKey === run.evidenceKey ? run.nextAction ?? saved.actionId : null;
+  }
+  private retainPublication(run: RunRecord, actionId: string): void {
+    run.publication = { actionId, packageDigest: run.packageDigest, evidenceKey: run.evidenceKey,
+      reviewCurrent: run.control.memory?.reviewCurrent === true, classificationCurrent: run.control.memory?.classificationCurrent === true,
+      review: run.control.review, classification: run.control.classification };
+  }
   unavailable(runId: string, reason: string, dueAt: number): void {
     this.transaction(() => {
       const run = this.run(runId); this.invalidate(run, 'superseded', false); run.evidenceAvailable = false;
       run.control.memory = { classificationCurrent: false, reviewCurrent: false, packetCurrent: false };
       delete run.control.review; delete run.control.classification;
-      if (!['cancelled', 'closed'].includes(run.status)) { run.status = 'waiting'; run.reason = reason; run.dueAt = dueAt; if (!run.repair) run.nextAction = this.threadContinuation(run); }
+      if (!['cancelled', 'closed'].includes(run.status)) { run.status = 'waiting'; run.reason = reason; run.dueAt = dueAt; if (!run.repair) run.nextAction = this.publicationContinuation(run) ?? this.threadContinuation(run); }
       this.saveRun(run);
     });
   }
@@ -406,6 +422,7 @@ export class RuntimeStore {
       this.db.prepare('INSERT INTO attempts VALUES (?,?,?,?,?,?,NULL)').run(id, run.id, job.headSha, claim.token, 'running', json(job));
       this.db.prepare('INSERT INTO reservations VALUES (?,?,?,?,?)').run(id, run.repositoryId, day(now), units, deadline - now);
       run.agents++; run.nextAction = input.actionId; run.control.attemptsThisHead = count.head + 1;
+      run.publication = null;
       if (repair) {
         run.repair = null; run.threadResolution = null; run.control.repairsThisLifecycle = repairs + 1;
         run.control.memory = { ...run.control.memory, packetCurrent: false, repairSuppressed: false };
@@ -439,6 +456,7 @@ export class RuntimeStore {
         if (action.uses === 'agent.review') { run.control.memory = { ...run.control.memory, reviewCurrent: true }; run.control.review = { coverage: payload.coverage, verdict: payload.verdict } as NonNullable<ControlState['review']>; }
         else { run.control.memory = { ...run.control.memory, classificationCurrent: true }; run.control.classification = { uncertain: payload.uncertain as boolean }; }
         run.nextAction = action.onSuccess;
+        if (['github.publish_review', 'github.set_labels'].includes(pkg.workflow.actions[action.onSuccess]?.uses ?? '')) this.retainPublication(run, action.onSuccess);
         if (run.failedActions) delete run.failedActions[job.actionId];
         if (run.retryAction === job.actionId) run.retryAction = null;
       } else {
@@ -586,7 +604,7 @@ export class RuntimeStore {
     this.transaction(() => {
       const run = this.requireCurrent(claim, now), effect = this.effects(run.id).find(value => value.id === id);
       if (!effect || !['review.publish', 'labels.set'].includes(effect.kind)) throw new RuntimeError('Publication requires a retained effect request.');
-      run.retryAction = actionId; this.saveRun(run);
+      this.retainPublication(run, actionId); run.retryAction = actionId; this.saveRun(run);
     });
   }
   continuePublication(claim: Claim, actionId: string, nextAction: string, reason: string, success: boolean, now: number): void {

@@ -71,8 +71,8 @@ async function authorizeSend(publication: Publication, readTarget: () => Promise
   catch { throw new PublicationRemoteError('rejected', 'The final PR read failed before publication. Retry the retained publication after refreshing access.', true); }
   if (!isCurrent(publication.target, observed)) throw new PublicationRemoteError('rejected', 'The PR changed before publication. Reobserve and analyze the current revision.');
   try {
-    if (!await dispatch.authorize(publication.kind)) throw new PublicationRemoteError('rejected', `Apply policy does not authorize ${publication.kind}. The validated analysis remains local.`);
-    if (!await dispatch.beforeSend()) throw new PublicationRemoteError('rejected', 'Publication ownership changed before the request.');
+    if (!await dispatch.authorize(publication.kind)) throw new PublicationRemoteError('rejected', `Apply policy does not authorize ${publication.kind}. Retry the retained analysis after restoring permission.`, true);
+    if (!await dispatch.beforeSend()) throw new PublicationRemoteError('rejected', 'Publication permission or ownership changed before the request.', true);
   } catch (error) {
     if (error instanceof PublicationRemoteError) throw error;
     throw new PublicationRemoteError('rejected', 'Current authorization could not be checked before publication. Retry the retained result after checking private settings.', true);

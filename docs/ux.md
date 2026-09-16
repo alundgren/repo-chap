@@ -190,3 +190,10 @@ outcome and freshness together, includes review coverage and missing evidence,
 and links the published review. An unverified follow-up read preserves remote
 acceptance while explaining why current readiness is not confirmed. Offline
 inspect and read-only reconciliation also cover publication receipts.
+
+The displayed publication freshness uses the current observation. JSON keeps
+that value separate from the historical receipt's observed freshness. Temporary
+access loss clears visible readiness and retains the publication continuation;
+recovery does not require another model call for unchanged inputs. A terminal
+publication failure keeps its reason visible and exits local apply with failure
+even when the configured next action waits.
