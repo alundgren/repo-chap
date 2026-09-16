@@ -67,6 +67,9 @@ immediately count as unsaved settings and enable Save all. `processView` exposes
 accepted field through the existing token-checked `visualEdit` and retains any
 rejected input. Apply settings calls it explicitly. Discard settings discards
 only raw values that have not entered the document.
+Each accepted field updates its control's comparison baseline immediately,
+including when a later field is rejected. Later typing compares against that
+accepted value, and a completed capture removes only its own draft entry.
 
 Renderer `perform` captures pending inspector edits before export, simulation
 or other workflow actions. `save` captures them before disk writes and retains

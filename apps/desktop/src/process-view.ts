@@ -20,7 +20,7 @@ export function processView(bridge: EditorBridge, perform: (operation: () => Pro
   let actionId = '';
   let controlsLocked = false;
   let inspectorKey = '', rulesKey = '', resultKey = '';
-  const drafts = new Map<string, VisualEdit>();
+  const drafts = new Map<string, { edit: VisualEdit; value: string }>();
   let flushing: Promise<boolean> | null = null;
   const notify = (message = ''): void => {
     const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
@@ -34,17 +34,18 @@ export function processView(bridge: EditorBridge, perform: (operation: () => Pro
   };
   const discardDrafts = (): void => { drafts.clear(); inspectorKey = ''; };
   const track = (input: HTMLInputElement | HTMLTextAreaElement, edit: () => VisualEdit): void => {
-    const original = input.value;
-    input.oninput = () => { if (input.value === original) drafts.delete(input.id); else drafts.set(input.id, edit()); notify(); };
+    input.defaultValue = input.value;
+    input.oninput = () => { if (input.value === input.defaultValue) drafts.delete(input.id); else drafts.set(input.id, { edit: edit(), value: input.value }); notify(); };
   };
   function flush(): Promise<boolean> {
     if (flushing) return flushing;
     const pending = [...drafts];
     if (!pending.length) return Promise.resolve(true);
     flushing = (async () => {
-      for (const [id, edit] of pending) {
-        if (!await perform(() => bridge.visualEdit(getState()!, edit), undefined, false)) return false;
-        if (drafts.get(id) === edit) drafts.delete(id);
+      for (const [id, draft] of pending) {
+        if (!await perform(() => bridge.visualEdit(getState()!, draft.edit), undefined, false)) return false;
+        element<HTMLInputElement | HTMLTextAreaElement>(id).defaultValue = draft.value;
+        if (drafts.get(id) === draft) drafts.delete(id);
         notify('Action settings staged. Save all writes the workflow.');
       }
       return !drafts.size;
