@@ -246,3 +246,9 @@ A candidate alone does not produce “Ready for human merge.” A direct post-pu
 handoff refreshes the PR before displaying its current head. Reopened and stale
 resolved threads remain visible as concerns needing attention. Failed or unknown
 notification attempts keep the complete packet and do not repeat provider work.
+
+A temporary GitHub evidence outage pauses new delivery while keeping the saved
+request and confirmed Slack receipt. When identical evidence returns, the same
+message remains available. If an earlier decision becomes current after a proven
+input change, the inbox reopens that request and Slack reuses its known message.
+Interrupted cleanup remains explicitly unknown until reconciled.

@@ -185,3 +185,18 @@ human handoff using the existing claim/park operations; a concurrent human head
 follows normal evaluation. This adds no provider reservation. Notification retry
 and reconciliation operate on the saved request independently of analysis and
 repair.
+
+Temporary GitHub evidence unavailability pauses delivery without declaring the
+saved decision obsolete. Restoring identical evidence preserves its request ID,
+receipt and confirmed message without another send. Proven changed evidence,
+heads, cancellation and closure still supersede obsolete requests.
+
+When genuinely changed inputs later return to an earlier decision, its existing
+request becomes open again. A private `activation` ordinal starts at zero and
+increments transactionally under a current claim when that superseded request is
+restored. It distinguishes a restoring update from an already completed update
+of the same content; it does not create a new semantic packet or erase attempts.
+The integer must remain safe, and each delivery retains its activation. Old
+unsent cleanup is cancelled. Known receipts are reused, while any sending or
+unknown operation blocks all later delivery until recovery or explicit
+reconciliation. An activation cannot authorize an unknown operation to retry.

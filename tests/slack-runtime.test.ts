@@ -316,3 +316,75 @@ for (const mode of ['plan', 'denied', 'allowed'] as const) test(`shared service 
     assert.equal(s.store.inspect(s.run.id).attempts.length, 0); assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
   } finally { await service.stop(); await s.cleanup(); }
 });
+
+test('temporary evidence loss preserves the current confirmed request across restart without another send', async () => {
+  const s = await fixture();
+  try {
+    const first = await s.queue(); await s.deliver(); const before = s.store.inspect(s.run.id), receipt = s.store.slack.request(first.id).receipt;
+    s.store.unavailable(s.run.id, 'Temporary evidence outage.', s.now); s.store.slack.supersedeStale(s.now); await s.deliver();
+    assert.equal(s.store.slack.request(first.id).status, 'open'); await s.reopen();
+    await s.store.observe(s.repo.id, s.inspection, s.now); const restored = await s.queue(); await s.deliver();
+    assert.equal(restored.id, first.id); assert.equal(restored.activation, 0); assert.deepEqual(restored.receipt, receipt);
+    assert.equal(s.store.slack.requests(s.run.id).filter(request => request.status === 'open').length, 1);
+    assert.equal(s.calls.filter(call => call.method.startsWith('chat.')).length, 1);
+    assert.deepEqual(s.store.inspect(s.run.id).reservations, before.reservations); assert.equal(s.store.inspect(s.run.id).attempts.length, 0);
+  } finally { await s.cleanup(); }
+});
+for (const cleanup of ['pending', 'confirmed']) test(`returning to earlier evidence restores the same request after ${cleanup} cleanup and restart`, async () => {
+  const s = await fixture();
+  try {
+    const first = await s.queue(); await s.deliver(); const receipt = s.store.slack.request(first.id).receipt!;
+    for (let cycle = 1; cycle <= 2; cycle++) {
+      await s.revise(true); s.store.slack.supersedeStale(s.now); assert.equal(s.store.slack.request(first.id).status, 'superseded');
+      if (cleanup === 'confirmed') { await s.deliver(); assert.match(String(s.calls.at(-1)!.body.text), /Superseded request/); }
+      await s.reopen(); await s.store.observe(s.repo.id, s.inspection, s.now); const current = await s.queue();
+      assert.equal(current.id, first.id); assert.equal(current.status, 'open'); assert.equal(current.activation, cycle); assert.deepEqual(current.receipt, receipt);
+      await s.deliver(); assert.ok(!String(s.calls.at(-1)!.body.text).includes('Superseded request')); assert.equal(s.calls.at(-1)!.body.ts, receipt.timestamp);
+      assert.equal(s.store.slack.requests(s.run.id).filter(request => request.status === 'open').length, 1);
+    }
+    assert.equal(s.calls.filter(call => call.method === 'chat.postMessage').length, 1); assert.equal(s.store.inspect(s.run.id).reservations.length, 0); assert.equal(s.store.inspect(s.run.id).attempts.length, 0);
+  } finally { await s.cleanup(); }
+});
+test('A to B to A reuses the same message and retains one current request through repeated activations', async () => {
+  const s = await fixture();
+  try {
+    const a = await s.queue(); await s.deliver(); const receipt = s.store.slack.request(a.id).receipt!;
+    await s.revise(); const bInspection = await s.store.artifacts.get<typeof s.inspection>(s.store.run(s.run.id).inspection), b = await s.queue({ reason: 'Decision B.' }); await s.deliver();
+    for (const [inspection, input, id] of [[s.inspection, {}, a.id], [bInspection, { reason: 'Decision B.' }, b.id], [s.inspection, {}, a.id]] as const) {
+      await s.store.observe(s.repo.id, inspection, s.now); const current = await s.queue(input); await s.deliver();
+      assert.equal(current.id, id); assert.deepEqual(current.receipt, receipt); assert.equal(s.calls.at(-1)!.body.ts, receipt.timestamp); assert.ok(!String(s.calls.at(-1)!.body.text).includes('Superseded request'));
+      assert.deepEqual(s.store.slack.requests(s.run.id).filter(request => request.status === 'open').map(request => request.id), [id]);
+    }
+    assert.equal(s.store.slack.requests(s.run.id).length, 2); assert.equal(s.calls.filter(call => call.method === 'chat.postMessage').length, 1); assert.equal(s.calls.filter(call => call.method === 'chat.update').length, 4);
+    assert.equal(s.store.inspect(s.run.id).reservations.length, 0); assert.equal(s.store.inspect(s.run.id).attempts.length, 0);
+  } finally { await s.cleanup(); }
+});
+for (const mode of ['sending', 'unknown']) test(`restoration cannot bypass a ${mode} superseding update`, async () => {
+  const s = await fixture();
+  try {
+    const first = await s.queue(); await s.deliver(); const receipt = s.store.slack.request(first.id).receipt!;
+    await s.revise(true); s.store.slack.supersedeStale(s.now); const cleanup = s.store.slack.deliveries().find(delivery => delivery.operation === 'supersede')!;
+    const lease = mode === 'sending' ? s.store.slack.begin(cleanup.id, receipt.channelId, 'interrupted-cleanup', s.now)! : null;
+    if (mode === 'unknown') { s.failure('lost'); await s.deliver(); }
+    const messages = s.calls.filter(call => call.method.startsWith('chat.')).length;
+    await s.store.observe(s.repo.id, s.inspection, s.now); await s.queue();
+    if (lease) assert.equal(s.store.slack.finish(lease, { status: 'confirmed', value: receipt }, s.now), false);
+    await s.reopen(); await s.deliver(); assert.equal(s.calls.filter(call => call.method.startsWith('chat.')).length, messages);
+    assert.equal(s.store.slack.delivery(cleanup.id).state, 'unknown'); assert.equal(s.store.effectAttempts(cleanup.id)[0]!.state, 'unknown');
+    s.store.slack.reconcile(cleanup.id, { action: 'delivered', receipt }, s.now); s.failure(null); await s.deliver();
+    assert.equal(s.calls.filter(call => call.method.startsWith('chat.')).length, messages + 1); assert.equal(s.calls.filter(call => call.method === 'chat.postMessage').length, 1);
+    assert.ok(!String(s.calls.at(-1)!.body.text).includes('Superseded request')); assert.equal(s.store.effectAttempts(cleanup.id)[0]!.state, 'unknown');
+    assert.equal(s.store.inspect(s.run.id).reservations.length, 0); assert.equal(s.store.inspect(s.run.id).attempts.length, 0);
+  } finally { await s.cleanup(); }
+});
+test('restored unknown post uses the explicitly reconciled receipt instead of creating a duplicate message', async () => {
+  const s = await fixture();
+  try {
+    const request = await s.queue(); s.failure('lost'); await s.deliver(); const original = s.store.slack.deliveries()[0]!;
+    await s.revise(true); s.store.slack.supersedeStale(s.now); await s.store.observe(s.repo.id, s.inspection, s.now); await s.queue(); await s.deliver();
+    assert.equal(s.calls.filter(call => call.method === 'chat.postMessage').length, 1);
+    s.store.slack.reconcile(original.id, { action: 'delivered', receipt: { workspaceId: 'TFOREST', channelId: 'GENGINEERS', timestamp: '123.000001' } }, s.now);
+    s.failure(null); await s.deliver(); assert.equal(s.calls.filter(call => call.method === 'chat.postMessage').length, 1); assert.equal(s.calls.filter(call => call.method === 'chat.update').length, 1);
+    assert.equal(s.store.slack.request(request.id).status, 'open'); assert.equal(s.store.effectAttempts(original.id)[0]!.state, 'unknown'); assert.equal(s.store.inspect(s.run.id).reservations.length, 0);
+  } finally { await s.cleanup(); }
+});
