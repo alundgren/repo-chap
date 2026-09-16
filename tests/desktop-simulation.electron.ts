@@ -157,13 +157,12 @@ test('capture approved process reference and actual Electron comparison', { time
 
 test('focused inspector drafts participate in save, leave protection, reset, export and simulation', { timeout: 120_000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'repo-chap-inspector-ui-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
   const original = await loadWorkflow(resolve(workflowPath));
   for (const file of original.files) { await mkdir(dirname(join(root, file.path)), { recursive: true }); await writeFile(join(root, file.path), file.text); }
   const env: Record<string, string> = { REPO_CHAP_DESKTOP_DATA: join(root, 'profile') };
   for (const key of ['PATH', 'DISPLAY', 'HOME', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']) if (process.env[key]) env[key] = process.env[key]!;
   const electron = await _electron.launch({ executablePath, args: [...(packaged ? [] : [resolve('apps/desktop')]), '--workflow', join(root, workflowPath), '--repo-root', root], env });
-  t.after(async () => { await electron.evaluate(({ BrowserWindow }) => { for (const win of BrowserWindow.getAllWindows()) win.destroy(); }).catch(() => {}); await electron.close().catch(() => {}); });
+  t.after(async () => { await electron.evaluate(({ BrowserWindow }) => { for (const win of BrowserWindow.getAllWindows()) win.destroy(); }).catch(() => {}); await electron.close().catch(() => {}); await rm(root, { recursive: true, force: true }); });
   const page = await electron.firstWindow(); await electron.context().setOffline(true);
   const snapshot = () => page.evaluate(async () => (await window.repoChap.current()).snapshot!);
   const disk = async () => JSON.parse(await readFile(join(root, workflowPath), 'utf8'));
