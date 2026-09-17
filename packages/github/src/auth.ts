@@ -63,6 +63,22 @@ export function installationPushCredentials(options: InstallationOptions, reposi
   validateRepository(repository);
   return { ...installationToken(options, { contents: 'write', pull_requests: 'read' }, [repository.split('/')[1]!]), repository, permission: 'contents:write' };
 }
+export type PublicationCapability = 'review.publish' | 'labels.set';
+interface LabelWriteCredentials extends CredentialSource { repository: string; permission: 'issues:write' }
+export type PublicationCredentials = (PullRequestWriteCredentials | LabelWriteCredentials) & { capability: PublicationCapability };
+export async function localPublicationCredentials(repository: string, capability: PublicationCapability,
+  options: Parameters<typeof localCredentials>[0] = {}): Promise<PublicationCredentials> {
+  validateRepository(repository);
+  if (!['review.publish', 'labels.set'].includes(capability)) throw new GitHubReadError('credentials');
+  if (capability === 'review.publish') return { ...await localPullRequestWriteCredentials(repository, options), capability };
+  return { ...await localCredentials(options), repository, capability, permission: 'issues:write' };
+}
+export function installationPublicationCredentials(options: InstallationOptions, repository: string, capability: PublicationCapability): PublicationCredentials {
+  validateRepository(repository);
+  if (!['review.publish', 'labels.set'].includes(capability)) throw new GitHubReadError('credentials');
+  if (capability === 'review.publish') return { ...installationPullRequestWriteCredentials(options, repository), capability };
+  return { ...installationToken(options, { contents: 'read', pull_requests: 'read', issues: 'write' }, [repository.split('/')[1]!]), repository, capability, permission: 'issues:write' };
+}
 function validateRepository(repository: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9-]*\/[a-zA-Z0-9_.-]+$/.test(repository)) throw new GitHubReadError('credentials');
 }
@@ -105,8 +121,7 @@ function installationToken(options: InstallationOptions, permissions: Record<str
       const data = JSON.parse(text) as { token?: unknown; expires_at?: unknown; permissions?: Record<string, unknown> };
       if (typeof data.token !== 'string' || !data.token || typeof data.expires_at !== 'string' || Date.parse(data.expires_at) <= now() + 60_000 || !Number.isFinite(Date.parse(data.expires_at)))
         throw new GitHubReadError('credentials');
-      if (permissions.contents === 'write' && data.permissions?.contents !== 'write') throw new GitHubReadError('credentials');
-      if (permissions.pull_requests === 'write' && data.permissions?.pull_requests !== 'write') throw new GitHubReadError('credentials');
+      if (Object.entries(permissions).some(([name, value]) => value === 'write' && data.permissions?.[name] !== 'write')) throw new GitHubReadError('credentials');
       cached = { token: vault.add(data.token), expires: Date.parse(data.expires_at) };
       return cached.token;
     } catch (error) {

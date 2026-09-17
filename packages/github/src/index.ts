@@ -11,3 +11,6 @@ export { GitHubReadError, type ReadCode, type ReadFailure } from './errors.js';
 export { inspectPullRequest, validateTarget } from './inspect.js';
 export { prepareCaptureDirectory, saveCapture, readCapture, CaptureError } from './capture.js';
 export type { Coverage, Collection, RepositoryIdentity, PullRequestEvidence, LabelEvidence, CheckEvidence, ReviewEvidence, CommentEvidence, ThreadEvidence, ReactionEvidence, Evidence, Inspection } from './inspect.js';
+export * from './publication.js';
+export { localPublicationCredentials, installationPublicationCredentials, type PublicationCredentials, type PublicationCapability } from './auth.js';
+export { GitHubPublicationClient, type PublicationClientOptions } from './publication-client.js';

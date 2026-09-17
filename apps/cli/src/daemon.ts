@@ -94,7 +94,11 @@ export function humanResult(command: string, value: unknown): string {
     ...(data.run.repair ? [`Candidate ${data.run.repair.candidateSha ?? 'none'}; required checks ${data.run.repair.checksCurrent ? 'validated' : 'not validated'}`] : []),
     ...(data.threadResolution ? [`Push ${data.threadResolution.pushConfirmed ? 'confirmed' : 'unconfirmed'}: ${data.threadResolution.candidateSha}; ${data.threadResolution.remainingConcerns.length} concerns need attention.`,
       ...data.threadResolution.concerns.map((concern: any) => `Thread ${concern.threadId}: ${concern.state}, ${concern.disposition}. ${concern.reason}`)] : []),
-    ...data.effects.map((effect: any) => `Effect ${effect.id}: ${effect.state}. ${effect.kind} to ${effect.destination}; expected ${effect.expectedRevision}. ${effect.receipt?.reason ?? 'Planned effect retained locally.'}`), 'Use --json for complete evidence, results, and receipts.'].join('\n') + '\n';
+    ...data.effects.flatMap((effect: any) => [
+      `Effect ${effect.id}: ${effect.state}${effect.receipt?.freshness ? `, ${data.publications?.find((value: any) => value.effectId === effect.id)?.freshness ?? effect.receipt.freshness}` : ''}. ${effect.kind} to ${effect.destination}; expected ${effect.expectedRevision}. ${effect.receipt?.reason ?? 'Planned effect retained locally.'}`,
+      ...(effect.receipt?.analysis ? [`Review evidence ${effect.receipt.analysis.coverage}; verdict ${effect.receipt.analysis.verdict}.`, ...effect.receipt.analysis.missingEvidence.map((value: string) => `Missing evidence: ${value}`)] : []),
+      ...(effect.receipt?.remote?.url ? [`Published review ${effect.receipt.remote.url}`] : []),
+    ]), 'Use --json for complete evidence, results, and receipts.'].join('\n') + '\n';
   if (command === 'register') return `Registered ${data.name}. Private installation policy controls apply permissions. Package ${data.packageDigest}.\n`;
   if (command === 'versions') return [...repositoryLines(data.repository), ...data.versions.map((version: any) =>
     `${version.id}${version.id === data.repository.activeVersionId ? ' ACTIVE' : ''}: source ${version.sourceRevision ?? 'explicit local package'}; package ${version.packageDigest}`),

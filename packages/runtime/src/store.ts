@@ -2,11 +2,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { lstat, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { prepareCaptureDirectory, validateTarget, type Inspection } from '@repo-chap/github';
+import { prepareCaptureDirectory, validateTarget, type Inspection, type Publication, type PublicationReceipt } from '@repo-chap/github';
 import { buildPackage, canonicalJson, digest, parseFixture, referencePath, supportedCapabilities, validateActionPayload, type ControlState, type Diagnostic, type WorkflowPackage } from '@repo-chap/workflow';
 import { readArtifact, readRepairResult, validateTestedCandidate, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
 import { applyPolicyDigest, requireApplyPolicy, type ApplyPolicy } from './policy.js';
 import { ArtifactStore, RuntimeError } from './artifacts.js';
+import { onlyPublicationChanges } from './publication.js';
 import { defaultLimits, type AnalysisJob, type AnalysisResult, type ArtifactRef, type Claim, type EffectRecord, type EffectRequest, type EffectState, type EffectLease, type EffectAttempt, type RepairAttemptJob, type RepairAttemptResult, type MigrationRecord, type Registration, type RepositoryRecord, type RunRecord, type RuntimeLimits, type SourceRegistration, type WorkflowVersion } from './types.js';
 
 const json = (value: unknown): string => canonicalJson(JSON.parse(JSON.stringify(value)));
@@ -235,7 +236,7 @@ export class RuntimeStore {
       this.fenceEffects(run.id);
       if (changed) {
         run.control.memory = { ...run.control.memory, classificationCurrent: false, reviewCurrent: false, packetCurrent: false };
-        delete run.control.review; delete run.control.classification; run.repair = null;
+        delete run.control.review; delete run.control.classification; run.repair = null; run.publication = null;
         for (const [id, evidence] of Object.entries(run.failedActions)) for (const [nextId, action] of Object.entries(next.workflow.actions))
           if (old.workflow.actions[id]?.uses === action.uses) run.failedActions[nextId] = evidence;
         const continuation = run.nextAction;
@@ -271,26 +272,39 @@ export class RuntimeStore {
     if (inspection.evidence.repository?.id !== repo.id || inspection.evidence.requested.repository.toLowerCase() !== repo.name.toLowerCase()) throw new RuntimeError('Observation belongs to another repository.');
     const observation = inspection.fixture.observations[0]!;
     if (observation.headSha !== pr.headSha || observation.baseSha !== pr.baseSha || observation.evidenceDigest !== inspection.evidenceDigest) throw new RuntimeError('Observation revisions do not match its evidence.');
-    const ref = await this.artifacts.put(inspection), key = digest(json({ head: pr.headSha, base: pr.baseSha, evidence: inspection.evidenceDigest }));
+    const ref = await this.artifacts.put(inspection), observedKey = digest(json({ head: pr.headSha, base: pr.baseSha, evidence: inspection.evidenceDigest }));
+    const priorRow = this.db.prepare('SELECT data FROM runs WHERE repository_id=? AND subject_id=?').get(repo.id, pr.id);
+    const prior = priorRow ? decode<RunRecord>(priorRow) : null;
+    const publicationOnly = prior && await this.publicationEvidenceCurrent(prior.id, prior.evidenceKey, inspection);
     return this.transaction(() => {
       const row = this.db.prepare('SELECT data FROM runs WHERE repository_id=? AND subject_id=?').get(repo.id, pr.id);
       const currentRepo = this.repository(repo.id), pinned = row ? decode<RunRecord>(row).packageDigest : currentRepo.packageDigest;
       if (!pinned || inspection.packageDigest !== pinned) throw new StaleObservationError();
       let run: RunRecord;
+      const unchanged = row && prior && publicationOnly && decode<RunRecord>(row).inspection.digest === prior.inspection.digest &&
+        decode<RunRecord>(row).evidenceKey === prior.evidenceKey && decode<RunRecord>(row).packageDigest === prior.packageDigest;
+      const key = unchanged ? prior.evidenceKey : observedKey;
       if (!row) {
         run = { id: randomUUID(), repositoryId: repo.id, subjectKind: 'pull_request', subjectId: pr.id, number: pr.number,
-          package: currentRepo.package!, packageDigest: pinned, workflowVersionId: currentRepo.activeVersionId!, waitTiming: null, inspection: ref, evidenceKey: key, headSha: pr.headSha, baseSha: pr.baseSha, control: { memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } },
+          package: currentRepo.package!, packageDigest: pinned, workflowVersionId: currentRepo.activeVersionId!, waitTiming: null, inspection: ref, evidenceKey: key, observationKey: observedKey, headSha: pr.headSha, baseSha: pr.baseSha, control: { memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } },
           status: 'ready', reason: 'New PR observed.', dueAt: now, nextAction: null, token: 0, owner: null, leaseUntil: null, notesRevision: 0, retries: 0, steps: 0, agents: 0, suppression: null, evidenceAvailable: true, failedActions: {}, retryAction: null };
         this.db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run(run.id, repo.id, pr.id, json(run));
       } else {
-        run = decode(row); run.inspection = ref;
-        if (!run.evidenceAvailable && run.status !== 'cancelled') { run.status = 'ready'; run.dueAt = now; run.suppression = null; }
+        run = decode(row); run.inspection = ref; run.observationKey = observedKey;
+        if (!run.evidenceAvailable && run.status !== 'cancelled') {
+          if (run.evidenceKey === key && inspection.status === 'complete' && this.publicationContinuation(run)) {
+            const saved = run.publication!;
+            run.control.memory = { ...run.control.memory, reviewCurrent: saved.reviewCurrent, classificationCurrent: saved.classificationCurrent, packetCurrent: false };
+            run.control.review = saved.review; run.control.classification = saved.classification;
+          }
+          run.status = 'ready'; run.dueAt = now; run.suppression = null;
+        }
         run.evidenceAvailable = true;
         if (run.evidenceKey !== key) {
           this.invalidate(run, 'superseded');
           run.evidenceKey = key; run.headSha = pr.headSha; run.baseSha = pr.baseSha;
           run.control = { ...run.control, memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } };
-          delete run.control.review; delete run.control.classification; run.repair = null;
+          delete run.control.review; delete run.control.classification; run.repair = null; run.publication = null;
           run.nextAction = this.threadContinuation(run);
           run.suppression = null; run.steps = 0; run.agents = 0;
           run.failedActions = {}; run.retryAction = null;
@@ -301,6 +315,20 @@ export class RuntimeStore {
       this.db.prepare('INSERT INTO observations(run_id,artifact,observed_at) VALUES (?,?,?)').run(run.id, json(ref), now);
       return run;
     });
+  }
+  async publicationEvidenceCurrent(runId: string, evidenceKey: string, inspection: Inspection): Promise<boolean> {
+    const run = this.run(runId);
+    if (run.evidenceKey !== evidenceKey || inspection.packageDigest !== run.packageDigest) return false;
+    const observedKey = digest(json({ head: inspection.evidence.pullRequest?.headSha, base: inspection.evidence.pullRequest?.baseSha, evidence: inspection.evidenceDigest }));
+    if ((run.observationKey ?? run.evidenceKey) === observedKey) return true;
+    const publications: { publication: Publication; receipt: PublicationReceipt }[] = [];
+    for (const effect of this.effects(run.id)) {
+      const receipt = effect.receipt as PublicationReceipt | null;
+      if (effect.state !== 'confirmed' || effect.evidenceKey !== run.evidenceKey || !['review.publish', 'labels.set'].includes(effect.kind) || receipt?.outcome !== 'confirmed') continue;
+      const publication = await this.artifacts.get<Publication>(effect.payload);
+      if (publication.kind === effect.kind && publication.marker === receipt.marker) publications.push({ publication, receipt });
+    }
+    return onlyPublicationChanges(await this.artifacts.get<Inspection>(run.inspection), inspection, publications);
   }
   private invalidate(run: RunRecord, state: string, rejectPlanned = true): void {
     run.token++; run.owner = null; run.leaseUntil = null;
@@ -314,12 +342,21 @@ export class RuntimeStore {
     if (!resolution.completed) return resolution.actionId;
     return resolution.continuation === run.nextAction && !run.nextAction?.startsWith('$') ? run.nextAction : null;
   }
+  private publicationContinuation(run: RunRecord): string | null {
+    const saved = run.publication;
+    return saved?.packageDigest === run.packageDigest && saved.evidenceKey === run.evidenceKey ? run.nextAction ?? saved.actionId : null;
+  }
+  private retainPublication(run: RunRecord, actionId: string): void {
+    run.publication = { actionId, packageDigest: run.packageDigest, evidenceKey: run.evidenceKey,
+      reviewCurrent: run.control.memory?.reviewCurrent === true, classificationCurrent: run.control.memory?.classificationCurrent === true,
+      review: run.control.review, classification: run.control.classification };
+  }
   unavailable(runId: string, reason: string, dueAt: number): void {
     this.transaction(() => {
       const run = this.run(runId); this.invalidate(run, 'superseded', false); run.evidenceAvailable = false;
       run.control.memory = { classificationCurrent: false, reviewCurrent: false, packetCurrent: false };
       delete run.control.review; delete run.control.classification;
-      if (!['cancelled', 'closed'].includes(run.status)) { run.status = 'waiting'; run.reason = reason; run.dueAt = dueAt; if (!run.repair) run.nextAction = this.threadContinuation(run); }
+      if (!['cancelled', 'closed'].includes(run.status)) { run.status = 'waiting'; run.reason = reason; run.dueAt = dueAt; if (!run.repair) run.nextAction = this.publicationContinuation(run) ?? this.threadContinuation(run); }
       this.saveRun(run);
     });
   }
@@ -406,6 +443,7 @@ export class RuntimeStore {
       this.db.prepare('INSERT INTO attempts VALUES (?,?,?,?,?,?,NULL)').run(id, run.id, job.headSha, claim.token, 'running', json(job));
       this.db.prepare('INSERT INTO reservations VALUES (?,?,?,?,?)').run(id, run.repositoryId, day(now), units, deadline - now);
       run.agents++; run.nextAction = input.actionId; run.control.attemptsThisHead = count.head + 1;
+      run.publication = null;
       if (repair) {
         run.repair = null; run.threadResolution = null; run.control.repairsThisLifecycle = repairs + 1;
         run.control.memory = { ...run.control.memory, packetCurrent: false, repairSuppressed: false };
@@ -439,6 +477,7 @@ export class RuntimeStore {
         if (action.uses === 'agent.review') { run.control.memory = { ...run.control.memory, reviewCurrent: true }; run.control.review = { coverage: payload.coverage, verdict: payload.verdict } as NonNullable<ControlState['review']>; }
         else { run.control.memory = { ...run.control.memory, classificationCurrent: true }; run.control.classification = { uncertain: payload.uncertain as boolean }; }
         run.nextAction = action.onSuccess;
+        if (['github.publish_review', 'github.set_labels'].includes(pkg.workflow.actions[action.onSuccess]?.uses ?? '')) this.retainPublication(run, action.onSuccess);
         if (run.failedActions) delete run.failedActions[job.actionId];
         if (run.retryAction === job.actionId) run.retryAction = null;
       } else {
@@ -570,6 +609,34 @@ export class RuntimeStore {
     for (const row of this.db.prepare("SELECT id FROM effects WHERE run_id=? AND state='sending'").all(runId)) this.unknownEffect(String(row.id), Date.now());
   }
   planEffect(claim: Claim, request: EffectRequest, now: number): string { return this.transaction(() => this.insertEffect(this.requireCurrent(claim, now), claim.token, request)); }
+  async currentAnalysis(runId: string, uses: 'agent.review' | 'agent.classify'): Promise<{ reference: ArtifactRef; result: AnalysisResult }> {
+    const run = this.run(runId), pkg = await this.artifacts.get<WorkflowPackage>(run.package);
+    if (run.control.memory?.[uses === 'agent.review' ? 'reviewCurrent' : 'classificationCurrent'] !== true) throw new RuntimeError('Publication requires current accepted analysis.');
+    const notes = this.db.prepare('SELECT artifact FROM notes WHERE run_id=? ORDER BY revision DESC').all(runId);
+    for (const note of notes) {
+      const reference = JSON.parse(String(note.artifact)) as ArtifactRef;
+      const result = await this.artifacts.get<AnalysisResult | RepairAttemptResult>(reference);
+      if ('provider' in result && result.provider.outcome === 'completed' && result.job.evidenceKey === run.evidenceKey && result.job.packageDigest === run.packageDigest &&
+        pkg.workflow.actions[result.job.actionId]?.uses === uses) return { reference, result };
+    }
+    throw new RuntimeError('No accepted analysis result matches the current publication inputs.');
+  }
+  bindPublication(claim: Claim, id: string, actionId: string, now: number): void {
+    this.transaction(() => {
+      const run = this.requireCurrent(claim, now), effect = this.effects(run.id).find(value => value.id === id);
+      if (!effect || !['review.publish', 'labels.set'].includes(effect.kind)) throw new RuntimeError('Publication requires a retained effect request.');
+      this.retainPublication(run, actionId); run.retryAction = actionId; this.saveRun(run);
+    });
+  }
+  continuePublication(claim: Claim, actionId: string, nextAction: string, reason: string, success: boolean, now: number): void {
+    this.transaction(() => {
+      const run = this.requireCurrent(claim, now);
+      if (success) { delete run.failedActions[actionId]; if (run.retryAction === actionId) run.retryAction = null; }
+      else { run.failedActions[actionId] = run.evidenceKey; run.retryAction = actionId; run.control.memory = { ...run.control.memory, packetCurrent: false }; }
+      run.reason = reason; run.nextAction = nextAction; run.status = 'ready'; run.dueAt = now;
+      run.owner = null; run.leaseUntil = null; this.saveRun(run);
+    });
+  }
   effects(runId: string): EffectRecord[] {
     return this.db.prepare('SELECT * FROM effects WHERE run_id=?').all(runId).map(row => ({ ...JSON.parse(String(row.request)), id: row.id, runId: row.run_id, token: row.token, state: row.state, receipt: row.receipt ? JSON.parse(String(row.receipt)) : null })) as EffectRecord[];
   }
@@ -634,6 +701,16 @@ export class RuntimeStore {
       const changed = this.db.prepare("UPDATE effects SET state=?,receipt=? WHERE id=? AND state='unknown'").run(next, json(receipt), id).changes === 1;
       if (changed) this.db.prepare("UPDATE effect_attempts SET state=?,receipt=?,finished_at=? WHERE effect_id=? AND state='unknown'").run(next, json(receipt), now, id);
       return changed;
+    });
+  }
+  refreshPublicationReceipt(id: string, receipt: PublicationReceipt): boolean {
+    return this.transaction(() => {
+      const row = this.db.prepare("SELECT request,receipt FROM effects WHERE id=? AND state='confirmed'").get(id);
+      if (!row) return false;
+      const request = JSON.parse(String(row.request)) as EffectRequest, prior = JSON.parse(String(row.receipt)) as PublicationReceipt;
+      if (!['review.publish', 'labels.set'].includes(request.kind) || receipt.outcome !== 'confirmed' || receipt.marker !== prior.marker || receipt.kind !== prior.kind)
+        throw new RuntimeError('Publication freshness must preserve the confirmed effect identity.');
+      return this.db.prepare("UPDATE effects SET receipt=? WHERE id=? AND state='confirmed'").run(json(receipt), id).changes === 1;
     });
   }
   effectAttempts(id: string): EffectAttempt[] {
