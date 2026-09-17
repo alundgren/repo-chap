@@ -1,0 +1,21 @@
+{
+  "name": "@repo-chap/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@repo-chap/workflow": "workspace:*",
+    "@repo-chap/github": "workspace:*",
+    "@repo-chap/providers": "workspace:*",
+    "@repo-chap/runtime": "workspace:*"
+  }
+}

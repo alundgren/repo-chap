@@ -133,6 +133,11 @@ three-valued equality, inequality, `all`, `any`, and `not`. Missing or null fact
 are unknown. Strings do not coerce into booleans. `not unknown` remains unknown.
 Conditions are limited to 256 total nodes and depth 16.
 
+`controlDecision(workflow, uses, observation, control, now)` returns a pure
+wait/closure decision for control actions, or undefined for other actions.
+Replay and the private daemon share it. Its next wake and optional refresh count
+are data for the caller to persist; it neither owns timers nor changes inputs.
+
 `parseFixture(value)` validates the versioned fixture contract; `replay(package,
 fixture)` returns a serializable `ReplayResult`. Its inputs never launch
 processes, providers, checks, GitHub requests, or notifications. See the five

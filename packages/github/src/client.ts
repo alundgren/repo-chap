@@ -11,6 +11,7 @@ export interface ReadOptions {
   maxRequests?: number;
   maxDurationMs?: number;
   maxResponseBytes?: number;
+  cooldown?: { read(): number; extend(until: number): void };
 }
 export interface QueryResult { data: unknown; incomplete: boolean }
 export function object(value: unknown): Record<string, unknown> {
@@ -27,6 +28,7 @@ export class GitHubReader {
   private bytes = 0;
   private retryAt = 0;
   private rateLimited = true;
+  get nextRequestAt(): number { return this.retryAt; }
   constructor(credentials: CredentialSource, options: ReadOptions = {}) {
     this.credentials = credentials; this.now = options.now ?? Date.now; this.signal = options.signal;
     this.options = { ...options, maxRequests: options.maxRequests ?? 200, maxDurationMs: options.maxDurationMs ?? 120_000, maxResponseBytes: options.maxResponseBytes ?? 2_097_152 };
@@ -41,24 +43,32 @@ export class GitHubReader {
     if (this.bytes >= 16 * 1024 * 1024) throw new GitHubReadError('limit');
   }
   private async pause(until: number, rateLimited: boolean): Promise<void> {
-    this.check();
-    const delay = Math.max(0, until - this.now());
-    if (until >= this.deadline) throw new GitHubReadError(rateLimited ? 'rate_limit' : 'timeout', new Date(until).toISOString());
-    if (delay) {
-      try { await (this.options.sleep ?? ((ms, signal) => sleep(ms, undefined, { signal })))(delay, this.signal); }
-      catch { throw new GitHubReadError(this.signal?.aborted ? 'cancelled' : 'timeout'); }
+    for (;;) {
+      this.check();
+      const shared = this.options.cooldown?.read() ?? 0;
+      if (shared > until) { until = shared; rateLimited = true; }
+      const delay = Math.max(0, until - this.now());
+      if (until >= this.deadline) throw new GitHubReadError(rateLimited ? 'rate_limit' : 'timeout', new Date(until).toISOString());
+      if (delay) {
+        try { await (this.options.sleep ?? ((ms, signal) => sleep(ms, undefined, { signal })))(delay, this.signal); }
+        catch { throw new GitHubReadError(this.signal?.aborted ? 'cancelled' : 'timeout'); }
+      }
+      this.check();
+      if ((this.options.cooldown?.read() ?? 0) <= until) return;
     }
-    this.check();
   }
   async query(query: string, variables: Record<string, unknown>): Promise<QueryResult> {
     if (!/^query\s/.test(query)) throw new GitHubReadError('invalid_response');
     let refreshed = false;
     for (let attempt = 0; attempt < 3; attempt++) {
-      this.check(); await this.pause(this.retryAt, this.rateLimited);
+      this.check(); await this.pause(Math.max(this.retryAt, this.options.cooldown?.read() ?? 0), this.rateLimited);
       const timeout = AbortSignal.timeout(Math.max(1, Math.min(15_000, this.deadline - this.now())));
       const signal = this.signal ? AbortSignal.any([this.signal, timeout]) : timeout;
       try {
-        const token = await this.credentials.token(signal); this.check(); this.requests++;
+        const token = await this.credentials.token(signal); this.check();
+        // New guidance during credential lookup must wait without consuming a request attempt.
+        if (Math.max(this.retryAt, this.options.cooldown?.read() ?? 0) > this.now()) { attempt--; continue; }
+        this.requests++;
         const response = await (this.options.fetch ?? globalThis.fetch)('https://api.github.com/graphql', {
           method: 'POST', redirect: 'error', signal,
           headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
@@ -84,6 +94,7 @@ export class GitHubReader {
           this.rateLimited = true;
           this.retryAt = Math.max(this.retryAt, Number.isFinite(guidedTime) ? guidedTime : 0,
             primaryLimit && Number.isFinite(reset) ? reset + 1000 : 0, this.now() + (limited && !guidance && !primaryLimit ? 60_000 * 2 ** attempt : 1000));
+          this.options.cooldown?.extend(this.retryAt);
         }
         if (limited) {
           if (body.data != null) return { data: body.data, incomplete: true };
@@ -95,6 +106,7 @@ export class GitHubReader {
         if (response.status >= 500) {
           if (Number.isFinite(guidedTime) && guidedTime > this.now()) {
             if (guidedTime > this.retryAt) { this.retryAt = guidedTime; this.rateLimited = false; }
+            this.options.cooldown?.extend(this.retryAt);
             await this.pause(this.retryAt, this.rateLimited);
           }
           throw new GitHubReadError('network');

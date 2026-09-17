@@ -1,3 +1,4 @@
+import { controlDecision } from './control.js';
 import schema from './fixture.schema.json' with { type: 'json' };
 import { canonicalJson, digest, fail, record, WorkflowError } from './common.js';
 import { currentFacts, currentMemory, evaluate, hasCompleteEvidence } from './evaluate.js';
@@ -39,33 +40,11 @@ export function replay(pkg: WorkflowPackage, input: ReplayFixture): ReplayResult
     const facts = currentFacts(workflow, observation, fixture.now);
     const memory = currentMemory(control, observation);
     if (definition.requires && (!inputs.has('candidate') || inputs.get(definition.requires) !== inputs.get('candidate'))) return stop('blocked', `${actionId} requires a successful ${definition.requires} result in this action chain.`);
-    if (action.uses === 'control.close') {
-      if (facts.lifecycle !== 'closed' && facts.lifecycle !== 'merged') return stop('blocked', 'Closure requires an observation that confirms closed or merged.');
-      result.actions.push({ actionId, uses: action.uses, status: 'simulated', reason: 'Observed lifecycle is closed.' });
-      return stop('closed', 'The observed PR is closed.');
-    }
-    if (action.uses.startsWith('control.wait_')) {
-      let wake = now + workflow.settings.reviewWaitSeconds * 1000;
-      let reason = 'Wait for an external signal or periodic reconciliation.';
-      if (action.uses === 'control.wait_refresh') {
-        wake = now + Math.min(300, 5 * 2 ** Math.min(control.refreshAttempts ?? 0, 6)) * 1000;
-        control.refreshAttempts = (control.refreshAttempts ?? 0) + 1;
-        reason = 'Required evidence is incomplete; refresh after bounded backoff.';
-      }
-      if (action.uses === 'control.wait_debounce') {
-        if ((facts.young && !observation.createdAt) || (facts.headDebouncing && !observation.headChangedAt)) return stop('blocked', 'Debounce requires createdAt and headChangedAt for the active delay.');
-        wake = Math.max(now, observation.createdAt ? Date.parse(observation.createdAt) + workflow.settings.newPrDelaySeconds * 1000 : now, observation.headChangedAt ? Date.parse(observation.headChangedAt) + workflow.settings.headDebounceSeconds * 1000 : now);
-        if (wake <= now) return stop('needs_observation', 'Debounce deadlines have passed; refresh the observation.');
-        reason = 'Wait until both the PR age and head debounce deadlines pass.';
-      }
-      if (action.uses === 'control.wait_reviewer') {
-        if (!observation.externalReviewStartedAt) return stop('blocked', 'Reviewer wait requires externalReviewStartedAt so its deadline cannot restart.');
-        const deadline = Date.parse(observation.externalReviewStartedAt) + workflow.settings.reviewDeadlineSeconds * 1000;
-        if (deadline <= now) return stop('needs_observation', 'Reviewer deadline has passed; refresh without the expired wait hint.');
-        wake = Math.min(wake, deadline); reason = 'Wait for the next reviewer poll or the fixed reviewer deadline.';
-      }
-      result.actions.push({ actionId, uses: action.uses, status: 'simulated', reason });
-      return stop('waiting', reason, wake);
+    const scheduling = controlDecision(workflow, action.uses, observation, control, fixture.now);
+    if (scheduling) {
+      if (scheduling.refreshAttempts !== undefined) control.refreshAttempts = scheduling.refreshAttempts;
+      if (scheduling.status === 'waiting' || scheduling.status === 'closed') result.actions.push({ actionId, uses: action.uses, status: 'simulated', reason: scheduling.reason });
+      return stop(scheduling.status, scheduling.reason, scheduling.nextWakeAt ? Date.parse(scheduling.nextWakeAt) : null);
     }
     if (!hasCompleteEvidence(facts) && action.uses !== 'human.publish_packet') return stop('blocked', 'Incomplete or unknown evidence cannot authorize an agent action or effect.');
     if (facts.lifecycle !== 'open' || facts.draft !== false || facts.young !== false || facts.headDebouncing !== false) {

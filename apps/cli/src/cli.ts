@@ -4,6 +4,7 @@ import { CaptureError, GitHubReadError, validateTarget } from '@repo-chap/github
 import { inspectCommand } from './inspect.js';
 import { analyzeCommand } from './analyze.js';
 import { workspaceCommand } from './workspace.js';
+import { daemonCommand } from './daemon.js';
 import { ExecutionError } from '@repo-chap/execution';
 import { readProfile, ProviderConfigurationError } from '@repo-chap/providers';
 
@@ -15,6 +16,7 @@ Usage:
   repo-chap inspect <workflow.json> --repo <owner/name> --pr <number> --capture-dir <private-directory> [--reviewers <login,login>] [--repo-root <directory>] [--json]
   repo-chap analyze <workflow.json> --capture <inspection-directory> --source-repo <local-git-repository> --output-dir <private-directory> --provider-config <private-settings.json> --profile <name> [--resume <decision.json>] [--repo-root <directory>] [--json]
   repo-chap workspace <workflow.json> --capture <inspection-directory> --source-repo <local-git-repository> --output-dir <private-directory> --provider-config <private-settings.json> --profile <name> --execution-policy <policy.json> --action <repair-action-id> [--repo-root <directory>] [--json]
+  repo-chap daemon <start|register|status|inspect|pause|resume|cancel|retry> --state-dir <private-directory> [options]
 
 Replay uses supplied observations, results, control state, and time.
 It never runs providers, commands, or remote effects. Humans merge.
@@ -49,6 +51,7 @@ function humanReplay(result: ReplayResult): string {
 }
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args[0] === 'daemon') { await daemonCommand(args.slice(1)); return; }
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) { process.stdout.write(help); return; }
   const json = args.includes('--json');
   let phase = 64;

@@ -6,7 +6,7 @@ import { chmod, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { canonicalJson, digest, loadWorkflow, parseFixture, replay } from '@repo-chap/workflow';
-import { GitHubReader, inspectPullRequest, installationCredentials, localCredentials, tokenCredentials, prepareCaptureDirectory, readCapture, saveCapture } from '@repo-chap/github';
+import { GitHubReader, GitHubReadError, inspectPullRequest, installationCredentials, localCredentials, tokenCredentials, prepareCaptureDirectory, readCapture, saveCapture } from '@repo-chap/github';
 
 const workflow = resolve('docs/pr-workflows/examples/team-pr/workflow.json');
 const pkg = await loadWorkflow(workflow);
@@ -160,6 +160,38 @@ test('retry-after and primary reset guidance delay all reads and long limits sto
   assert.equal(result.status, 'unavailable');
   assert.equal(result.evidence.metadata.failure?.code, 'rate_limit');
   assert.equal(result.evidence.metadata.failure?.retryAt, '2026-05-01T12:10:00.000Z');
+});
+
+test('shared cooldown extensions during sleep delay requests or retain the new retry time', async () => {
+  for (const extension of [2000, 600_000]) {
+    let now = start, until = start + 1000, requests = 0;
+    const reader = new GitHubReader(tokenCredentials(token), {
+      now: () => now, cooldown: { read: () => until, extend: value => { until = Math.max(until, value); } },
+      sleep: async milliseconds => { now += milliseconds; until = start + extension; },
+      fetch: async () => { requests++; assert.ok(now >= until); return Response.json({ data: { fictional: true } }); },
+    });
+    if (extension === 2000) { await reader.query('query Fictional { fictional }', {}); assert.equal(now, until); assert.equal(requests, 1); }
+    else {
+      await assert.rejects(reader.query('query Fictional { fictional }', {}), new GitHubReadError('rate_limit', new Date(start + extension).toISOString()));
+      assert.equal(requests, 0);
+    }
+  }
+});
+
+test('shared cooldown extensions during credential lookup delay requests or retain the new retry time', async () => {
+  for (const extension of [2000, 600_000]) {
+    let now = start, until = 0, requests = 0;
+    const reader = new GitHubReader({ ...tokenCredentials(token), token: async () => { until = start + extension; return token; } }, {
+      now: () => now, cooldown: { read: () => until, extend: value => { until = Math.max(until, value); } },
+      sleep: async milliseconds => { now += milliseconds; },
+      fetch: async () => { requests++; assert.ok(now >= until); return Response.json({ data: { fictional: true } }); },
+    });
+    if (extension === 2000) { await reader.query('query Fictional { fictional }', {}); assert.equal(now, until); assert.equal(requests, 1); }
+    else {
+      await assert.rejects(reader.query('query Fictional { fictional }', {}), new GitHubReadError('rate_limit', new Date(start + extension).toISOString()));
+      assert.equal(requests, 0);
+    }
+  }
 });
 
 test('bounded requests and bad cursors cannot silently truncate a collection', async () => {
