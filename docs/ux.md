@@ -72,3 +72,9 @@ record with `--resume` reuses only compatible sessions and clears prior readines
 before replacement work. A failed replacement never displays an older successful
 review as current. See [the provider contract](codex-analysis.md) for profile setup,
 failure outcomes, and the opt-in human pilot command.
+
+Claude Code is selected through the same named profile and analysis command as
+Codex. Failure diagnostics name the provider and corrective action. Both providers
+use the same decision status, missing-evidence reporting, cancellation and explicit
+resume behavior. Claude token counters are actual usage; its reported monetary
+cost stays visibly estimated. See [Claude setup and pilot checks](claude-analysis.md).

@@ -3,14 +3,14 @@ import type { SourceBundle } from './sources.js';
 
 export type Outcome = 'completed' | 'provider_error' | 'invalid_output' | 'blocked' | 'timeout' | 'cancelled' | 'superseded';
 export interface ProviderProfile {
-  provider: 'codex'; name: string; executable: string; model: string; effort?: string;
+  provider: 'codex' | 'claude'; name: string; executable: string; model: string; effort?: string;
   timeoutMs: number; maxOutputBytes: number; maxAttempts: number;
   maximumCapabilities: Capability[];
 }
 export interface SessionIdentity { provider: string; providerDigest: string; inputDigest: string; id: string }
 export interface Usage {
-  actual: { inputTokens: number; cachedInputTokens: number; outputTokens: number; reasoningOutputTokens?: number } | null;
-  estimated: { inputTokens: number; outputTokens: number; method: 'utf8_bytes_divided_by_four' };
+  actual: { inputTokens: number; cachedInputTokens: number; outputTokens: number; reasoningOutputTokens?: number; cacheCreationInputTokens?: number } | null;
+  estimated: { inputTokens: number; outputTokens: number; method: 'utf8_bytes_divided_by_four'; costUsd?: number; costMethod?: 'provider_reported_estimate' };
 }
 export interface Attempt {
   id: string; outcome: Outcome; resumed: boolean; startedAt: string; finishedAt: string;

@@ -1,6 +1,8 @@
 # Local Codex analysis
 
-`analyze` explicitly starts Codex to classify and review an inspection capture.
+`analyze` explicitly starts the selected provider to classify and review an inspection capture.
+This guide covers Codex profiles; [Claude Code profiles](claude-analysis.md) use
+the same pinned evidence and host validation.
 Plain `inspect` remains model-free. Neither command publishes a review, changes
 labels, pushes, sends a message, or merges. Analysis uses the captured revisions;
 it does not assert that GitHub still has the same head when the command finishes.
@@ -109,7 +111,8 @@ with findings or partial coverage.
 
 ## Results and process ownership
 
-`@repo-chap/providers` exports `runCodex(ProviderRequest)`, provider-neutral request,
+`@repo-chap/providers` exports `runProvider(ProviderRequest)` for profile-based
+dispatch, `runCodex` and `runClaude`, provider-neutral request,
 result, attempt, session, and usage types, source collection, and profile loading.
 The request supplies the pinned package/action, source bundle, evidence and
 fixture digests, missing evidence, private artifact directory, working directory,

@@ -5,8 +5,8 @@ import type { ProviderProfile } from './types.js';
 
 export class ProviderConfigurationError extends Error {}
 export function validateProfile(profile: ProviderProfile): void {
-  if (profile.provider !== 'codex' || typeof profile.name !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(profile.name) || typeof profile.executable !== 'string' || !profile.executable || typeof profile.model !== 'string' || !profile.model || profile.effort !== undefined && (typeof profile.effort !== 'string' || !profile.effort) || /[\x00-\x1f\x7f]/.test(profile.executable + profile.model + (profile.effort ?? '')))
-    throw new ProviderConfigurationError('Choose a Codex profile with a name, executable, and explicit model.');
+  if (!['codex', 'claude'].includes(profile.provider) || typeof profile.name !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(profile.name) || typeof profile.executable !== 'string' || !profile.executable || typeof profile.model !== 'string' || !profile.model || profile.effort !== undefined && (typeof profile.effort !== 'string' || !profile.effort) || /[\x00-\x1f\x7f]/.test(profile.executable + profile.model + (profile.effort ?? '')))
+    throw new ProviderConfigurationError('Choose a Codex or Claude profile with a name, executable, and explicit model.');
   if (!Array.isArray(profile.maximumCapabilities) || profile.maximumCapabilities.some(value => !supportedCapabilities.includes(value)))
     throw new ProviderConfigurationError('The operator profile must declare maximumCapabilities using supported capability names.');
   for (const [key, ceiling] of [['timeoutMs', 3_600_000], ['maxOutputBytes', 16 * 1024 * 1024], ['maxAttempts', 2]] as const)
@@ -26,7 +26,7 @@ export async function readProfile(path: string, name: string): Promise<ProviderP
   const value = document.profiles[name];
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['provider', 'executable', 'model', 'effort', 'timeoutMs', 'maxOutputBytes', 'maxAttempts', 'maximumCapabilities'].includes(key)))
     throw new ProviderConfigurationError('The selected provider profile is missing or contains unsupported settings.');
-  const profile = { executable: 'codex', timeoutMs: 120_000, maxOutputBytes: 1024 * 1024, maxAttempts: 1, ...value, name } as ProviderProfile;
+  const profile = { executable: (value as { provider?: string }).provider === 'claude' ? 'claude' : 'codex', timeoutMs: 120_000, maxOutputBytes: 1024 * 1024, maxAttempts: 1, ...value, name } as ProviderProfile;
   validateProfile(profile); return profile;
   } catch (error) {
     if (error instanceof ProviderConfigurationError) throw error;
