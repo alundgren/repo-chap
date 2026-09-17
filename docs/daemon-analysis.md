@@ -82,8 +82,9 @@ repo-chap daemon retry <run-id> --state-dir /private/repo-chap/state
 Registration validates all workflow bytes against the operator profile and
 verifies App access before committing the repository. Repeating the same
 registration is harmless. A different package/profile/reviewer list is rejected
-without replacing the saved one. Automatic source activation, rollback and
-checkpoint migration are later work. Runs retain their complete immutable
+without replacing the saved one. To watch a repository-owned workflow instead,
+use `register-source` as described in [workflow activation](workflow-activation.md).
+The two registration modes remain distinct. Runs retain their complete immutable
 package even when source files change.
 
 Status lists repositories, run IDs, state, reason and next wake. Inspect returns
@@ -124,8 +125,8 @@ charges. These UTC accounting days do not introduce scheduled daily repository j
 Every PR has one durable run ID scoped to its stable repository and PR IDs.
 New heads, own commits, closure/reopening, worker replacement and explicit retries
 retain lifecycle and repository totals. Returning to an earlier head retains that
-head's prior attempt count. A future configuration activation must preserve those
-same records. Unchanged failed analysis actions are suppressed individually until
+head's prior attempt count. Configuration activation and checkpoint migration preserve
+those same records. Unchanged failed analysis actions are suppressed individually until
 relevant evidence changes or the operator requests an allowed retry. A failed
 action still follows its configured `onFailure`, including another analysis
 action, a control action, `$wait` or `$blocked`. The failed result and invalidated

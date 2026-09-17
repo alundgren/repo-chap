@@ -126,6 +126,13 @@ it unknown. Other bot conventions need an explicit future contract. An unresolve
 thread remains unaddressed even if GitHub marks its location outdated. Neither
 reaction activity nor the `complete` status establishes review acceptability.
 
+After an explicit workflow migration, a daemon collector may supply
+`reviewerDeadline: { startedAt, until }` to retain a waiting run's deadline during
+projection. `until` is the recorded epoch time in milliseconds. It applies only
+when freshly collected evidence still identifies that exact pending reaction time.
+A completed or removed hint stays cleared. A new hint uses the pinned workflow's
+settings. Standalone inspection continues to use its selected package settings.
+
 ## Replay and later consumers
 
 The replay schema remains unchanged. `fixture.json` contains the collected facts,

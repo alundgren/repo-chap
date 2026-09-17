@@ -8,13 +8,23 @@ import type { DaemonService } from './service.js';
 
 const maximum = 20 * 1024 * 1024;
 export type ControlRequest = { method: 'status' } | { method: 'inspect' | 'cancel' | 'retry'; runId: string } |
-  { method: 'pause' | 'resume'; repository: string } | { method: 'register'; name: string; package: WorkflowPackage; profile: string; reviewers: string[] };
+  { method: 'pause' | 'resume' | 'versions' | 'resume-auto'; repository: string } | { method: 'register'; name: string; package: WorkflowPackage; profile: string; reviewers: string[] } |
+  { method: 'register-source'; name: string; workflowPath: string; branch: string | null; profile: string; reviewers: string[] } |
+  { method: 'rollback'; repository: string; versionId: string } | { method: 'migrate'; runId: string; versionId: string };
 export interface ControlResponse { schemaVersion: 1; ok: boolean; result?: unknown; error?: string }
 export async function handleControl(service: DaemonService, request: ControlRequest): Promise<unknown> {
   if (!request || typeof request !== 'object') throw new RuntimeError('Send a valid daemon command.');
   switch (request.method) {
     case 'status': return service.status();
     case 'register': return service.register(request);
+    case 'register-source': return service.registerSource(request);
+    case 'versions': return service.store.versions(request.repository);
+    case 'rollback': return service.store.rollback(request.repository, request.versionId);
+    case 'resume-auto': return service.store.resumeAuto(request.repository, service.now());
+    case 'migrate': {
+      const checkpoint = await service.store.migrate(request.runId, request.versionId, service.now());
+      service.abortStale(); return { checkpoint, run: service.store.run(request.runId), version: service.store.version(service.store.run(request.runId).repositoryId, request.versionId) };
+    }
     case 'inspect': {
       if (typeof request.runId !== 'string') throw new RuntimeError('Inspect requires a run ID.');
       const details = service.store.inspect(request.runId);
@@ -33,7 +43,7 @@ export async function handleControl(service: DaemonService, request: ControlRequ
     case 'retry':
       if (typeof request.runId !== 'string') throw new RuntimeError('Retry requires a run ID.');
       return service.store.retry(request.runId, service.now());
-    default: throw new RuntimeError('Unknown daemon command. Use status, register, inspect, pause, resume, cancel, or retry.');
+    default: throw new RuntimeError('Unknown daemon command. See repo-chap daemon --help.');
   }
 }
 export async function serveControl(directory: string, service: DaemonService): Promise<{ socket: string; close: () => Promise<void> }> {
