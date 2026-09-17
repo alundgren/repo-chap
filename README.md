@@ -31,21 +31,22 @@ regression workflows are later work. This repository is private for now.
 
 ## Check the investigation
 
-Use Python 3 with an isolated environment and Node 24 with Corepack:
+Use Node 24 with Corepack to validate the checked-in documentation and presentation:
 
 ```sh
-python3 -m venv /tmp/repo-chap-docs
-/tmp/repo-chap-docs/bin/pip install -r requirements-docs.txt
 corepack pnpm install --frozen-lockfile
 corepack pnpm browser:install
-corepack pnpm docs:build
-/tmp/repo-chap-docs/bin/python docs/pr-workflows/validate.py
+corepack pnpm docs:validate
 corepack pnpm docs:browser
 ```
 
+To rebuild the presentation after editing its template or inputs, run
+`corepack pnpm docs:build` before validation. That generator still requires
+Python 3, with no third-party Python packages. Validation itself uses TypeScript.
+
 The document checks validate illustrative contracts and the offline presentation.
-They do not claim that the proposed runtime exists. Browser evidence stays in
-system temporary storage and is never committed.
+Application behavior is covered separately by `corepack pnpm check`. Browser
+evidence stays in system temporary storage and is never committed.
 
 ## Local authoring assistant in v1
 

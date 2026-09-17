@@ -16,6 +16,7 @@
   "include": [
     "packages/*/src/**/*.ts",
     "apps/*/src/**/*.ts",
-    "tests/**/*.ts"
+    "tests/**/*.ts",
+    "docs/pr-workflows/*.ts"
   ]
 }

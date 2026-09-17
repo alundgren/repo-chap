@@ -17,7 +17,8 @@
     "check": "pnpm typecheck && pnpm test",
     "desktop": "pnpm build && pnpm --filter @repo-chap/desktop start",
     "desktop:package": "pnpm build && pnpm --filter @repo-chap/desktop package",
-    "test:desktop": "pnpm build && node --test --test-reporter=dot tests/desktop*.electron.ts"
+    "test:desktop": "pnpm build && node --test --test-reporter=dot tests/desktop*.electron.ts",
+    "docs:validate": "node docs/pr-workflows/validate.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
@@ -30,6 +31,9 @@
     "@repo-chap/execution": "workspace:*",
     "@repo-chap/runtime": "workspace:*",
     "@repo-chap/daemon": "workspace:*",
-    "@repo-chap/slack": "workspace:*"
+    "@repo-chap/slack": "workspace:*",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "parse5": "^8.0.1"
   }
 }
