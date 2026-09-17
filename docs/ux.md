@@ -68,8 +68,8 @@ editing resumes. Schema errors select their referenced source file, including
 references with JSON Pointer fragments.
 
 The app displays plain source for JSON and Markdown. It does not render Markdown
-HTML or follow links. Chat and live trials will add their own task views when
-those features ship.
+HTML or follow links. Discuss adds a provider conversation; live trials remain a
+later task view.
 
 ## Desktop process editing and simulation
 
@@ -125,6 +125,57 @@ default-channel fallback. Long content keeps omission notices and an expandable
 complete packet. Evidence URLs display as selectable text because the offline
 window does not navigate to remote sites. Preview wording states that nothing
 was sent. Warm-paper roles and local Plex fonts match the source editor.
+
+## Desktop workflow conversation
+
+Discuss is a fourth task view beside Process, Source and Simulate. It contains
+provider setup, context choices, attributed conversation history and a question
+field. Provider settings come from an explicitly chosen private JSON file.
+The person selects a named profile whose provider, model and optional effort
+remain visible. Loading settings or choosing a profile makes no model call.
+Codex rejects ambient global AGENTS and configured base instructions before
+dispatch and explains recovery
+through a separate instruction-free provider home with native login. The app
+does not alter global files or copy credentials. A native operation or failed
+transcript verification keeps useful answer text, displays the failure and
+requires Fresh session; a displayed provider ID alone never grants reuse.
+Send starts the selected CLI; no substitute model or implicit test runs.
+
+Cancel turn, Fresh session and provider input stay above the task views. They
+remain keyboard-accessible when an unfinished inspector field prevents changing
+views or a file operation is pending. They do not flush or discard document
+input. Send uses the editor's normal pending-input capture and queue. Rejected
+raw fields stay visible, accepted fields enter the draft, and a blocked capture
+keeps the question. Ctrl/Cmd+Enter sends; plain Enter inserts a new line.
+
+Context choices expose the selected rule, loaded Markdown references and latest
+completed simulation. The current document revision and the simulation's tested
+revision are separate. Current/stale labels describe execution identity; sending
+a question does not rerun the test. Invalid source can be discussed for repair.
+Oversized context produces a visible correction before provider dispatch and
+keeps the question. Workflow and test evidence are never silently shortened.
+
+Answers render as plain text with provider/model attribution and expandable
+context/session details. The history has its own scroll region and follows new
+text only when the person is already near its end. Coalesced updates retain
+input focus and expanded details. Visible answer/history limits name shortened
+or omitted text. Provider questions use native radio buttons, checkboxes and
+text fields, with an explicit Send reply action and inline errors.
+
+Cancellation and failures retain partial answers and expose fresh-session
+recovery. Fresh session leaves earlier messages visible but excludes them from
+future provider context. Provider changes start a separate native session and
+show which earlier turns were attached or omitted as a conversational excerpt.
+Source and actual test evidence determine facts; the excerpt is earlier dialogue.
+Visible history lasts only while this workflow stays open. It is not restored
+after close or restart, even if the provider retains its own private transcript.
+
+Leaving a workspace first protects source drafts, then asks to stop an active
+turn. Cancel retains both drafts and the running conversation. An accepted
+transition waits for owned process cleanup before replacing the document.
+These controls keep the existing warm-paper palette and local Plex fonts.
+Discussion is at most 1000px wide; profile controls and the composer stack on
+narrow windows, paths and answers wrap, and the page needs no horizontal scroll.
 
 ## Offline CLI
 

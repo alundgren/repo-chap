@@ -31,7 +31,7 @@
       </div>
       <p id="read-only" class="notice" hidden></p>
       <div class="editor-bar">
-        <div class="controls" role="group" aria-label="Editor view"><button id="process-tab" aria-pressed="false">Process</button><button id="source-tab" aria-pressed="true">Source</button><button id="simulation-tab" aria-pressed="false">Simulate</button></div>
+        <div class="controls" role="group" aria-label="Editor view"><button id="process-tab" aria-pressed="false">Process</button><button id="source-tab" aria-pressed="true">Source</button><button id="simulation-tab" aria-pressed="false">Simulate</button><button id="conversation-tab" aria-pressed="false">Discuss</button></div>
         <p id="dirty-state" role="status" aria-live="polite">All changes saved</p>
         <div class="controls">
           <button id="reload">Reload file</button>
@@ -41,6 +41,13 @@
           <button id="save" class="primary">Save all</button>
         </div>
       </div>
+      <section id="conversation-controls" hidden aria-label="Conversation controls">
+        <div class="conversation-state"><p id="conversation-status" role="status" aria-live="polite">No provider selected</p><div class="controls"><button id="conversation-cancel" disabled>Cancel turn</button><button id="conversation-fresh" disabled>Fresh session</button></div></div>
+        <p id="conversation-failure" class="notice danger" hidden></p>
+        <p id="conversation-recovery" class="notice" hidden>Start a fresh session to continue. Earlier messages stay visible.</p>
+      </section>
+      <p id="conversation-error" class="notice danger" role="alert" hidden></p>
+      <section id="conversation-input" aria-label="Provider input request" hidden></section>
       <section id="process-view" hidden aria-label="Ordered process">
         <p id="process-unavailable" class="notice" hidden>Repair the source or reset the workflow to use visual editing.</p>
         <div id="process-content" class="process-layout">
@@ -70,6 +77,36 @@
         <p id="simulation-blocked" class="notice" hidden>Fix the workflow validation errors in Source, or reset the workflow, before running simulation or exporting JSON.</p>
         <div id="simulation-result" aria-live="polite"></div>
       </section>
+      <section id="conversation-view" hidden aria-label="Workflow conversation">
+        <h2>Discuss this workflow</h2>
+        <p class="secondary">Use your local CLI login. Sending a question contacts the selected model provider.</p>
+        <div class="conversation-setup controls">
+          <button id="conversation-load-profiles">Load provider settings</button>
+          <label for="conversation-profile">Provider and model</label>
+          <select id="conversation-profile"><option value="">Choose a provider profile</option></select>
+          <button id="conversation-use-profile">Use profile</button>
+        </div>
+        <p id="conversation-selected-provider" class="secondary"></p>
+        <details class="conversation-context">
+          <summary>Context for the next question</summary>
+          <p id="conversation-context-summary"></p>
+          <label class="conversation-rule-label" for="conversation-rule">Rule to discuss</label>
+          <select id="conversation-rule"><option value="">Whole workflow</option></select>
+          <p class="secondary">The current workflow JSON is included. Choose its loaded Markdown references below.</p>
+          <div id="conversation-markdown"></div><p id="conversation-markdown-empty" class="secondary">No Markdown references are loaded.</p>
+          <label class="conversation-choice"><input id="conversation-simulation" type="checkbox" checked><span>Include the latest completed simulation</span></label>
+          <p id="conversation-simulation-detail" class="secondary"></p>
+        </details>
+        <p id="conversation-omissions" class="secondary" hidden></p>
+        <p id="conversation-empty" class="conversation-empty">Ask why a rule behaves as it does, or discuss a simulation result.</p>
+        <div id="conversation-history" role="region" aria-label="Conversation history" tabindex="0"></div>
+        <div class="conversation-compose">
+          <label for="conversation-question">Your question</label>
+          <textarea id="conversation-question" rows="3" placeholder="Why is this rule waiting?" aria-describedby="conversation-compose-help"></textarea>
+          <div class="controls"><button id="conversation-send" class="primary" disabled>Send question</button><p id="conversation-compose-help" class="secondary">Ctrl/Cmd+Enter to send · 16 KiB maximum</p></div>
+        </div>
+        <p class="secondary conversation-history-help">Discussion only. Source edits and simulation remain your explicit actions. Visible history lasts until you leave this workflow or close the app.</p>
+      </section>
       <details class="changes"><summary id="changes-title">Changes against saved source</summary><p id="changes-note" class="secondary"></p><ul id="semantic-changes"></ul></details>
       <section class="validation" aria-label="Validation">
         <div class="validation-heading"><h2 id="validation-title">Validation</h2><span id="revision" class="secondary"></span></div>
@@ -79,7 +116,7 @@
     </section>
     <p id="message" role="status" aria-live="polite"></p>
   </main>
-  <footer><span>Local files · Offline simulation</span><span id="footer-detail">JSON and Markdown</span></footer>
+  <footer><span id="footer-mode">Local files · Offline simulation</span><span id="footer-detail">JSON and Markdown</span></footer>
   <dialog id="confirmation" aria-labelledby="confirm-title" aria-describedby="confirm-detail">
     <h2 id="confirm-title"></h2><p id="confirm-detail"></p><div id="confirm-actions" class="controls"></div>
   </dialog>

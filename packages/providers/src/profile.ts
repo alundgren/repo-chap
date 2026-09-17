@@ -12,7 +12,7 @@ export function validateProfile(profile: ProviderProfile): void {
   for (const [key, ceiling] of [['timeoutMs', 3_600_000], ['maxOutputBytes', 16 * 1024 * 1024], ['maxAttempts', 2]] as const)
     if (!Number.isSafeInteger(profile[key]) || profile[key] < 1 || profile[key] > ceiling) throw new ProviderConfigurationError(`${key} must be an integer from 1 to ${ceiling}.`);
 }
-export async function readProfile(path: string, name: string): Promise<ProviderProfile> {
+async function readProfileDocument(path: string): Promise<Record<string, unknown>> {
   try {
   const absolute = resolve(path), info = await lstat(absolute);
   if (!info.isFile() || info.isSymbolicLink() || info.size > 64 * 1024 || info.mode & 0o077 || process.getuid && info.uid !== process.getuid())
@@ -22,14 +22,25 @@ export async function readProfile(path: string, name: string): Promise<ProviderP
     if (dirname(parent) === parent) break;
   }
   const document = parseJson(await readFile(absolute, 'utf8'), 'provider settings') as { schemaVersion?: unknown; profiles?: Record<string, unknown> };
-  if (!document || document.schemaVersion !== 1 || !document.profiles || Object.keys(document).some(key => !['schemaVersion', 'profiles'].includes(key))) throw new ProviderConfigurationError('Provider settings require schemaVersion 1 and profiles.');
-  const value = document.profiles[name];
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['provider', 'executable', 'model', 'effort', 'timeoutMs', 'maxOutputBytes', 'maxAttempts', 'maximumCapabilities'].includes(key)))
-    throw new ProviderConfigurationError('The selected provider profile is missing or contains unsupported settings.');
-  const profile = { executable: (value as { provider?: string }).provider === 'claude' ? 'claude' : 'codex', timeoutMs: 120_000, maxOutputBytes: 1024 * 1024, maxAttempts: 1, ...value, name } as ProviderProfile;
-  validateProfile(profile); return profile;
+  if (!document || document.schemaVersion !== 1 || !document.profiles || typeof document.profiles !== 'object' || Array.isArray(document.profiles) || Object.keys(document).some(key => !['schemaVersion', 'profiles'].includes(key))) throw new ProviderConfigurationError('Provider settings require schemaVersion 1 and profiles.');
+  return document.profiles;
   } catch (error) {
     if (error instanceof ProviderConfigurationError) throw error;
     throw new ProviderConfigurationError('Cannot read valid provider settings. Use a private version-1 JSON file outside Git and select an existing profile.');
   }
+}
+function selectProfile(profiles: Record<string, unknown>, name: string): ProviderProfile {
+  const value = Object.hasOwn(profiles, name) ? profiles[name] : undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['provider', 'executable', 'model', 'effort', 'timeoutMs', 'maxOutputBytes', 'maxAttempts', 'maximumCapabilities'].includes(key)))
+    throw new ProviderConfigurationError('The selected provider profile is missing or contains unsupported settings.');
+  const profile = { executable: (value as { provider?: string }).provider === 'claude' ? 'claude' : 'codex', timeoutMs: 120_000, maxOutputBytes: 1024 * 1024, maxAttempts: 1, ...value, name } as ProviderProfile;
+  validateProfile(profile); return profile;
+}
+export async function readProfile(path: string, name: string): Promise<ProviderProfile> {
+  return selectProfile(await readProfileDocument(path), name);
+}
+export async function readProfiles(path: string): Promise<ProviderProfile[]> {
+  const profiles = await readProfileDocument(path), names = Object.keys(profiles);
+  if (!names.length || names.length > 32) throw new ProviderConfigurationError('Provider settings must contain between 1 and 32 named profiles.');
+  return names.map(name => selectProfile(profiles, name));
 }
