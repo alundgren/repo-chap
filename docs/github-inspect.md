@@ -135,6 +135,8 @@ its clock and timing facts. The stored package digest is the existing shared
 workflow package digest.
 
 Analysis/runtime consumers should use `readCapture(directory, pinnedPackage)`.
+The explicit [Codex analysis command](codex-analysis.md) consumes this capture and
+adds a separately pinned source bundle from local Git objects.
 It checks versions, both digests, the expected package digest, the fixture's
 evidence digest, and matching head/base. Mixing two capture directories or loading
 a different workflow package fails explicitly. Keep this returned evidence and

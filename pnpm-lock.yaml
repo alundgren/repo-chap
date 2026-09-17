@@ -14,6 +14,9 @@ importers:
       '@repo-chap/github':
         specifier: workspace:*
         version: link:packages/github
+      '@repo-chap/providers':
+        specifier: workspace:*
+        version: link:packages/providers
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:packages/workflow
@@ -32,12 +35,24 @@ importers:
       '@repo-chap/github':
         specifier: workspace:*
         version: link:../../packages/github
+      '@repo-chap/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
 
   packages/github:
     dependencies:
+      '@repo-chap/workflow':
+        specifier: workspace:*
+        version: link:../workflow
+
+  packages/providers:
+    dependencies:
+      '@repo-chap/github':
+        specifier: workspace:*
+        version: link:../github
       '@repo-chap/workflow':
         specifier: workspace:*
         version: link:../workflow

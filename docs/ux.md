@@ -56,3 +56,19 @@ The default command performs reads and capture only. Provider analysis requires
 an explicit later command or mode. Reviewer logins are optional; their PR eyes
 reactions are waiting hints with the original reaction timestamp and the workflow
 expiry, never approval evidence.
+
+## Local analysis CLI
+
+`analyze` explicitly starts the selected named provider profile after the user
+supplies a capture, local source repository, and private output directory. Text
+output leads with completion status and the analysis decision, followed by pinned
+revisions, missing evidence, the corrective diagnostic, and the saved record.
+JSON carries the same information plus individual attempts and usage. An
+acceptable analysis does not claim merge permission. A validated but incomplete
+report can exit 0, so its missing evidence and `decision: incomplete` stay visible.
+
+Ctrl-C stops subprocesses and writes a cancellation record. Passing a previous
+record with `--resume` reuses only compatible sessions and clears prior readiness
+before replacement work. A failed replacement never displays an older successful
+review as current. See [the provider contract](codex-analysis.md) for profile setup,
+failure outcomes, and the opt-in human pilot command.
