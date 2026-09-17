@@ -18,7 +18,7 @@ export async function dispatchCandidatePush(store: RuntimeStore, claim: Claim, a
     targetRef: `refs/heads/${pr.headRef}`, expectedHeadSha: saved.job.headSha, baseSha: saved.job.baseSha, candidateSha: result.candidate.sha, tree: result.candidate.tree, parents: result.candidate.parents };
   const payload = await store.artifacts.put(request), id = store.planEffect(claim, { kind: 'github.push_candidate', destination: `${repo.name}:${request.targetRef}`,
     evidenceKey: saved.job.evidenceKey, expectedRevision: request.expectedHeadSha, payload }, now());
-  store.bindPush(claim, id, actionId, now());
+  store.bindPush(claim, id, actionId, now(), pkg.workflow.actions[action.onSuccess]?.uses === 'github.resolve_eligible_threads' ? action.onSuccess : undefined);
   const park = (status: 'blocked' | 'waiting' | 'ready', reason: string, due: number | null, next = actionId) => store.park(claim, status, reason, due, run.control, next, now());
   const effect = store.effects(run.id).find(value => value.id === id)!;
   if (effect.state === 'confirmed') { park('ready', 'The tested commit is confirmed. Refresh current PR evidence.', now(), action.onSuccess); return; }

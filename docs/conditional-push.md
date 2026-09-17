@@ -1,6 +1,8 @@
 # Conditional repair and push
 
 Local CLI apply and daemon apply share durable repair, check and push handlers.
+The optional [thread-resolution action](thread-resolution.md) continues from
+the confirmed push and reports each addressed or remaining concern separately.
 The daemon starts in analysis mode unless its private installation config lists
 apply policy files. Each policy names one repository and the capabilities the
 operator permits there. Repository workflow edits cannot grant this permission.

@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { loadWorkflow, WorkflowError } from '@repo-chap/workflow';
-import { localCredentials, localPushCredentials, validateTarget, GitHubReadError } from '@repo-chap/github';
+import { localCredentials, localPushCredentials, localPullRequestWriteCredentials, validateTarget, GitHubReadError } from '@repo-chap/github';
 import { readProfile, ProviderConfigurationError } from '@repo-chap/providers';
 import { readApplyPolicy, requireApplyPolicy, RuntimeError } from '@repo-chap/runtime';
 import { runLocalApply, inspectLocalApply } from '@repo-chap/daemon';
@@ -54,7 +54,7 @@ export async function applyCommand(args: string[]): Promise<void> {
       const displayed = new Set<string>();
       details = await runLocalApply({ directory, repository, number, package: pkg, profile: profile.name, planOnly: seen.has('--plan'), retry: seen.has('--retry'),
         reviewers: options['--reviewers']?.split(',').map(value => value.trim()), signal: controller.signal }, {
-        credentials: await localCredentials(), profile: name => readProfile(config, name), applyPolicy: () => readApplyPolicy(policyPath), pushCredentials: name => localPushCredentials(name),
+        credentials: await localCredentials(), profile: name => readProfile(config, name), applyPolicy: () => readApplyPolicy(policyPath), pushCredentials: name => localPushCredentials(name), threadCredentials: name => localPullRequestWriteCredentials(name),
         onPlannedEffect: effect => { if (!json && !displayed.has(effect.id)) { displayed.add(effect.id); process.stdout.write(`Planned ${effect.kind} to ${effect.destination}; expected ${effect.expectedRevision}. Effect ${effect.id}\n`); } },
       });
     }

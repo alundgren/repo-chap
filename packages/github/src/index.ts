@@ -1,5 +1,8 @@
 export { localCredentials, localPushCredentials, tokenCredentials, installationCredentials, installationPushCredentials, type PushCredentials, type CredentialSource, type InstallationOptions } from './auth.js';
 export { GitHubReader, type ReadOptions } from './client.js';
+export { localPullRequestWriteCredentials, installationPullRequestWriteCredentials, type PullRequestWriteCredentials } from './auth.js';
+export { resolveThread, reconcileThread, readThreadTarget, threadContentDigest, githubThreadTransport,
+  type ThreadResolutionRequest, type ThreadTarget, type ThreadReceipt, type ThreadTransport } from './threads.js';
 export { listOpenPullRequests, type PullRequestListing } from './poll.js';
 export { resolveWorkflowSource } from './source.js';
 export { conditionalPush, reconcilePush, readPushTarget, validatePushRequest, validatePushTarget, githubPushTransport, githubRefReader, localPushTransport, PushError,

@@ -291,7 +291,8 @@ export class RuntimeStore {
           run.evidenceKey = key; run.headSha = pr.headSha; run.baseSha = pr.baseSha;
           run.control = { ...run.control, memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } };
           delete run.control.review; delete run.control.classification; run.repair = null;
-          run.nextAction = null; run.suppression = null; run.steps = 0; run.agents = 0;
+          run.nextAction = this.threadContinuation(run);
+          run.suppression = null; run.steps = 0; run.agents = 0;
           run.failedActions = {}; run.retryAction = null;
           if (run.status !== 'cancelled') { run.status = 'ready'; run.reason = 'Evidence changed.'; run.dueAt = now; }
         }
@@ -307,12 +308,18 @@ export class RuntimeStore {
     if (rejectPlanned) this.db.prepare("UPDATE effects SET state='rejected' WHERE run_id=? AND state='planned'").run(run.id);
     this.fenceEffects(run.id);
   }
+  private threadContinuation(run: RunRecord): string | null {
+    const resolution = run.threadResolution;
+    if (!resolution || resolution.packageDigest !== run.packageDigest || !this.effects(run.id).some(effect => effect.id === resolution.pushEffectId && effect.state === 'confirmed')) return null;
+    if (!resolution.completed) return resolution.actionId;
+    return resolution.continuation === run.nextAction && !run.nextAction?.startsWith('$') ? run.nextAction : null;
+  }
   unavailable(runId: string, reason: string, dueAt: number): void {
     this.transaction(() => {
       const run = this.run(runId); this.invalidate(run, 'superseded', false); run.evidenceAvailable = false;
       run.control.memory = { classificationCurrent: false, reviewCurrent: false, packetCurrent: false };
       delete run.control.review; delete run.control.classification;
-      if (!['cancelled', 'closed'].includes(run.status)) { run.status = 'waiting'; run.reason = reason; run.dueAt = dueAt; if (!run.repair) run.nextAction = null; }
+      if (!['cancelled', 'closed'].includes(run.status)) { run.status = 'waiting'; run.reason = reason; run.dueAt = dueAt; if (!run.repair) run.nextAction = this.threadContinuation(run); }
       this.saveRun(run);
     });
   }
@@ -379,7 +386,7 @@ export class RuntimeStore {
       if (run.packageDigest !== input.package.digest || this.repository(run.repositoryId).paused) throw new RuntimeError('The repository is paused or package is not current.');
       const repair = !!apply, uses = input.package.workflow.actions[input.actionId]?.uses;
       if (!(repair ? ['agent.resolve_conflict', 'agent.address_review'] : ['agent.classify', 'agent.review']).includes(uses ?? '')) throw new RuntimeError('Cannot reserve this action in the selected execution mode.');
-      if (repair && this.effects(run.id).some(effect => effect.kind === 'github.push_candidate' && ['sending', 'unknown'].includes(effect.state))) throw new RuntimeError('Reconcile the pending remote effect before starting another provider attempt.');
+      if (repair && this.effects(run.id).some(effect => ['github.push_candidate', 'github.resolve_eligible_threads'].includes(effect.kind) && ['sending', 'unknown'].includes(effect.state))) throw new RuntimeError('Reconcile the pending remote effect before starting another provider attempt.');
       const repairs = Number((this.db.prepare("SELECT COUNT(*) AS count FROM attempts WHERE run_id=? AND json_extract(job,'$.kind')='repair'").get(run.id) as { count: number }).count);
       if (repair && repairs >= Math.min(limits.maxRepairsPerLifecycle, apply!.maxRepairsPerLifecycle)) throw new RuntimeError('Total repair limit reached across all PR heads. A human decision is required.');
       if (run.suppression === run.evidenceKey || run.failedActions?.[input.actionId] === run.evidenceKey) throw new RuntimeError('Unchanged work is suppressed. Use a bounded retry or wait for new evidence.');
@@ -400,7 +407,7 @@ export class RuntimeStore {
       this.db.prepare('INSERT INTO reservations VALUES (?,?,?,?,?)').run(id, run.repositoryId, day(now), units, deadline - now);
       run.agents++; run.nextAction = input.actionId; run.control.attemptsThisHead = count.head + 1;
       if (repair) {
-        run.repair = null; run.control.repairsThisLifecycle = repairs + 1;
+        run.repair = null; run.threadResolution = null; run.control.repairsThisLifecycle = repairs + 1;
         run.control.memory = { ...run.control.memory, packetCurrent: false, repairSuppressed: false };
       } else {
       run.control.memory = { ...run.control.memory, packetCurrent: false, [uses === 'agent.review' ? 'reviewCurrent' : 'classificationCurrent']: false };
@@ -501,11 +508,24 @@ export class RuntimeStore {
       run.reason = 'Required checks passed on the retained candidate.'; run.owner = null; run.leaseUntil = null; this.saveRun(run);
     });
   }
-  bindPush(claim: Claim, id: string, actionId: string, now: number): void {
+  bindPush(claim: Claim, id: string, actionId: string, now: number, resolutionActionId?: string): void {
     this.transaction(() => {
       const run = this.requireCurrent(claim, now), effect = this.effects(run.id).find(value => value.id === id);
       if (!run.repair?.checksCurrent || !effect || effect.kind !== 'github.push_candidate') throw new RuntimeError('Push requires current tested candidate evidence.');
-      run.repair.pushEffectId = id; run.retryAction = actionId; this.saveRun(run);
+      run.repair.pushEffectId = id; run.retryAction = actionId;
+      if (resolutionActionId && run.threadResolution?.pushEffectId !== id) run.threadResolution = {
+        actionId: resolutionActionId, pushEffectId: id, repair: structuredClone(run.repair), packageDigest: run.packageDigest, completed: false, concerns: [],
+      };
+      this.saveRun(run);
+    });
+  }
+  recordThreadConcerns(claim: Claim, concerns: NonNullable<RunRecord['threadResolution']>['concerns'], completed: boolean, now: number, continuation?: string): void {
+    this.transaction(() => {
+      const run = this.requireCurrent(claim, now);
+      if (!run.threadResolution || run.threadResolution.packageDigest !== run.packageDigest) throw new RuntimeError('Thread resolution requires the pinned post-push repair.');
+      run.threadResolution.concerns = concerns; run.threadResolution.completed = completed; run.threadResolution.observedAt = now; run.retryAction = run.threadResolution.actionId;
+      run.threadResolution.continuation = continuation;
+      this.saveRun(run);
     });
   }
   pushBudgetCurrent(runId: string, pkg: WorkflowPackage, policy: ApplyPolicy, now: number): boolean {
@@ -534,8 +554,12 @@ export class RuntimeStore {
   }
   private insertEffect(run: RunRecord, token: number, request: EffectRequest): string {
     if (request.evidenceKey !== run.evidenceKey) throw new RuntimeError('Effect evidence is stale.');
-    const id = digest(json({ repositoryId: run.repositoryId, runId: run.id, ...request })).slice(7);
-    this.db.prepare("INSERT OR IGNORE INTO effects VALUES (?,?, 'planned', ?,?,NULL)").run(id, run.id, token, json(request)); return id;
+    // Resolution itself changes PR evidence. Its immutable payload already binds the pushed commit and concern.
+    const { evidenceKey: _evidenceKey, ...semantic } = request;
+    const id = digest(json({ repositoryId: run.repositoryId, runId: run.id, ...(request.kind === 'github.resolve_eligible_threads' ? semantic : request) })).slice(7);
+    this.db.prepare("INSERT OR IGNORE INTO effects VALUES (?,?, 'planned', ?,?,NULL)").run(id, run.id, token, json(request));
+    if (request.kind === 'github.resolve_eligible_threads') this.db.prepare("UPDATE effects SET request=?,token=? WHERE id=? AND state='rejected' AND json_extract(receipt,'$.retryable')=1").run(json(request), token, id);
+    return id;
   }
   private unknownEffect(id: string, now: number): void {
     this.db.prepare("UPDATE effects SET state='unknown' WHERE id=? AND state='sending'").run(id);
@@ -574,7 +598,8 @@ export class RuntimeStore {
       const run = this.requireCurrent(claim, now), effect = this.effects(run.id).find(value => value.id === id);
       if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1 || maximumAttempts > 100 || !Number.isFinite(seconds) || seconds <= 0 || seconds > 3600 ||
         this.repository(run.repositoryId).paused || !effect || !(effect.state === 'planned' || effect.state === 'rejected' && (effect.receipt as { retryable?: boolean } | null)?.retryable === true) || effect.evidenceKey !== run.evidenceKey ||
-        this.effects(run.id).some(value => value.id !== id && value.kind === effect.kind && ['sending', 'unknown'].includes(value.state))) throw new RuntimeError('Effect dispatch requires current ownership, inputs and a planned request without an unresolved write.');
+        this.effects(run.id).some(value => value.id !== id && value.kind === effect.kind && ['sending', 'unknown'].includes(value.state) &&
+          (effect.kind !== 'github.resolve_eligible_threads' || value.destination === effect.destination))) throw new RuntimeError('Effect dispatch requires current ownership, inputs and a planned request without an unresolved write.');
       if (this.effectAttempts(id).length >= Math.min(maximumAttempts, this.limits.maxRetries + 1)) throw new RuntimeError('Remote effect attempt limit reached. Inspect the retained candidate and receipts; a human decision is required.');
       this.db.prepare("UPDATE effects SET state='sending',receipt=NULL WHERE id=?").run(id);
       return this.saveEffectLease(id, run.id, claim.owner, now, now + seconds * 1000);
@@ -620,7 +645,11 @@ export class RuntimeStore {
       const row = this.db.prepare('SELECT run_id FROM effects WHERE id=?').get(id);
       if (!row) return;
       const run = this.run(String(row.run_id)), effect = this.effects(run.id).find(value => value.id === id)!;
-      if (run.owner || ['closed', 'cancelled'].includes(run.status) || effect.evidenceKey !== run.evidenceKey) return;
+      if (run.owner || ['closed', 'cancelled'].includes(run.status)) return;
+      const resolution = run.threadResolution;
+      if (resolution && !resolution.completed && resolution.packageDigest === run.packageDigest &&
+        (resolution.pushEffectId === id && effect.state === 'confirmed' || effect.kind === 'github.resolve_eligible_threads')) run.nextAction = resolution.actionId;
+      else if (effect.evidenceKey !== run.evidenceKey) return;
       run.status = dueAt > now ? 'waiting' : 'ready'; run.dueAt = dueAt; run.reason = 'Remote effect receipt updated. Inspect before continuing.'; this.saveRun(run);
     });
   }
