@@ -12,6 +12,7 @@ install, validate the supplied example, and replay fictional fixtures.
 
 - [Local workspace repair and recovery](docs/workspace-repair.md)
 - [Private analysis daemon and recovery](docs/daemon-analysis.md)
+- [Linux service installation, diagnostics and backup](docs/daemon-operations.md)
 - [Product brief](docs/product-brief.md)
 - [Architecture](docs/pr-workflows/architecture.md)
 - [Specification](docs/pr-workflows/specification.md)

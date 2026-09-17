@@ -1,6 +1,6 @@
 import { actionContracts, parseJson } from '@repo-chap/workflow';
-import { object, processOutcome, runAction, type ProviderTransport } from './runner.js';
-import type { Outcome, ProviderRequest, ProviderResult, Usage } from './types.js';
+import { object, processOutcome, runAction, type ProviderTransport, type Invoke } from './runner.js';
+import type { Outcome, ProviderProfile, ProviderRequest, ProviderResult, Usage } from './types.js';
 
 const validSession = (id: string) => /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
 const counter = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
@@ -12,6 +12,30 @@ function generationSchema(request: ProviderRequest): string {
   const definitions = (document as { $defs: Record<string, unknown> }).$defs;
   const selected = definitions[fragment.slice('/$defs/'.length)];
   return JSON.stringify({ ...(selected as object), definitions }).replaceAll('"#/$defs/', '"#/definitions/');
+}
+
+export async function probeClaude(profile: ProviderProfile, invoke: Invoke) {
+    let version: string | undefined;
+    const fail = (outcome: Outcome, diagnostic: string) => ({ outcome, diagnostic, version });
+    const found = await invoke(['--version'], 128 * 1024);
+    if (processOutcome(found)) return fail(processOutcome(found)!, 'Cannot probe Claude Code. Check the executable path and CLI installation.');
+    const versionText = found.stdout.toString().trim();
+    if (!/^\d+\.\d+\.\d+(?:[-+][\w.-]+)? \(Claude Code\)$/.test(versionText)) return fail('blocked', 'Claude did not report a recognized version. Install a supported Claude Code CLI.');
+    version = versionText;
+    const help = await invoke(['--help'], 128 * 1024);
+    if (processOutcome(help)) return fail(processOutcome(help)!, 'Cannot inspect Claude Code capabilities. Check the CLI installation.');
+    const text = help.stdout.toString();
+    const required = ['--print', '--output-format', '--json-schema', '--model', '--settings', '--setting-sources', '--safe-mode', '--tools', '--allowedTools', '--permission-mode', '--strict-mcp-config', '--mcp-config', '--resume'];
+    const hasFlag = (flag: string) => new RegExp(`(?:^|\\s)${flag}(?=[\\s,=]|$)`, 'm').test(text);
+    const missing = required.filter(flag => !hasFlag(flag));
+    if (missing.length) return fail('blocked', `Installed Claude Code lacks ${missing.join(', ')}. Update Claude Code before running this profile.`);
+    if (!/--output-format\b[\s\S]*?\bjson\b/.test(text) || !/--permission-mode\b[\s\S]*?\bdontAsk\b/.test(text))
+      return fail('blocked', 'Installed Claude Code does not advertise JSON output and noninteractive permission denial. Update the CLI.');
+    const effort = profile.effort ?? 'medium';
+    const effortHelp = text.match(/--effort\b([\s\S]*?)(?=\n\s*(?:--|-[a-zA-Z],)|$)/)?.[1];
+    const levels = effortHelp?.match(/\(([^)]+)\)/)?.[1]?.split(',').map(value => value.trim());
+    if (!hasFlag('--effort') || !levels?.includes(effort)) return fail('blocked', 'The installed Claude Code does not advertise the requested effort. Update the CLI or choose a listed effort.');
+    return { version: versionText, effort };
 }
 
 const claude: ProviderTransport = {
@@ -36,26 +60,9 @@ const claude: ProviderTransport = {
   },
   async prepare(request, invoke) {
     const { profile } = request;
-    let version: string | undefined;
-    const fail = (outcome: Outcome, diagnostic: string) => ({ outcome, diagnostic, version });
-    const found = await invoke(['--version'], 128 * 1024);
-    if (processOutcome(found)) return fail(processOutcome(found)!, 'Cannot probe Claude Code. Check the executable path and CLI installation.');
-    const versionText = found.stdout.toString().trim();
-    if (!/^\d+\.\d+\.\d+(?:[-+][\w.-]+)? \(Claude Code\)$/.test(versionText)) return fail('blocked', 'Claude did not report a recognized version. Install a supported Claude Code CLI.');
-    version = versionText;
-    const help = await invoke(['--help'], 128 * 1024);
-    if (processOutcome(help)) return fail(processOutcome(help)!, 'Cannot inspect Claude Code capabilities. Check the CLI installation.');
-    const text = help.stdout.toString();
-    const required = ['--print', '--output-format', '--json-schema', '--model', '--settings', '--setting-sources', '--safe-mode', '--tools', '--allowedTools', '--permission-mode', '--strict-mcp-config', '--mcp-config', '--resume'];
-    const hasFlag = (flag: string) => new RegExp(`(?:^|\\s)${flag}(?=[\\s,=]|$)`, 'm').test(text);
-    const missing = required.filter(flag => !hasFlag(flag));
-    if (missing.length) return fail('blocked', `Installed Claude Code lacks ${missing.join(', ')}. Update Claude Code before running this profile.`);
-    if (!/--output-format\b[\s\S]*?\bjson\b/.test(text) || !/--permission-mode\b[\s\S]*?\bdontAsk\b/.test(text))
-      return fail('blocked', 'Installed Claude Code does not advertise JSON output and noninteractive permission denial. Update the CLI.');
-    const effort = profile.effort ?? 'medium';
-    const effortHelp = text.match(/--effort\b([\s\S]*?)(?=\n\s*(?:--|-[a-zA-Z],)|$)/)?.[1];
-    const levels = effortHelp?.match(/\(([^)]+)\)/)?.[1]?.split(',').map(value => value.trim());
-    if (!hasFlag('--effort') || !levels?.includes(effort)) return fail('blocked', 'The installed Claude Code does not advertise the requested effort. Update the CLI or choose a listed effort.');
+    const checked = await probeClaude(profile, invoke);
+    if ('outcome' in checked) return checked;
+    const { version: versionText, effort } = checked;
     const capabilities = request.package.workflow.actions[request.actionId]!.capabilities;
     const tools = request.mode === 'read' ? [] : ['Read', 'Glob', 'Grep', ...(capabilities.includes('workspace.write') ? ['Edit', 'Write'] : []), ...(capabilities.includes('checks.run') ? ['Bash'] : [])];
     const settings = { disableAllHooks: true };

@@ -2,6 +2,8 @@ import { RuntimeError, RuntimeStore } from '@repo-chap/runtime';
 import { DaemonService } from './service.js';
 import { serveControl } from './control.js';
 import { loadInstallation } from './config.js';
+export { loadInstallation } from './config.js';
+export { diagnoseInstallation } from './diagnostics.js';
 
 export { DaemonService, type DaemonDependencies } from './service.js';
 export { runLocalApply, inspectLocalApply, type LocalApplyOptions } from './local.js';

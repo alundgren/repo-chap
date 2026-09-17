@@ -1,11 +1,17 @@
 import { resolve } from 'node:path';
 import { loadWorkflow } from '@repo-chap/workflow';
-import { requestControl, startDaemon, type ControlRequest } from '@repo-chap/daemon';
+import { requestControl, startDaemon, loadInstallation, diagnoseInstallation, type ControlRequest } from '@repo-chap/daemon';
+import { backupState, restoreState } from '@repo-chap/runtime';
 import { slackInboxCommand, slackInboxHelp } from './slack.js';
 
 export const daemonHelp = `Daemon commands use a private local Unix socket. The daemon runs on Linux. Private apply policies can authorize bounded repair and push.
 
   repo-chap daemon start --state-dir <private-directory> --config <private-installation.json>
+  repo-chap daemon diagnose --state-dir <directory> --config <private-installation.json> [--json]
+  repo-chap daemon backup <new-backup-directory> --state-dir <directory> --config <private-installation.json> [--json]
+  repo-chap daemon restore <backup-directory> --state-dir <new-directory> [--json]
+  repo-chap daemon reconcile --state-dir <directory> [--json]
+  repo-chap daemon resume-restored --state-dir <directory> [--keep-unknown] [--json]
   repo-chap daemon register <workflow.json> --repo <owner/name> --profile <name> --state-dir <directory> [--repo-root <directory>] [--reviewers <login,login>] [--json]
   repo-chap daemon register-source <repository-workflow-path> --repo <owner/name> --profile <name> --state-dir <directory> [--branch <name>] [--reviewers <login,login>] [--json]
   repo-chap daemon versions --repo <owner/name-or-id> --state-dir <directory> [--json]
@@ -19,6 +25,10 @@ export const daemonHelp = `Daemon commands use a private local Unix socket. The 
   repo-chap daemon cancel <run-id> --state-dir <directory> [--json]
   repo-chap daemon retry <run-id> --state-dir <directory> [--json]
 
+Backup requires a stopped service. Restore creates a new state directory with dispatch paused.
+Reconcile reads uncertain GitHub outcomes. Slack receipts use slack-reconcile.
+Resume-restored releases only the recovery pause after reconciliation. --keep-unknown retains uncertain outcomes without authorizing resends.
+Diagnose checks the invoking account and makes provider login-status and GitHub reads, without model calls or repository/Slack writes.
 Start stays in the foreground. Ctrl-C stops the daemon and active providers.
 Pause stops new dispatch for a repository; active analysis can finish.
 Cancel fences a run and stops its provider. Retry retains every attempt and budget charge.
@@ -35,21 +45,34 @@ export async function daemonCommand(args: string[]): Promise<void> {
     const command = args.shift();
     if (command === 'inbox' || command === 'slack-reconcile') { await slackInboxCommand(command, args); return; }
     if (!command || args.includes('--help') || command === '--help') { process.stdout.write(daemonHelp); return; }
-    if (!['start', 'register', 'register-source', 'versions', 'rollback', 'resume-auto', 'migrate', 'status', 'inspect', 'pause', 'resume', 'cancel', 'retry'].includes(command)) throw new Error('Unknown daemon command. See repo-chap daemon --help.');
-    const requiresValue = ['register', 'register-source', 'rollback', 'migrate', 'inspect', 'cancel', 'retry'].includes(command);
+    if (!['start', 'diagnose', 'backup', 'restore', 'reconcile', 'resume-restored', 'register', 'register-source', 'versions', 'rollback', 'resume-auto', 'migrate', 'status', 'inspect', 'pause', 'resume', 'cancel', 'retry'].includes(command)) throw new Error('Unknown daemon command. See repo-chap daemon --help.');
+    const requiresValue = ['backup', 'restore', 'register', 'register-source', 'rollback', 'migrate', 'inspect', 'cancel', 'retry'].includes(command);
     const positional = requiresValue ? args.shift() : undefined;
-    if (requiresValue && (!positional || positional.startsWith('-'))) throw new Error(`${command} requires ${command.startsWith('register') ? 'a workflow path' : command === 'rollback' ? 'a version ID' : 'a run ID'}.`);
+    if (requiresValue && (!positional || positional.startsWith('-'))) throw new Error(`${command} requires ${command.startsWith('register') ? 'a workflow path' : command === 'rollback' ? 'a version ID' : ['backup', 'restore'].includes(command) ? 'a directory' : 'a run ID'}.`);
     const options: Record<string, string> = {}, seen = new Set<string>();
-    const allowed = ['--state-dir', '--json', ...(command === 'start' ? ['--config'] : []), ...(['pause', 'resume', 'register', 'register-source', 'versions', 'rollback', 'resume-auto'].includes(command) ? ['--repo'] : []),
+    const allowed = ['--state-dir', '--json', ...(['start', 'diagnose', 'backup'].includes(command) ? ['--config'] : []), ...(command === 'resume-restored' ? ['--keep-unknown'] : []), ...(['pause', 'resume', 'register', 'register-source', 'versions', 'rollback', 'resume-auto'].includes(command) ? ['--repo'] : []),
       ...(command.startsWith('register') ? ['--profile', '--reviewers'] : []), ...(command === 'register' ? ['--repo-root'] : []), ...(command === 'register-source' ? ['--branch'] : []), ...(command === 'migrate' ? ['--version'] : [])];
     while (args.length) {
       const option = args.shift()!;
       if (!allowed.includes(option) || seen.has(option)) throw new Error(`Unknown or repeated option: ${option}. See repo-chap daemon --help.`);
-      seen.add(option); if (option === '--json') continue;
+      seen.add(option); if (option === '--json' || option === '--keep-unknown') continue;
       const value = args.shift(); if (!value || value.startsWith('-')) throw new Error(`${option} requires a value.`); options[option] = value;
     }
     if (!options['--state-dir']) throw new Error('Daemon commands require --state-dir <private-directory>.');
     const directory = resolve(options['--state-dir']);
+    if (['backup', 'diagnose'].includes(command) && !options['--config']) throw new Error(`${command} requires --config <private-installation.json>.`);
+    if (command === 'diagnose') {
+      const result = await diagnoseInstallation(directory, resolve(options['--config']!));
+      if (!result.ok) process.exitCode = 7;
+      process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : [`Diagnostics for ${result.account.username}, UID ${result.account.uid}.`, ...result.checks.map(check => `${check.ok ? 'PASS' : 'FAIL'} ${check.check}: ${check.message}`)].join('\n') + '\n'); return;
+    }
+    if (command === 'backup' || command === 'restore') {
+      const manifest = command === 'backup' ? await backupState(directory, resolve(positional!), (await loadInstallation(resolve(options['--config']!), directory)).limits) : await restoreState(resolve(positional!), directory);
+      const result = { directory: command === 'backup' ? resolve(positional!) : directory, files: manifest.files.length, runtimeSchema: manifest.runtimeSchema, limits: manifest.limits, paused: command === 'restore' };
+      process.stdout.write(json ? `${JSON.stringify({ schemaVersion: 1, ok: true, result }, null, 2)}\n` : command === 'backup'
+        ? `Backup saved to ${result.directory}. ${result.files} durable files verified. Private configuration and credentials require separate recovery.\n`
+        : `Restored to ${result.directory}. Dispatch is paused. Start with private configuration, run daemon reconcile, inspect status and inbox, then use daemon resume-restored.\n`); return;
+    }
     if (command === 'start') {
       if (!options['--config']) throw new Error('Start requires --config <private-installation.json>.');
       const daemon = await startDaemon(directory, resolve(options['--config']));
@@ -72,7 +95,8 @@ export async function daemonCommand(args: string[]): Promise<void> {
     } else if (command === 'pause' || command === 'resume' || command === 'versions' || command === 'resume-auto' || command === 'rollback') {
       if (!options['--repo']) throw new Error(`${command} requires --repo <registered-name-or-id>.`);
       request = command === 'rollback' ? { method: command, repository: options['--repo'], versionId: positional! } : { method: command, repository: options['--repo'] };
-    } else if (command === 'status') request = { method: command };
+    } else if (command === 'status' || command === 'reconcile') request = { method: command };
+    else if (command === 'resume-restored') request = { method: command, keepUnknown: seen.has('--keep-unknown') };
     else request = { method: command as 'inspect' | 'cancel' | 'retry', runId: positional! };
     const response = await requestControl(directory, request);
     if (!response.ok) { process.exitCode = 7; if (json) process.stdout.write(`${JSON.stringify(response, null, 2)}\n`); else process.stderr.write(`${response.error}\n`); return; }
@@ -86,7 +110,8 @@ export async function daemonCommand(args: string[]): Promise<void> {
 }
 export function humanResult(command: string, value: unknown): string {
   const data = value as Record<string, any>;
-  if (command === 'status') return [`Daemon ${data.mode} mode`, `Slack delivery ${data.slackEnabled ? 'enabled' : 'disabled'}. Use daemon inbox for complete handoffs.`, ...(data.githubRetryAt ? [`GitHub retry after ${new Date(data.githubRetryAt).toISOString()}`] : []),
+  if (command === 'reconcile' || command === 'resume-restored') return recoveryLines(data).join('\n') + '\n';
+  if (command === 'status') return [`Daemon ${data.mode} mode`, ...recoveryLines(data.recovery), `Slack delivery ${data.slackEnabled ? 'enabled' : 'disabled'}. Use daemon inbox for complete handoffs.`, ...(data.githubRetryAt ? [`GitHub retry after ${new Date(data.githubRetryAt).toISOString()}`] : []),
     ...(data.slackFailure ? [`${data.slackFailure.reason} Next retry ${new Date(data.slackFailure.retryAt).toISOString()}.`] : []),
     ...(data.slackDeliveries ?? []).filter((item: any) => item.state !== 'confirmed').map((item: any) => `Slack ${item.id}: ${item.state}. ${item.reason}`),
     ...data.repositories.flatMap((repo: any) => repositoryLines(repo)),
@@ -119,4 +144,11 @@ function repositoryLines(repo: any): string[] {
     `Active workflow version ${repo.activeVersionId ?? 'none'}; package ${repo.packageDigest ?? 'none'}`,
     ...(repo.source ? [`Source ${repo.source.resolvedBranch ?? repo.source.branch ?? 'repository default branch'} at ${repo.source.observedRevision ?? 'unknown'}: ${repo.source.status}; automatic activation ${repo.source.held ? 'held, use resume-auto to release' : 'enabled'}`,
       ...repo.source.diagnostics.map((item: any) => `${item.path}: ${item.message}`)] : [])];
+}
+
+function recoveryLines(data: any): string[] {
+  if (!data) return [];
+  return [`Restore dispatch ${data.paused ? 'paused; run daemon reconcile, inspect the outcomes, then resume-restored' : 'enabled'}.`,
+    `Unresolved effects ${data.unknownEffects}; retained historical unknown attempts ${data.historicalUnknownAttempts}. Historical attempts do not grant resend permission.`,
+    ...(data.paused && data.unknownEffects ? ['Use daemon inspect and daemon inbox. Slack outcomes require an explicit receipt or separately authorized resend. --keep-unknown releases unrelated work only.'] : [])];
 }

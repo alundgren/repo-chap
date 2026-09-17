@@ -9,7 +9,7 @@ import { threadResolutionSummary } from './threads.js';
 import type { SlackReceipt } from '@repo-chap/slack/web-api';
 
 const maximum = 20 * 1024 * 1024;
-export type ControlRequest = { method: 'status' } | { method: 'inspect' | 'cancel' | 'retry'; runId: string } |
+export type ControlRequest = { method: 'status' | 'reconcile' } | { method: 'resume-restored'; keepUnknown: boolean } | { method: 'inspect' | 'cancel' | 'retry'; runId: string } |
   { method: 'inbox'; runId?: string } | { method: 'slack-reconcile'; deliveryId: string; resolution: { action: 'delivered'; receipt: SlackReceipt } | { action: 'resend' } } |
   { method: 'pause' | 'resume' | 'versions' | 'resume-auto'; repository: string } | { method: 'register'; name: string; package: WorkflowPackage; profile: string; reviewers: string[] } |
   { method: 'register-source'; name: string; workflowPath: string; branch: string | null; profile: string; reviewers: string[] } |
@@ -19,6 +19,10 @@ export async function handleControl(service: DaemonService, request: ControlRequ
   if (!request || typeof request !== 'object') throw new RuntimeError('Send a valid daemon command.');
   switch (request.method) {
     case 'status': return service.status();
+    case 'reconcile': return service.reconcile();
+    case 'resume-restored':
+      if (typeof request.keepUnknown !== 'boolean') throw new RuntimeError('Restore recovery requires an explicit keep-unknown choice.');
+      return service.store.resumeRestoredState(request.keepUnknown);
     case 'inbox':
       if (request.runId !== undefined && typeof request.runId !== 'string') throw new RuntimeError('Inbox accepts an optional run ID.');
       return service.store.slack.inbox(request.runId);

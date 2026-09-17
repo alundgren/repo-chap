@@ -5,6 +5,9 @@ evaluator, and saves bounded classification and review results. It listens only
 on a Unix socket in its private state directory. Use the CLI on the same machine,
 including through SSH. The desktop does not connect to it.
 
+See [Linux service operations](daemon-operations.md) for systemd installation,
+account diagnostics, coherent backup, paused restore and schema compatibility.
+
 The daemon stops visibly before a repair, check or GitHub effect. A human handoff
 is retained as a complete decision packet in the CLI inbox. Explicit private Slack
 installation settings permit independent message delivery. Without those settings,
