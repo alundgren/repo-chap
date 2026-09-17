@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { loadWorkflow } from '@repo-chap/workflow';
 import { requestControl, startDaemon, type ControlRequest } from '@repo-chap/daemon';
+import { slackInboxCommand, slackInboxHelp } from './slack.js';
 
 export const daemonHelp = `Daemon commands use a private local Unix socket. The daemon runs on Linux. Private apply policies can authorize bounded repair and push.
 
@@ -24,12 +25,15 @@ Cancel fences a run and stops its provider. Retry retains every attempt and budg
 Register-source watches the repository default branch unless --branch is supplied.
 Rollback holds the selected version until resume-auto. It does not migrate existing runs.
 Migrate records a checkpoint, stops active work and retains all receipts and charges.
+Slack delivery also requires private installation settings and notify.send permission.
 Analysis never writes remotely. Apply uses private policy; every mode leaves merge to a human. Exit 7 means a daemon command failed.
+${slackInboxHelp}
 `;
 export async function daemonCommand(args: string[]): Promise<void> {
   const json = args.includes('--json');
   try {
     const command = args.shift();
+    if (command === 'inbox' || command === 'slack-reconcile') { await slackInboxCommand(command, args); return; }
     if (!command || args.includes('--help') || command === '--help') { process.stdout.write(daemonHelp); return; }
     if (!['start', 'register', 'register-source', 'versions', 'rollback', 'resume-auto', 'migrate', 'status', 'inspect', 'pause', 'resume', 'cancel', 'retry'].includes(command)) throw new Error('Unknown daemon command. See repo-chap daemon --help.');
     const requiresValue = ['register', 'register-source', 'rollback', 'migrate', 'inspect', 'cancel', 'retry'].includes(command);
@@ -82,7 +86,9 @@ export async function daemonCommand(args: string[]): Promise<void> {
 }
 export function humanResult(command: string, value: unknown): string {
   const data = value as Record<string, any>;
-  if (command === 'status') return [`Daemon ${data.mode} mode`, ...(data.githubRetryAt ? [`GitHub retry after ${new Date(data.githubRetryAt).toISOString()}`] : []),
+  if (command === 'status') return [`Daemon ${data.mode} mode`, `Slack delivery ${data.slackEnabled ? 'enabled' : 'disabled'}. Use daemon inbox for complete handoffs.`, ...(data.githubRetryAt ? [`GitHub retry after ${new Date(data.githubRetryAt).toISOString()}`] : []),
+    ...(data.slackFailure ? [`${data.slackFailure.reason} Next retry ${new Date(data.slackFailure.retryAt).toISOString()}.`] : []),
+    ...(data.slackDeliveries ?? []).filter((item: any) => item.state !== 'confirmed').map((item: any) => `Slack ${item.id}: ${item.state}. ${item.reason}`),
     ...data.repositories.flatMap((repo: any) => repositoryLines(repo)),
     ...data.runs.map((run: any) => `${run.id} PR #${run.number}: ${run.status}. ${run.reason}${run.dueAt ? ` Next wake ${new Date(run.dueAt).toISOString()}.` : ''}`),
     ...(data.repositories.length ? [] : ['No repositories registered. Use daemon register.'])].join('\n') + '\n';

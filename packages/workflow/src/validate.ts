@@ -116,9 +116,15 @@ export function validateWorkflow(value: unknown, maximumCapabilities: readonly C
   workflow.rules.forEach(rule => checkInputs(rule.action, new Set()));
   checkInputs(workflow.otherwise, new Set());
   if (workflow.slack) {
-    unique(Object.keys(workflow.slack.users), '/slack/users');
+    const users = new Map<string, string>();
+    for (const [login, member] of Object.entries(workflow.slack.users)) {
+      const normalized = login.toLowerCase();
+      if (users.has(normalized) && users.get(normalized) !== member) error('slack_mapping', '/slack/users', `Conflicting Slack member mappings for ${normalized}.`);
+      users.set(normalized, member);
+    }
+    if (workflow.slack.routes.needs_author !== 'author_dm') error('slack_route', '/slack/routes/needs_author', 'Author requests use author_dm with the configured default channel as fallback.');
     if (!Object.hasOwn(workflow.slack.channels, workflow.slack.defaultChannel)) error('slack_route', '/slack/defaultChannel', 'Default channel must name a configured channel.');
-    for (const [outcome, route] of Object.entries(workflow.slack.routes)) if (route !== 'author_dm' && !Object.hasOwn(workflow.slack.channels, route)) error('slack_route', `/slack/routes/${outcome}`, 'Route must name a configured channel or author_dm.');
+    for (const [outcome, route] of Object.entries(workflow.slack.routes)) if (outcome !== 'needs_author' && !Object.hasOwn(workflow.slack.channels, route)) error('slack_route', `/slack/routes/${outcome}`, 'Team, merge and blocked routes must name a configured channel.');
   }
   if (errors.length) throw new WorkflowError(errors);
   return workflow;

@@ -5,10 +5,11 @@ evaluator, and saves bounded classification and review results. It listens only
 on a Unix socket in its private state directory. Use the CLI on the same machine,
 including through SSH. The desktop does not connect to it.
 
-The daemon stops visibly before a repair, check, GitHub effect or Slack action.
-An ordinary team-pr workflow therefore progresses through its waits and analyses,
-then reports that analysis mode stopped before `human.publish_packet`. Inspect
-the saved reports locally. No result is permission to merge.
+The daemon stops visibly before a repair, check or GitHub effect. A human handoff
+is retained as a complete decision packet in the CLI inbox. Explicit private Slack
+installation settings permit independent message delivery. Without those settings,
+analysis and the inbox remain local. No result is permission to merge. See
+[Slack handoffs](slack-handoffs.md) for preview, delivery and reconciliation.
 
 ## Start and register
 
@@ -199,7 +200,9 @@ ownership tokens and workflow provenance do not create a second logical request.
 States are `planned`, `sending`, `confirmed`, `rejected` and `unknown`. Lost
 effect ownership while sending becomes unknown. Reconciliation may confirm or reject it
 with a receipt; it cannot silently return to sending. These storage operations
-do not authorize dispatch, and analysis mode dispatches no external effect handlers. Apply-mode push uses its own durable effect lease.
+do not authorize dispatch. Apply handlers, including configured Slack delivery,
+use durable effect leases independently of provider claims. Explicit Slack resend
+retains the earlier unknown attempt and records operator authorization.
 
 A transactional process-ownership record prevents a second daemon from opening
 the same control socket. After SIGKILL, startup replaces a dead process's record

@@ -8,6 +8,9 @@ export { runLocalApply, inspectLocalApply, type LocalApplyOptions } from './loca
 export { threadResolutionSummary } from './threads.js';
 export { executeAnalysis, fetchSources, executeRepair, fetchRepairSources, profileDigest } from './worker.js';
 export { readWorkflowCommit, fetchWorkflowCommit } from './source.js';
+
+export { readSlackInstallation } from './config.js';
+export { deliverSlack, packetForRun } from './slack.js';
 export { requestControl, serveControl, handleControl, type ControlRequest, type ControlResponse } from './control.js';
 export async function startDaemon(directory: string, config: string): Promise<{ service: DaemonService; stop: () => Promise<void> }> {
   if (process.platform !== 'linux') throw new RuntimeError('The daemon runs on Linux. Run its CLI on the VM, including through SSH.');

@@ -68,7 +68,7 @@ export function replay(pkg: WorkflowPackage, input: ReplayFixture): ReplayResult
         memory.reviewCurrent === true && (control.review?.verdict === 'concerns' || control.review?.verdict === 'blocking') ? 'needs_team' : 'blocked_execution';
     }
     const reason = failureReason ?? (outcome ? `Proposed human handoff: ${outcome}.` : 'Proposed action only; replay runs no code, provider, or remote effect.');
-    result.proposedEffects.push({ actionId, uses: action.uses, capabilities: [...action.capabilities], ...(outcome ? { outcome, destination: workflow.slack?.routes[outcome] ?? 'unconfigured' } : {}), reason });
+    result.proposedEffects.push({ actionId, uses: action.uses, capabilities: [...action.capabilities], ...(outcome ? { outcome, headSha: observation.headSha ?? null, destination: workflow.slack?.routes[outcome] ?? 'unconfigured' } : {}), reason });
     const index = used[actionId] ?? 0;
     const stub = fixture.results?.[actionId]?.[index];
     if (!stub) return stop('needs_result', `Supply fixture.results.${actionId}[${index}] to continue the proposed action.`);

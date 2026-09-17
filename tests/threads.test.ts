@@ -10,7 +10,7 @@ import { GitHubReader, githubThreadTransport, installationPullRequestWriteCreden
   type PushReceipt, type PushRequest, type ThreadResolutionRequest, type ThreadTarget, type ThreadTransport, type Inspection } from '@repo-chap/github';
 import { RuntimeStore, type ApplyPolicy, type RepairAttemptJob } from '@repo-chap/runtime';
 import { captureRepairSource } from '@repo-chap/execution';
-import { DaemonService, executeRepair, handleControl, inspectLocalApply } from '@repo-chap/daemon';
+import { DaemonService, executeRepair, handleControl, inspectLocalApply, packetForRun } from '@repo-chap/daemon';
 import { repairFixture } from './helpers/repair-fixture.ts';
 import { remote } from './helpers/daemon-remote.ts';
 import { git } from './helpers/provider-fixture.ts';
@@ -138,7 +138,8 @@ async function runtimeFixture(mode = 'valid') {
   service = new DaemonService(store, dependencies); const repo = await service.register({ name: policy.repository, package: s.pkg, profile: s.profile.name, reviewers: [] });
   const tick = async () => { await service.tick(); await service.idle(); };
   const push = async () => { await tick(); await tick(); await tick(); assert.equal(store.effects(store.runs()[0]!.id)[0]!.state, 'confirmed'); };
-  return { ...s, directory, repo, policy, jobs, dependencies, tick, push, get store() { return store; }, get service() { return service; }, get sends() { return sends; },
+  const packet = async (id: string) => { const run = store.run(id); return packetForRun(store, run, s.pkg, await store.artifacts.get<Inspection>(run.inspection), Date.now()); };
+  return { ...s, directory, repo, policy, jobs, dependencies, tick, push, packet, get store() { return store; }, get service() { return service; }, get sends() { return sends; },
     uncertain: () => { unknown = true; }, revoke: () => { permitted = false; },
     restart: async () => { await service.stop(); store.close(); store = await RuntimeStore.open(directory); service = new DaemonService(store, dependencies); },
     cleanup: async () => { await service.stop(); store.close(); await s.cleanup(); },
@@ -168,6 +169,10 @@ test('mixed thread outcomes retain one unknown, confirm another, report a new co
     const details = await handleControl(s.service, { method: 'inspect', runId: id }) as any;
     assert.equal(s.sends, 2); assert.deepEqual(details.threadResolution.concerns.map((c: any) => [c.threadId, c.state]), [['THREAD_value', 'unknown'], ['THREAD_second', 'confirmed'], ['THREAD_new', 'skipped']]);
     assert.equal(details.threadResolution.remainingConcerns.length, 2); assert.equal(s.jobs.length, 1);
+    const packet = await s.packet(id);
+    for (const [thread, state] of [['THREAD_value', 'unknown'], ['THREAD_second', 'confirmed'], ['THREAD_new', 'skipped']]) assert.ok(packet.findings.some(value => value.includes(`Thread ${thread}:`) && value.includes(`resolution ${state}`)));
+    assert.ok(packet.uncertainty.some(value => value.includes('2 retained thread concern')));
+    assert.ok(packet.attemptedFixes.some(value => value.includes('Conditional push: confirmed')));
     await s.restart(); await s.tick(); assert.equal(s.sends, 2); assert.equal(s.store.inspect(id).reservations.length, 1);
   } finally { await s.cleanup(); }
 });
@@ -192,7 +197,8 @@ test('declined decisions stay open while the addressed thread resolves and its f
     assert.equal(s.sends, 1); assert.equal(s.inspection.evidence.threads.items[1]!.resolved, false);
     let details = await handleControl(s.service, { method: 'inspect', runId: id }) as any;
     assert.deepEqual(details.threadResolution.concerns.map((c: any) => c.state), ['confirmed', 'skipped']); assert.equal(details.threadResolution.remainingConcerns[0].disposition, 'declined');
-    s.store.pollFinished(s.repo.id, 0, null); await s.tick(); assert.equal(s.jobs.length, 1); assert.equal(s.store.run(id).nextAction, next);
+    s.store.pollFinished(s.repo.id, 0, null); await s.tick(); assert.equal(s.jobs.length, 1); assert.equal(s.store.run(id).nextAction, s.pkg.workflow.actions[next!]!.onSuccess);
+    assert.equal((await s.store.slack.inbox(id)).length, 1);
     details = await handleControl(s.service, { method: 'inspect', runId: id }) as any; assert.equal(details.threadResolution.remainingConcerns.length, 1);
   } finally { await s.cleanup(); }
 });
@@ -204,6 +210,7 @@ test('later reopened and changed concerns are visible beside historical confirme
     await s.service.poll(s.store.repository(s.repo.id));
     const details = await handleControl(s.service, { method: 'inspect', runId: id }) as any;
     assert.equal(details.threadResolution.concerns[0].state, 'stale'); assert.equal(details.threadResolution.concerns[0].remoteResolved, false); assert.equal(details.threadResolution.remainingConcerns.length, 1);
+    assert.match((await s.packet(id)).findings.join(' '), /resolution stale; remote open.*reopened/);
     assert.match(details.threadResolution.concerns[0].reason, /reopened/); assert.equal(details.effects.find((effect: any) => effect.kind === 'github.resolve_eligible_threads').state, 'confirmed'); assert.equal(s.sends, 1);
     s.store.unavailable(id, 'Access unavailable.', Date.now() + 60_000);
     const unavailable = await handleControl(s.service, { method: 'inspect', runId: id }) as any;
@@ -278,6 +285,8 @@ test('later human resolution updates skipped concerns while access loss preserve
     const details = await handleControl(s.service, { method: 'inspect', runId: id }) as any;
     assert.equal(details.threadResolution.remainingConcerns.length, 0); assert.equal(details.threadResolution.concerns[1].disposition, 'declined');
     assert.equal(details.threadResolution.concerns[1].remoteResolved, true); assert.equal(details.threadResolution.concerns[1].state, 'skipped');
+    const packet = await s.packet(id); assert.match(packet.findings.join(' '), /Thread THREAD_declined: declined; resolution skipped; remote resolved/);
+    assert.ok(!packet.uncertainty.some(value => value.includes('retained thread concern(s) still need attention')));
     assert.equal(details.threadResolution.concerns[1].effectId, null); assert.equal(s.sends, 1); assert.equal(s.jobs.length, 1); assert.equal(s.store.inspect(id).reservations.length, 1);
   } finally { await s.cleanup(); }
 });

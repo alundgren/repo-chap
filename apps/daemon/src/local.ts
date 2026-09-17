@@ -35,7 +35,8 @@ export async function runLocalApply(options: LocalApplyOptions, dependencies: Om
       const effects = store.effects(run.id);
       if (options.planOnly && effects.some(effect => effect.state === 'planned') || effects.some(effect => ['sending', 'unknown'].includes(effect.state)) ||
         ['blocked', 'closed', 'cancelled'].includes(run.status)) break;
-      if (run.status === 'waiting' && (run.dueAt ?? Infinity) > service.now() && store.repository(repository.id).nextPollAt > service.now()) break;
+      const slackDue = !options.planOnly && dependencies.slack && store.slack.pending(service.now()).some(delivery => delivery.runId === run.id);
+      if (run.status === 'waiting' && (run.dueAt ?? Infinity) > service.now() && store.repository(repository.id).nextPollAt > service.now() && !slackDue) break;
     }
     const run = store.runs(repository.id).find(value => value.number === options.number);
     if (!run) throw new RuntimeError('Local apply stopped before PR evidence was retained.');

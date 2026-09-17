@@ -204,3 +204,51 @@ capture remains available, and concurrent human changes still invalidate current
 analysis. Cancellation during the final permission reads prevents the write;
 cancellation after a request started preserves its uncertain outcome for
 read-only reconciliation.
+
+## Slack preview and inbox
+
+`slack-preview` shows the destination, current PR/head, requested decision,
+findings, attempted changes, tests and uncertainty. Its HTML output is a standalone
+local preview with the existing warm-paper palette and system fonts. It has no
+external assets. A leading notice says nothing was sent and that actual Slack
+rendering needs pilot verification. The layout follows the decision-packet
+presentation, with one request, readable evidence and GitHub links.
+
+The route appears before the message. Missing author mappings show the configured
+default-channel fallback in both the route and message. Shortened sections carry
+an explicit omission notice and point to the complete local inbox. An expandable
+text fallback presents the accessible message used by Slack. The links and
+disclosure work with the keyboard, and narrow layouts wrap identifiers and links.
+
+Daemon status identifies pending, failed and unknown delivery. `daemon inbox`
+retains the complete request independently of Slack access. Configuration failures
+name the correction before a send, while an unknown delivery states that Slack may
+have accepted it. Storage failures appear in daemon status with the next processing
+retry time. Reconciliation requires
+a matching receipt or an explicit resend command. Resend help explains possible
+duplicates and retained history. It does not restart analysis or repair.
+
+Local apply accepts optional private Slack settings. Its plan mode still performs
+no remote writes and retains the request for inspection. `apply inbox` and
+`apply slack-reconcile` use the same complete content and explicit receipt/resend
+wording as daemon controls, without requiring a running daemon. JSON distinguishes
+a confirmed logical delivery from its retained unknown historical send attempt.
+
+The replay CLI optionally takes complete fictional packets through `--packet`.
+It renders only proposed handoffs with matching heads and outcomes, naming a
+fixture error when context is absent or ambiguous. Text labels the result as a
+local preview and says simulation sent nothing. Its route/message are identical
+to the standalone preview for the same packet and configuration.
+
+A host packet labels retained repair/check revisions and each push, publication
+and thread outcome. Current freshness is separate from historical acceptance.
+A candidate alone does not produce “Ready for human merge.” A direct post-push
+handoff refreshes the PR before displaying its current head. Reopened and stale
+resolved threads remain visible as concerns needing attention. Failed or unknown
+notification attempts keep the complete packet and do not repeat provider work.
+
+A temporary GitHub evidence outage pauses new delivery while keeping the saved
+request and confirmed Slack receipt. When identical evidence returns, the same
+message remains available. If an earlier decision becomes current after a proven
+input change, the inbox reopens that request and Slack reuses its known message.
+Interrupted cleanup remains explicitly unknown until reconciled.

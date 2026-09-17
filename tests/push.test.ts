@@ -305,7 +305,8 @@ test('failed required checks never create a push request', async () => {
   try {
     s.policy.execution!.requiredChecks[0]!.args = ['-e', 'process.exit(1)']; await s.tick(); await s.tick();
     const run = s.store.runs()[0]!; const result = await s.store.readRepair(run.repair!.result);
-    assert.equal(result.status, 'checks_failed'); assert.equal(s.sends, 0); assert.deepEqual(s.store.effects(run.id), []);
+    assert.equal(result.status, 'checks_failed'); assert.equal(s.sends, 0); assert.deepEqual(s.store.effects(run.id).filter(effect => effect.kind === 'github.push_candidate'), []);
+    assert.equal((await s.store.slack.inbox(run.id)).length, 1);
   } finally { await s.cleanup(); }
 });
 test('temporary inspection failure resumes the same validated candidate when identical evidence returns', async () => {

@@ -23,7 +23,7 @@ export interface Workflow {
   requestedCapabilities: Capability[]; labels: string[];
   rules: { id: string; when: Condition; action: string }[];
   otherwise: string; actions: Record<string, Action>; layout?: Record<string, unknown>;
-  slack?: { workspaceId: string; users: Record<string, string>; channels: Record<string, string>; defaultChannel: string; routes: Record<PacketOutcome, string> };
+  slack?: { workspaceId: string; users: Record<string, string>; channels: Record<string, string>; defaultChannel: string; routes: Record<PacketOutcome, string>; mentions?: Partial<Record<PacketOutcome, string[]>> };
 }
 export interface Diagnostic { code: string; path: string; message: string }
 export interface PinnedFile { path: string; text: string; digest: string }
@@ -54,7 +54,7 @@ export interface Decision {
   actionId: string; ruleId: string | null;
   rules: { id: string; selected: boolean; condition: ConditionTrace }[];
 }
-export interface ProposedEffect { actionId: string; uses: string; capabilities: Capability[]; outcome?: PacketOutcome; destination?: string; reason: string }
+export interface ProposedEffect { actionId: string; uses: string; capabilities: Capability[]; outcome?: PacketOutcome; headSha?: string | null; destination?: string; reason: string }
 export interface ReplayResult {
   schemaVersion: 1; packageDigest: string; now: string;
   status: 'waiting' | 'closed' | 'blocked' | 'needs_observation' | 'needs_result';

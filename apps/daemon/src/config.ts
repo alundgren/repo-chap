@@ -16,12 +16,25 @@ async function privateText(path: string): Promise<string> {
     return await file.readFile('utf8');
   } finally { await file.close(); }
 }
+function slackSettings(value: unknown): NonNullable<DaemonDependencies['slack']> {
+  const setting = value as { enabled: true; workspaceId: string; tokenFile: string };
+  if (!setting || typeof setting !== 'object' || Array.isArray(setting) || setting.enabled !== true || typeof setting.workspaceId !== 'string' || !/^T[A-Z0-9]+$/.test(setting.workspaceId) || typeof setting.tokenFile !== 'string' || !isAbsolute(setting.tokenFile) || Object.keys(setting).some(key => !['enabled', 'workspaceId', 'tokenFile'].includes(key))) throw new RuntimeError('Slack installation settings require enabled: true, a workspace ID and an absolute private tokenFile.');
+  return { workspaceId: setting.workspaceId, token: async () => (await privateText(setting.tokenFile)).trim() };
+}
+export async function readSlackInstallation(path: string): Promise<NonNullable<DaemonDependencies['slack']>> {
+  try {
+    const config = JSON.parse(await privateText(path));
+    if (!config || config.schemaVersion !== 1 || Object.keys(config).some(key => !['schemaVersion', 'slack'].includes(key))) throw new RuntimeError('Local Slack settings require schemaVersion 1 and a slack installation object.');
+    return slackSettings(config.slack);
+  } catch (error) { if (error instanceof RuntimeError) throw error; throw new RuntimeError('Cannot read the private Slack installation JSON.'); }
+}
 export async function loadInstallation(path: string, directory: string): Promise<{ dependencies: DaemonDependencies; limits: RuntimeLimits }> {
   try {
-    const config = JSON.parse(await privateText(path)) as { schemaVersion: number; app: { appId: string; installationId: number; privateKeyFile: string }; providerConfig: string; limits?: Partial<RuntimeLimits>; applyPolicies?: string[] };
-    if (config.schemaVersion !== 1 || !config.app || Object.keys(config).some(key => !['schemaVersion', 'app', 'providerConfig', 'limits', 'applyPolicies'].includes(key)) ||
+    const config = JSON.parse(await privateText(path)) as { schemaVersion: number; app: { appId: string; installationId: number; privateKeyFile: string }; providerConfig: string; limits?: Partial<RuntimeLimits>; applyPolicies?: string[]; slack?: { enabled: true; workspaceId: string; tokenFile: string } };
+    if (config.schemaVersion !== 1 || !config.app || Object.keys(config).some(key => !['schemaVersion', 'app', 'providerConfig', 'limits', 'applyPolicies', 'slack'].includes(key)) ||
       Object.keys(config.app).some(key => !['appId', 'installationId', 'privateKeyFile'].includes(key)) || typeof config.app.appId !== 'string' || !isAbsolute(config.providerConfig)) throw new RuntimeError('Unsupported daemon installation configuration.');
     await privateText(config.providerConfig);
+    const slack = config.slack === undefined ? undefined : slackSettings(config.slack);
     const app = { appId: config.app.appId, installationId: config.app.installationId, privateKey: await privateText(config.app.privateKeyFile) }, credentials = installationCredentials(app);
     const policies = new Map<string, string>();
     if (config.applyPolicies !== undefined && (!Array.isArray(config.applyPolicies) || config.applyPolicies.length > 500)) throw new RuntimeError('applyPolicies must list up to 500 private policy files.');
@@ -51,6 +64,7 @@ export async function loadInstallation(path: string, directory: string): Promise
           return installationPublicationCredentials(app, repository, capability);
         },
       } : {}),
+      ...(slack ? { slack } : {}),
     } };
   } catch (error) { if (error instanceof RuntimeError) throw error; throw new RuntimeError('Cannot load private installation settings. Check the JSON, GitHub App key and provider profile paths.'); }
 }

@@ -6,6 +6,8 @@ import { analyzeCommand } from './analyze.js';
 import { workspaceCommand } from './workspace.js';
 import { daemonCommand } from './daemon.js';
 import { applyCommand } from './apply.js';
+import { slackPreviewCommand } from './slack.js';
+import { previewReplayHandoffs, validatePacket, SlackError } from '@repo-chap/slack';
 import { ExecutionError } from '@repo-chap/execution';
 import { readProfile, ProviderConfigurationError } from '@repo-chap/providers';
 
@@ -13,12 +15,13 @@ const help = `repo-chap validates, replays, and inspects repository workflows.
 
 Usage:
   repo-chap validate <workflow.json> [--repo-root <directory>] [--json]
-  repo-chap replay <workflow.json> --fixture <fixture.json> [--repo-root <directory>] [--json]
+  repo-chap replay <workflow.json> --fixture <fixture.json> [--packet <packet-or-packets.json>] [--repo-root <directory>] [--json]
   repo-chap inspect <workflow.json> --repo <owner/name> --pr <number> --capture-dir <private-directory> [--reviewers <login,login>] [--repo-root <directory>] [--json]
   repo-chap analyze <workflow.json> --capture <inspection-directory> --source-repo <local-git-repository> --output-dir <private-directory> --provider-config <private-settings.json> --profile <name> [--resume <decision.json>] [--repo-root <directory>] [--json]
   repo-chap workspace <workflow.json> --capture <inspection-directory> --source-repo <local-git-repository> --output-dir <private-directory> --provider-config <private-settings.json> --profile <name> --execution-policy <policy.json> --action <repair-action-id> [--repo-root <directory>] [--json]
   repo-chap daemon <start|register|status|inspect|pause|resume|cancel|retry> --state-dir <private-directory> [options]
   repo-chap apply <workflow.json|inspect|reconcile> [options] (see apply --help)
+  repo-chap slack-preview <workflow.json> --packet <packet.json> [--repo-root <directory>] [--json | --html]
 
 Replay uses supplied observations, results, control state, and time.
 It never runs providers, commands, or remote effects. Humans merge.
@@ -56,6 +59,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args[0] === 'daemon') { await daemonCommand(args.slice(1)); return; }
   if (args[0] === 'apply') { await applyCommand(args.slice(1)); return; }
+  if (args[0] === 'slack-preview') { await slackPreviewCommand(args.slice(1)); return; }
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) { process.stdout.write(help); return; }
   const json = args.includes('--json');
   let phase = 64;
@@ -71,7 +75,7 @@ async function main(): Promise<void> {
       if (seen.has(option)) throw new Error(`Repeated option: ${option}`);
       seen.add(option);
       if (option === '--json') continue;
-      if (option !== '--repo-root' && option !== '--fixture' && !(command === 'inspect' && ['--repo', '--pr', '--capture-dir', '--reviewers'].includes(option)) && !(command === 'analyze' && ['--capture', '--source-repo', '--output-dir', '--provider-config', '--profile', '--resume'].includes(option)) && !(command === 'workspace' && ['--capture', '--source-repo', '--output-dir', '--provider-config', '--profile', '--execution-policy', '--action'].includes(option))) throw new Error(`Unknown option: ${option}. See --help.`);
+      if (option !== '--repo-root' && option !== '--fixture' && !(command === 'replay' && option === '--packet') && !(command === 'inspect' && ['--repo', '--pr', '--capture-dir', '--reviewers'].includes(option)) && !(command === 'analyze' && ['--capture', '--source-repo', '--output-dir', '--provider-config', '--profile', '--resume'].includes(option)) && !(command === 'workspace' && ['--capture', '--source-repo', '--output-dir', '--provider-config', '--profile', '--execution-policy', '--action'].includes(option))) throw new Error(`Unknown option: ${option}. See --help.`);
       const value = args.shift();
       if (!value || value.startsWith('-')) throw new Error(`${option} requires a value.`);
       if (option === '--repo-root') repositoryRoot = value; else if (option === '--fixture') fixture = value; else inspectOptions[option] = value;
@@ -104,11 +108,14 @@ async function main(): Promise<void> {
     } else {
       phase = 3;
       const result = replay(pkg, parseFixture(parseJson(await readFixtureText(fixture!), fixture!)));
-      process.stdout.write(json ? `${JSON.stringify(result, null, 2)}\n` : humanReplay(result));
+      const packetFile = inspectOptions['--packet'];
+      const input = packetFile ? parseJson(await readFixtureText(packetFile), packetFile) : undefined;
+      const handoffs = input === undefined ? undefined : previewReplayHandoffs(result, (Array.isArray(input) ? input : [input]).map(validatePacket), pkg.workflow.slack);
+      process.stdout.write(json ? `${JSON.stringify({ ...result, ...(handoffs ? { handoffs } : {}) }, null, 2)}\n` : humanReplay(result) + (handoffs?.map(item => `\nLocal Slack preview. Simulation sent nothing.\n${item.preview.route.explanation}\n\n${item.preview.message.text}\n`).join('') ?? ''));
     }
   } catch (error) {
     const diagnostics = error instanceof WorkflowError ? error.diagnostics : [{ code: error instanceof GitHubReadError ? error.failure.code : error instanceof ExecutionError ? 'execution' : error instanceof CaptureError ? 'capture' : phase === 64 ? 'usage' : 'internal', path: '', message: error instanceof Error ? error.message : String(error) }];
-    const exitCode = error instanceof ExecutionError ? 6 : error instanceof ProviderConfigurationError ? 5 : error instanceof WorkflowError || error instanceof GitHubReadError || error instanceof CaptureError || phase === 64 ? phase : 70;
+    const exitCode = error instanceof ExecutionError ? 6 : error instanceof ProviderConfigurationError ? 5 : error instanceof WorkflowError || error instanceof GitHubReadError || error instanceof CaptureError || error instanceof SlackError || phase === 64 ? phase : 70;
     const result = { schemaVersion: 1, valid: false, exitCode, diagnostics };
     if (json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     else process.stderr.write(`${diagnostics.map(d => `${d.code}${d.path ? ` ${d.path}` : ''}: ${d.message}`).join('\n')}\n`);

@@ -6,9 +6,11 @@ import { RuntimeError, summarizePublications } from '@repo-chap/runtime';
 import type { WorkflowPackage } from '@repo-chap/workflow';
 import type { DaemonService } from './service.js';
 import { threadResolutionSummary } from './threads.js';
+import type { SlackReceipt } from '@repo-chap/slack/web-api';
 
 const maximum = 20 * 1024 * 1024;
 export type ControlRequest = { method: 'status' } | { method: 'inspect' | 'cancel' | 'retry'; runId: string } |
+  { method: 'inbox'; runId?: string } | { method: 'slack-reconcile'; deliveryId: string; resolution: { action: 'delivered'; receipt: SlackReceipt } | { action: 'resend' } } |
   { method: 'pause' | 'resume' | 'versions' | 'resume-auto'; repository: string } | { method: 'register'; name: string; package: WorkflowPackage; profile: string; reviewers: string[] } |
   { method: 'register-source'; name: string; workflowPath: string; branch: string | null; profile: string; reviewers: string[] } |
   { method: 'rollback'; repository: string; versionId: string } | { method: 'migrate'; runId: string; versionId: string };
@@ -17,6 +19,12 @@ export async function handleControl(service: DaemonService, request: ControlRequ
   if (!request || typeof request !== 'object') throw new RuntimeError('Send a valid daemon command.');
   switch (request.method) {
     case 'status': return service.status();
+    case 'inbox':
+      if (request.runId !== undefined && typeof request.runId !== 'string') throw new RuntimeError('Inbox accepts an optional run ID.');
+      return service.store.slack.inbox(request.runId);
+    case 'slack-reconcile':
+      if (typeof request.deliveryId !== 'string' || !request.resolution || !['delivered', 'resend'].includes(request.resolution.action)) throw new RuntimeError('Slack reconciliation needs a delivery ID and delivered-with-receipt or resend resolution.');
+      return service.store.slack.reconcile(request.deliveryId, request.resolution, service.now());
     case 'register': return service.register(request);
     case 'register-source': return service.registerSource(request);
     case 'versions': return service.store.versions(request.repository);
@@ -29,7 +37,7 @@ export async function handleControl(service: DaemonService, request: ControlRequ
     case 'inspect': {
       if (typeof request.runId !== 'string') throw new RuntimeError('Inspect requires a run ID.');
       const details = service.store.inspect(request.runId);
-      return { ...details, publications: summarizePublications(details.run, details.effects), threadResolution: await threadResolutionSummary(service.store, request.runId), inspection: await service.store.artifacts.get(details.run.inspection), results: await Promise.all(details.notes.map(async item => {
+      return { ...details, slack: await service.store.slack.inbox(request.runId), publications: summarizePublications(details.run, details.effects), threadResolution: await threadResolutionSummary(service.store, request.runId), inspection: await service.store.artifacts.get(details.run.inspection), results: await Promise.all(details.notes.map(async item => {
         const note = item as { revision: number; artifact: Parameters<typeof service.store.artifacts.get>[0] };
         return { revision: note.revision, result: await service.store.artifacts.get(note.artifact) };
       })) };

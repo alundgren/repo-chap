@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { controlDecision, currentFacts, evaluate, hasCompleteEvidence, WorkflowError, type Capability, type WorkflowPackage, type Observation, type Workflow } from '@repo-chap/workflow';
-import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions, type PushCredentials, type PushTransport, type PullRequestWriteCredentials, type ThreadTransport, type PublicationCapability, type PublicationCredentials, type PublicationRemote } from '@repo-chap/github';
+import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions, type PushCredentials, type PushTransport, type PullRequestWriteCredentials, type ThreadTransport, type PublicationCapability, type PublicationCredentials, type PublicationRemote, type PushReceipt } from '@repo-chap/github';
 import { ExecutionError, validateTestedCandidate, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
 import type { ProviderProfile, SourceBundle } from '@repo-chap/providers';
 import { RuntimeError, RuntimeStore, StaleObservationError, requireApplyPolicy, applyPolicyDigest, type ApplyPolicy, type EffectRecord, type RepairAttemptJob, type RepairAttemptResult, type AnalysisJob, type AnalysisResult, type Claim, type Registration, type RepositoryRecord, type RunRecord, type SourceRegistration } from '@repo-chap/runtime';
@@ -10,6 +10,8 @@ import { dispatchCandidatePush, reconcilePendingPushes } from './push.js';
 import { dispatchThreadResolutions, reconcilePendingThreads } from './threads.js';
 import { dispatchPublication, reconcilePendingPublications } from './publication.js';
 import { fetchWorkflowCommit } from './source.js';
+import { SlackApi, type SlackApiOptions } from '@repo-chap/slack/web-api';
+import { deliverSlack, packetForRun } from './slack.js';
 
 export interface DaemonDependencies {
   credentials: CredentialSource; profile: (name: string) => Promise<ProviderProfile>; directory: string;
@@ -29,6 +31,7 @@ export interface DaemonDependencies {
   planOnly?: boolean;
   onPlannedEffect?: (effect: EffectRecord) => void | Promise<void>;
   execute?: (job: AnalysisJob, profile: ProviderProfile, signal: AbortSignal, isCurrent: () => boolean) => Promise<AnalysisResult>;
+  slack?: Omit<SlackApiOptions, 'rates' | 'now'>;
 }
 export class DaemonService {
   private readonly owner = randomUUID();
@@ -38,8 +41,15 @@ export class DaemonService {
   private stopped = false;
   private readonly shutdown = new AbortController();
   private cycle: Promise<void> | null = null;
+  private slackCycle: Promise<void> | null = null;
+  private readonly slackApi?: SlackApi;
+  private slackFailure: { reason: string; retryAt: number } | null = null;
   readonly now: () => number;
-  constructor(readonly store: RuntimeStore, private readonly dependencies: DaemonDependencies) { this.now = dependencies.now ?? Date.now; }
+  constructor(readonly store: RuntimeStore, private readonly dependencies: DaemonDependencies) {
+    this.now = dependencies.now ?? Date.now;
+    this.store.slack.recover(this.now());
+    if (dependencies.slack) this.slackApi = new SlackApi({ ...dependencies.slack, now: this.now, rates: { read: key => store.slack.rate(key), extend: (key, until) => { store.slack.rate(key, until); } } });
+  }
   private reader(): GitHubReader { return new GitHubReader(this.dependencies.credentials, { ...this.dependencies.readOptions, now: this.now, signal: this.shutdown.signal,
     cooldown: { read: () => this.store.cooldown(), extend: until => { this.store.cooldown(until); } } }); }
   async register(input: Omit<Registration, 'id'>): Promise<RepositoryRecord> {
@@ -108,7 +118,23 @@ export class DaemonService {
         if (repo.nextPollAt <= this.now()) await this.poll(repo);
       }
       this.abortStale(); this.dispatch();
+      this.store.slack.supersedeStale(this.now());
+      if (this.slackApi && !this.dependencies.planOnly && !this.slackCycle && (this.slackFailure?.retryAt ?? 0) <= this.now()) {
+        this.slackCycle = deliverSlack(this.store, this.slackApi, this.now, this.shutdown.signal, run => this.slackPermitted(run), run => !this.dependencies.target || run.number === this.dependencies.target.number && this.store.repository(run.repositoryId).name.toLowerCase() === this.dependencies.target.repository.toLowerCase())
+          .then(() => { this.slackFailure = null; })
+          .catch(() => { this.slackFailure = { reason: 'Slack delivery could not persist its outcome. Inspect private storage and the inbox before reconciling any unknown send.', retryAt: this.now() + this.store.limits.pollSeconds * 1000 }; })
+          .finally(() => { this.slackCycle = null; });
+      }
     } finally { this.polling = false; }
+  }
+  private async slackPermitted(run: RunRecord): Promise<boolean> {
+    const repo = this.store.repository(run.repositoryId), target = this.dependencies.target;
+    if (!this.dependencies.applyPolicy || this.dependencies.planOnly || repo.paused || target && (repo.name.toLowerCase() !== target.repository.toLowerCase() || run.number !== target.number)) return false;
+    try {
+      const policy = requireApplyPolicy(await this.dependencies.applyPolicy(repo.name), repo.name, ['notify.send']);
+      const profile = await this.dependencies.profile(repo.profile), pkg = await this.store.artifacts.get<WorkflowPackage>(run.package);
+      return policy.capabilities.includes('notify.send') && profile.maximumCapabilities.includes('notify.send') && pkg.workflow.requestedCapabilities.includes('notify.send') && (!repo.source || repo.source.maximumCapabilities.includes('notify.send'));
+    } catch { return false; }
   }
   async poll(repo: RepositoryRecord): Promise<void> {
     if (this.store.cooldown() > this.now()) return;
@@ -187,6 +213,35 @@ export class DaemonService {
       park(status, scheduling.reason, scheduling.nextWakeAt ? Math.max(Date.parse(scheduling.nextWakeAt), retryAt(inspection)) : status === 'waiting' ? this.now() + this.store.limits.pollSeconds * 1000 : null);
       return;
     }
+    if (action.uses === 'human.publish_packet') {
+      let packetInspection = inspection;
+      const push = this.store.effects(run.id).findLast(effect => effect.kind === 'github.push_candidate' && effect.state === 'confirmed')?.receipt as PushReceipt | undefined;
+      if (push && push.candidateSha !== run.headSha || run.threadResolution?.completed && Date.parse(inspection.fixture.now) < (run.threadResolution.observedAt ?? 0)) {
+        const repo = this.store.repository(run.repositoryId), reader = this.reader();
+        packetInspection = await inspectPullRequest(reader, pkg, { repository: repo.name, pr: run.number, reviewers: repo.reviewers, previous: inspection });
+        this.store.cooldown(Math.max(reader.nextRequestAt, retryAt(packetInspection)));
+        if (!packetInspection.evidence.pullRequest) { this.store.unavailable(run.id, 'Refresh the post-repair PR evidence before preparing its decision packet.', this.now() + this.store.limits.pollSeconds * 1000); return; }
+        await this.store.observe(repo.id, packetInspection, this.now());
+        if (!this.store.isCurrent(claim, this.now())) {
+          const current = this.store.run(run.id);
+          // Preserve only this human handoff after observing the exact confirmed bot commit.
+          // Analysis authority remains invalidated by observe; concurrent human heads follow normal evaluation.
+          if (push?.candidateSha === current.headSha && current.packageDigest === pkg.digest && current.status === 'ready' && current.nextAction === null) {
+            const continuation = this.store.claim(current.id, this.owner, this.now(), this.store.limits.maxAttemptSeconds);
+            if (continuation) this.store.park(continuation, 'ready', 'Post-push evidence refreshed for the retained human handoff.', this.now(), current.control, actionId, this.now());
+          }
+          return;
+        }
+        run = this.store.run(run.id);
+      }
+      const packet = await packetForRun(this.store, run, pkg, packetInspection, this.now());
+      const request = await this.store.slack.queue(claim, packet, pkg.workflow.slack, this.now());
+      const effect = this.store.effects(run.id).find(value => this.store.slack.deliveries(run.id).some(delivery => delivery.requestId === request.id && delivery.id === value.id));
+      if (effect?.state === 'planned') await this.dependencies.onPlannedEffect?.(effect);
+      run.control.memory = { ...run.control.memory, packetCurrent: true };
+      park('waiting', `Decision packet retained in the CLI inbox. ${this.slackApi ? 'Slack delivery is queued independently.' : 'Slack delivery is disabled in installation settings.'} Request ${request.id}.`, null, action.onSuccess);
+      return;
+    }
     const repairing = ['agent.resolve_conflict', 'agent.address_review'].includes(action.uses);
     const publishing = ['github.publish_review', 'github.set_labels'].includes(action.uses);
     const applying = repairing || publishing || ['checks.validate_candidate', 'github.push_candidate', 'github.resolve_eligible_threads'].includes(action.uses);
@@ -262,9 +317,9 @@ export class DaemonService {
     run = this.store.run(claim.runId);
   }
   abortStale(): void { for (const active of this.active.values()) if (!this.store.isCurrent(active.claim, this.now()) && !this.store.ownsEffect(active.claim.runId, this.owner, this.now())) active.controller.abort('superseded'); }
-  async idle(): Promise<void> { await Promise.all([...this.active.values()].map(value => value.done)); }
+  async idle(): Promise<void> { await Promise.all([...this.active.values()].map(value => value.done)); await this.slackCycle; }
   async stop(): Promise<void> { this.stopped = true; this.shutdown.abort(); for (const active of this.active.values()) active.controller.abort(); await this.cycle; await Promise.all(this.sourceReads.values()); await this.idle(); }
-  status(): unknown { return { schemaVersion: 1, mode: this.dependencies.applyPolicy ? 'apply' : 'analysis', githubRetryAt: this.store.cooldown() || null, limits: this.store.limits, repositories: this.store.repositories(), runs: this.store.runs() }; }
+  status(): unknown { return { schemaVersion: 1, mode: this.dependencies.applyPolicy ? 'apply' : 'analysis', slackEnabled: !!this.slackApi, slackFailure: this.slackFailure, slackDeliveries: this.store.slack.deliveries(), githubRetryAt: this.store.cooldown() || null, limits: this.store.limits, repositories: this.store.repositories(), runs: this.store.runs() }; }
 }
 function waitingWorkflow(workflow: Workflow, run: RunRecord, observation: Observation): Workflow {
   const timing = run.waitTiming;
