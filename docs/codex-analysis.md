@@ -56,23 +56,34 @@ in the supplied team-pr workflow; a review-only workflow can use only
 `workspace.read`. This does not authorize `analyze` to execute other actions. Its action
 execution policy always permits only `workspace.read`.
 
-The adapter probes the executable version, `exec --help`, top-level help, and the
-bundled model catalog. It checks resume help only when an otherwise compatible
-session is supplied. These probes make no model request. Missing structured
-output, headless execution, explicit settings, sandbox, or local model-catalog
-capabilities block the run with a corrective diagnostic. The implementation was
-checked against local Codex CLI 0.154.0 help and bundled catalog. Earlier binaries
-without these capabilities fail explicitly. A listed model is not proof of
-account entitlement or service availability.
+The adapter probes the executable version, `exec --help`, top-level help, the
+bundled model catalog and native app-server support. It checks resume help only
+when an otherwise compatible session is supplied. A model-free app-server
+preflight then reads effective settings and skills and starts an ephemeral thread
+to check instruction sources. These checks send no analysis inputs or model turn.
+Missing structured output, headless execution, explicit settings, sandbox,
+local model-catalog or settings-inspection capabilities block the run with a
+corrective diagnostic. The implementation was checked against local Codex CLI
+0.154.0. Earlier binaries without these capabilities fail explicitly. A listed
+model is not proof of account entitlement or service availability.
 
 Repo Chap sets the model, effort, approval policy `never`, and the read-only or
-workspace-write sandbox explicitly. It uses `--ignore-user-config` to keep
-unrelated user configuration out of the job. Operator credentials remain in the
-supported Codex login store or invocation environment. Repo Chap does not copy,
-print, or store credentials in workflow files. Native Codex profiles, custom
-provider endpoints from user config, and arbitrary config overrides are not
-accepted by this first adapter. Use a separate Repo Chap profile when changing
-the provider account. The local catalog cannot prove that credentials are valid.
+workspace-write sandbox explicitly. Alongside `--ignore-user-config`, transient
+native settings disable project instructions, discovered skills, MCP servers,
+apps, plugins, hooks and memories. Global `AGENTS.md` or custom `instructions` /
+`model_instructions_file` settings that remain effective block before dispatch.
+Use an instruction-free `CODEX_HOME` and log in there through Codex's normal
+login flow. Repo Chap preserves the selected authentication location; it does
+not copy credentials or change the operator's configuration or credential files.
+Workspace repair retains native command and editing tools. Its caller-owned
+working directory is trusted through a transient setting so Codex does not save
+a trust entry to operator configuration. Read analysis keeps its read-only
+sandbox. The same controls apply to fresh and resumed execution.
+
+Native Codex profiles, custom provider endpoints from user config, and arbitrary
+config overrides are not accepted by this adapter. Use a separate Repo Chap
+profile when changing the provider account. The local catalog cannot prove that
+credentials are valid.
 See the official [Codex automation and authentication guide](https://learn.chatgpt.com/docs/non-interactive-mode).
 
 ## Pinned source evidence
@@ -155,7 +166,10 @@ explicit local trial; durable daemon budgets are separate future work.
 
 Session reuse requires identical provider/profile/version settings, working
 directory, action, package, schema, source, evidence, fixture, and missing-evidence
-inputs. `--resume /private/prior/decision.json` supplies recorded IDs; there is no
+inputs. The provider identity also includes the adapter's isolation policy
+version and effective transient settings. Sessions recorded before that policy
+start fresh; a changed discovered skill set also invalidates reuse conservatively.
+`--resume /private/prior/decision.json` supplies recorded IDs; there is no
 implicit most-recent-session selection. Incompatible inputs start fresh. A lost
 session can start fresh within the same remaining deadline and attempt allowance.
 `isCurrent` rejects late output; an AbortSignal with reason `superseded` also stops

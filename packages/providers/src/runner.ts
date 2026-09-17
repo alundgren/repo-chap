@@ -16,7 +16,7 @@ export interface PreparedTransport {
 export interface ProviderTransport {
   provider: ProviderRequest['profile']['provider']; label: string; maxInputBytes: number; resultInstruction: string;
   validSession(id: string): boolean;
-  prepare(request: ProviderRequest, invoke: Invoke): Promise<PreparedTransport | { outcome: Outcome; diagnostic: string; version?: string }>;
+  prepare(request: ProviderRequest, invoke: Invoke, deadline: number): Promise<PreparedTransport | { outcome: Outcome; diagnostic: string; version?: string }>;
   decode(result: ProcessResult): { payload: unknown; session?: string; usage: Usage['actual']; estimatedCostUsd?: number; failed: boolean; invalidOutput?: boolean };
 }
 export const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -67,7 +67,7 @@ export async function runAction(request: ProviderRequest, transport: ProviderTra
   const invoke = (args: string[], maxBytes: number, input?: string) => runProcess(profile.executable, args, {
     cwd, timeoutMs: Math.max(0, deadline - Date.now()), maxBytes, input, signal: request.signal,
   });
-  const prepared = await transport.prepare(request, invoke);
+  const prepared = await transport.prepare(request, invoke, deadline);
   result.providerVersion = prepared.version ?? null;
   if ('outcome' in prepared) return end(prepared.outcome, prepared.diagnostic);
   result.providerDigest = digest(canonicalJson({ provider: transport.provider, version: prepared.version, profile, ...prepared.identity }));

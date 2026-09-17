@@ -5,10 +5,11 @@ const args = process.argv.slice(2);
 fs.appendFileSync(log, JSON.stringify(args) + '\n');
 if (args.includes('--version')) { console.log(provider === 'claude' ? '2.1.236 (Claude Code)' : 'codex-cli 0.154.0'); process.exit(); }
 if (args.includes('--help')) {
-  console.log(provider === 'claude' ? '--print --output-format json --json-schema --model --settings --setting-sources --safe-mode --tools --allowedTools --permission-mode dontAsk --strict-mcp-config --mcp-config --resume\n--effort <level> Effort level (low, medium, high, xhigh, max)' : '--json --output-schema --model --config --sandbox --ignore-user-config --skip-git-repo-check --strict-config --ask-for-approval');
+  console.log(provider === 'claude' ? '--print --output-format json --json-schema --model --settings --setting-sources --safe-mode --tools --allowedTools --permission-mode dontAsk --strict-mcp-config --mcp-config --resume\n--effort <level> Effort level (low, medium, high, xhigh, max)' : '--json --output-schema --model --config --sandbox --ignore-user-config --skip-git-repo-check --strict-config --ask-for-approval --stdio');
   process.exit();
 }
 if (args.includes('--bundled')) { console.log(JSON.stringify({ models: [{ slug: 'fictional-model', default_reasoning_level: 'medium', supported_reasoning_levels: [{ effort: 'medium' }] }] })); process.exit(); }
+if (args.includes('app-server')) { require('./fake-codex-settings.cjs')({ mode }); return; }
 let input = '';
 process.stdin.on('data', bytes => input += bytes);
 process.stdin.on('end', () => {

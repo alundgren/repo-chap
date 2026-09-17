@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, session as electronSession }
 import { basename, dirname, join, resolve } from 'node:path';
 import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { readFixtureText } from '@repo-chap/workflow';
+import { prepareCaptureDirectory } from '@repo-chap/github';
 import { readProfiles } from '@repo-chap/providers';
 import type { ConversationInputAnswer, ProviderProfile } from '@repo-chap/providers';
 import { pathToFileURL } from 'node:url';
@@ -9,6 +10,10 @@ import { AuthoringTools } from './authoring-tools.js';
 import type { AuthoringOperation } from './authoring-protocol.js';
 import { DocumentSession } from './documents.js';
 import { ConversationController } from './conversations.js';
+import { TrialController, trialProfileDigest } from './trials.js';
+import { publicProfile } from './trial-protocol.js';
+import { prepareLiveTrialTool } from './trial-tool.js';
+import type { TrialResult, TrialSelection } from './trial-protocol.js';
 import { captureConversationContext } from './conversation-context.js';
 import type { ConversationContextSelection, ConversationResult } from './conversation-protocol.js';
 import type { DocumentToken, EditorResult, OpenKind, SimulationInputKind, VisualEdit } from './protocol.js';
@@ -16,6 +21,9 @@ import type { DocumentToken, EditorResult, OpenKind, SimulationInputKind, Visual
 let window: BrowserWindow | null = null;
 let documents: DocumentSession | null = null;
 let conversation: ConversationController | null = null;
+let trials: TrialController | null = null;
+let trialLoading: Promise<TrialController> | null = null;
+let sourceRepositories = new Set<string>();
 let conversationDirectory: string | null = null;
 let conversationCleanup = Promise.resolve();
 let profiles: ProviderProfile[] = [];
@@ -31,6 +39,14 @@ if (process.env.REPO_CHAP_DESKTOP_DATA) app.setPath('userData', resolve(process.
 function current(): EditorResult { return { snapshot: documents?.snapshot() ?? null }; }
 function currentConversation(): ConversationResult {
   return { ...current(), conversation: conversation?.snapshot() ?? null, profiles: profiles.map(({ provider, name, model, effort }) => ({ provider, name, model, ...(effort ? { effort } : {}) })) };
+}
+function trialProfiles() { return profiles.map(profile => ({ ...publicProfile(profile), digest: trialProfileDigest(profile) })); }
+function updateProfiles(next: ProviderProfile[]): void {
+  profiles = next; trials?.profilesChanged(next);
+  if (window && !window.isDestroyed()) {
+    window.webContents.send('conversation:profiles-changed', currentConversation().profiles);
+    window.webContents.send('trial:profiles-changed', trialProfiles());
+  }
 }
 function requireDocuments(token: DocumentToken): DocumentSession {
   if (!documents) throw new Error('Open a workflow first.');
@@ -85,7 +101,20 @@ async function startConversation(profile: ProviderProfile): Promise<void> {
   const directory = await mkdtemp(join(parent, 'session-'));
   try {
     conversation = new ConversationController({
-      documentSessionId: documents.sessionId, workingDirectory: directory, profile, tools: () => authoring.tools(source),
+      documentSessionId: documents.sessionId, workingDirectory: directory, profile, tools: document => {
+        const tools = authoring.tools(source), sources = trialSources(source);
+        return [...tools, prepareLiveTrialTool(document, tools[0]!, async (token, input, signal) => {
+          const controller = await trialController();
+          if (signal.aborted) throw new Error('Cancelled before proposal preparation.');
+          if (documents !== source) throw new Error('The workflow was closed. Prepare a proposal for the open workflow.');
+          source.assertCurrent(token);
+          const selectedSource = sources.find(item => item.id === (input.sourceId ?? 'workspace'));
+          if (!selectedSource) throw new Error('Choose a local source ID from the captured trialSetup.');
+          const selection = { repository: input.repository, pr: input.pr, profile: input.profile, sourceRepository: selectedSource.path };
+          controller.prepare(source.snapshot(), selection, trialProfile(selection), 'assistant');
+          return controller.snapshot().proposal!;
+        })];
+      },
       onChange(snapshot) { if (window && !window.isDestroyed() && documents?.sessionId === snapshot.documentSessionId) window.webContents.send('conversation:changed', snapshot); },
     });
     conversationDirectory = directory;
@@ -99,7 +128,7 @@ registerConversation('load-profiles', async () => {
   if (choice.canceled || !choice.filePaths[0]) return { ...currentConversation(), cancelled: true };
   const next = await readProfiles(choice.filePaths[0]);
   if (next.some(profile => Buffer.byteLength(JSON.stringify(profile)) > 8192)) throw new Error('Each conversation profile must fit within 8 KiB.');
-  profiles = next;
+  updateProfiles(next);
 });
 registerConversation('select-profile', async (documentSessionId: string, name: string) => {
   if (!documents || documentSessionId !== documents.sessionId) throw new Error('The open workflow changed. Choose its provider again.');
@@ -110,7 +139,10 @@ registerConversation('select-profile', async (documentSessionId: string, name: s
 });
 registerConversation('send', (token: DocumentToken, prompt: string, selection: ConversationContextSelection) => {
   const source = requireDocuments(token), chat = requireConversation();
-  const captured = captureConversationContext(source.snapshot(), selection);
+  const captured = captureConversationContext(source.snapshot(), selection, trials?.snapshot(), {
+    profiles: currentConversation().profiles,
+    sources: trialSources(source).map(({ id, path }) => ({ id, label: basename(path) })),
+  });
   void chat.send(prompt, captured);
 });
 // Replies and cancellation must remain available during pending or rejected document capture.
@@ -125,7 +157,7 @@ function register(name: string, operation: (...args: any[]) => Promise<void | Ed
   ipcMain.handle(`editor:${name}`, (event, ...args: unknown[]) => {
     if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame?.url !== pageUrl) throw new Error('This editor operation is unavailable.');
     const response = operations.then(async (): Promise<EditorResult> => {
-      try { return await operation(...args) ?? current(); }
+      try { const result = await operation(...args); trials?.documentChanged(); return result ?? current(); }
       catch (error) { return { ...current(), error: error instanceof Error ? error.message : 'The operation failed. Your drafts have been kept.' }; }
     });
     operations = response.then(() => {});
@@ -171,7 +203,8 @@ register('open', async (kind: OpenKind, token: DocumentToken | null, discard: bo
   if (result.canceled || !result.filePaths[0]) return { ...current(), cancelled: true };
   const next = await DocumentSession.open(result.filePaths[0], repositoryRoot);
   await closeConversation();
-  documents = next;
+  await trials?.close();
+  documents = next; trials = null; sourceRepositories = new Set([next.repositoryRoot]);
 });
 register('edit', async (token: DocumentToken, path: string, text: string) => requireDocuments(token).edit(token, path, text));
 register('save', async (token: DocumentToken) => requireDocuments(token).save(token));
@@ -210,8 +243,95 @@ register('close', async (token: DocumentToken | null, discard: boolean) => {
     if (documents.dirty && discard !== true) throw new Error('Save or discard your drafts before closing.');
   }
   await closeConversation();
+  await trials?.close();
   allowClose = true;
   window?.close();
+});
+
+function currentTrial(): TrialResult {
+  return { ...current(), trial: trials?.snapshot() ?? null, profiles: trialProfiles() };
+}
+function trialSources(source: DocumentSession): { id: string; path: string }[] {
+  return [source.repositoryRoot, ...[...sourceRepositories].filter(path => path !== source.repositoryRoot)].map((path, index) => ({ id: index ? `source-${index}` : 'workspace', path }));
+}
+async function trialController(): Promise<TrialController> {
+  if (!documents) throw new Error('Open a workflow first.');
+  if (trials) return trials;
+  if (trialLoading) return trialLoading;
+  const owner = documents;
+  sourceRepositories.add(owner.repositoryRoot);
+  const controller = new TrialController({ directory: join(app.getPath('userData'), 'live-trials'), getDocument: () => owner.snapshot(),
+    onChange(snapshot) { if (window && !window.isDestroyed() && documents?.sessionId === snapshot.documentSessionId) window.webContents.send('trial:changed', snapshot); },
+  });
+  trialLoading = controller.restore().then(() => {
+    if (documents !== owner) throw new Error('The open workflow changed. Load its trial history again.');
+    trials = controller; return controller;
+  }).finally(() => { trialLoading = null; });
+  return trialLoading;
+}
+function requireTrialSession(id: string): TrialController {
+  if (!documents || id !== documents.sessionId || !trials) throw new Error('This trial belongs to a different workflow session.');
+  return trials;
+}
+function trialProfile(selection: TrialSelection): ProviderProfile {
+  const profile = profiles.find(item => item.name === selection?.profile);
+  if (!profile) throw new Error('Load private provider settings and choose a named profile.');
+  if (!sourceRepositories.has(selection.sourceRepository)) throw new Error('Choose the local Git source using the source picker first.');
+  return profile;
+}
+function displayedTrialProfile(selection: TrialSelection, expectedDigest: string): ProviderProfile {
+  const profile = trialProfile(selection);
+  if (expectedDigest !== trialProfileDigest(profile)) throw new Error('Provider settings changed. Review the displayed provider and model, then press Start again.');
+  return profile;
+}
+function registerTrial(name: string, operation: (...args: any[]) => Promise<void | TrialResult> | void | TrialResult, queued = true): void {
+  ipcMain.handle(`trial:${name}`, (event, ...args: unknown[]) => {
+    if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame?.url !== pageUrl) throw new Error('This trial operation is unavailable.');
+    const run = async (): Promise<TrialResult> => {
+      try { return await operation(...args) ?? currentTrial(); }
+      catch (error) { return { ...currentTrial(), error: error instanceof Error ? error.message : 'The trial operation could not finish. Your drafts remain unchanged.' }; }
+    };
+    if (!queued) return run();
+    const response = operations.then(run); operations = response.then(() => {}); return response;
+  });
+}
+registerTrial('current', async () => { if (documents) await trialController(); return currentTrial(); }, false);
+registerTrial('load-profiles', async () => {
+  if (!window) return;
+  const choice = await dialog.showOpenDialog(window, { title: 'Load private Repo Chap provider settings', properties: ['openFile'], filters: [{ name: 'Provider settings JSON', extensions: ['json'] }] });
+  if (choice.canceled || !choice.filePaths[0]) return { ...currentTrial(), cancelled: true };
+  const next = await readProfiles(choice.filePaths[0]);
+  if (next.some(profile => Buffer.byteLength(JSON.stringify(profile)) > 8192)) throw new Error('Each provider profile must fit within 8 KiB.');
+  updateProfiles(next);
+});
+registerTrial('choose-source', async (id: string) => {
+  if (id !== documents?.sessionId || !window) throw new Error('Open the workflow before choosing its local Git source.');
+  const choice = await dialog.showOpenDialog(window, { title: 'Choose local Git objects for the PR', properties: ['openDirectory'], defaultPath: documents.repositoryRoot });
+  if (choice.canceled || !choice.filePaths[0]) return { ...currentTrial(), cancelled: true };
+  const sourceRepository = await realpath(choice.filePaths[0]); sourceRepositories.add(sourceRepository); trials?.invalidate();
+  return { ...currentTrial(), sourceRepository };
+});
+registerTrial('prepare', async (token: DocumentToken, selection: TrialSelection, profileDigest: string) => {
+  const source = requireDocuments(token); const controller = await trialController(); source.assertCurrent(token);
+  controller.prepare(source.snapshot(), selection, displayedTrialProfile(selection, profileDigest));
+});
+registerTrial('start', async (token: DocumentToken, selection: TrialSelection, profileDigest: string) => {
+  const source = requireDocuments(token); const controller = await trialController(); source.assertCurrent(token);
+  controller.start(source.snapshot(), selection, displayedTrialProfile(selection, profileDigest));
+});
+registerTrial('invalidate', (id: string) => requireTrialSession(id).invalidate(), false);
+registerTrial('cancel', async (id: string, trialId: string) => requireTrialSession(id).cancel(trialId), false);
+registerTrial('refresh', async (id: string, trialId: string) => requireTrialSession(id).refresh(trialId), false);
+registerTrial('export-fixture', async (id: string, trialId: string) => {
+  const controller = requireTrialSession(id); const exported = await controller.fixture(trialId);
+  if (!window) return;
+  const choice = await dialog.showOpenDialog(window, { title: 'Choose a private fixture export directory outside Git', defaultPath: app.getPath('userData'), properties: ['openDirectory', 'createDirectory'] });
+  if (choice.canceled || !choice.filePaths[0]) return { ...currentTrial(), cancelled: true };
+  const parent = await prepareCaptureDirectory(choice.filePaths[0]);
+  const directory = await mkdtemp(join(parent, 'fixture-export-'));
+  await writeFile(join(directory, 'fixture.json'), exported.text, { mode: 0o600, flag: 'wx' });
+  await writeFile(join(directory, 'provenance.json'), exported.provenance, { mode: 0o600, flag: 'wx' });
+  return { ...currentTrial(), exportedDirectory: directory };
 });
 
 async function createWindow(): Promise<void> {
@@ -229,8 +349,11 @@ async function createWindow(): Promise<void> {
     event.preventDefault();
     window?.webContents.send('editor:close-requested');
   });
-  window.on('closed', () => { window = null; documents = null; void closeConversation().catch(() => {}); });
-  window.webContents.on('render-process-gone', () => { void closeConversation().catch(() => {}); });
+  window.on('closed', () => {
+    window = null; const owner = documents;
+    void Promise.all([trials?.close(), closeConversation()]).finally(() => { if (documents === owner) { documents = null; trials = null; sourceRepositories.clear(); } }).catch(() => {});
+  });
+  window.webContents.on('render-process-gone', () => { void trials?.close().catch(() => {}); void closeConversation().catch(() => {}); });
   await window.loadFile(pagePath);
 }
 
@@ -256,5 +379,5 @@ void app.whenReady().then(async () => {
   await createWindow();
   if (openingError && window) void dialog.showMessageBox(window, { type: 'error', title: 'Cannot open workflow', message: openingError });
 });
-app.on('window-all-closed', () => { void closeConversation().finally(() => { if (process.platform !== 'darwin') app.quit(); }).catch(() => {}); });
+app.on('window-all-closed', () => { void Promise.all([closeConversation(), trials?.close()]).finally(() => { if (process.platform !== 'darwin') app.quit(); }).catch(() => {}); });
 app.on('activate', () => { if (!window) void createWindow(); });

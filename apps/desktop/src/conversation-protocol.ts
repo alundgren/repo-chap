@@ -58,6 +58,7 @@ export interface ConversationContextSelection {
   ruleId: string | null;
   markdownPaths: string[];
   includeSimulation: boolean;
+  includeLiveTrial?: boolean;
 }
 export interface ConversationResult extends EditorResult {
   conversation: ConversationSnapshot | null;
@@ -72,4 +73,5 @@ export interface ConversationBridge {
   fresh(conversationId: string): Promise<ConversationResult>;
   answer(conversationId: string, turnId: string, requestId: string, answer: ConversationInputAnswer): Promise<ConversationResult>;
   onChange(callback: (snapshot: ConversationSnapshot) => void): () => void;
+  onProfilesChange(callback: (profiles: ConversationProvider[]) => void): () => void;
 }

@@ -35,15 +35,16 @@ export async function setup(mode = 'valid', extra: Partial<ProviderProfile> = {}
     facts: { lifecycle: 'open', draft: false, evidenceComplete: true, conflict: false, unaddressedReview: false, externalReviewPending: false, young: false, headDebouncing: false } }] });
   const inspection: Inspection = { schemaVersion: 1, status: 'complete', packageDigest: pkg.digest, evidenceDigest, evidence, fixture };
   const capture = await saveCapture(join(temporary, 'captures'), inspection);
-  const executable = join(temporary, 'fake-codex'), log = join(temporary, 'argv.jsonl'), marker = join(temporary, 'started'), childPid = join(temporary, 'child.pid');
+  const executable = join(temporary, 'fake-codex'), log = join(temporary, 'argv.jsonl'), settingsLog = join(temporary, 'settings.jsonl'), marker = join(temporary, 'started'), childPid = join(temporary, 'child.pid');
   await writeFile(executable, `#!${process.execPath}
 const fs = require('node:fs');
 const cp = require('node:child_process');
 const args = process.argv.slice(2), mode = ${JSON.stringify(mode)};
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + '\\n');
 if (args.includes('--version')) { console.log('codex-cli 0.154.0'); process.exit(); }
-if (args.includes('--help')) { console.log(mode === 'unsupported' ? '--json' : '--json --output-schema --model --config --sandbox --ignore-user-config --skip-git-repo-check --strict-config --ask-for-approval'); process.exit(); }
+if (args.includes('--help')) { console.log(mode === 'unsupported' ? '--json' : '--json --output-schema --model --config --sandbox --ignore-user-config --skip-git-repo-check --strict-config --ask-for-approval --stdio'); process.exit(); }
 if (args.includes('--bundled')) { console.log(JSON.stringify({models:[{slug:'fictional-model',default_reasoning_level:'medium',supported_reasoning_levels:[{effort:'medium'},{effort:'high'}]}]})); process.exit(); }
+if (args.includes('app-server')) { require(${JSON.stringify(join(root, 'tests/helpers/fake-codex-settings.cjs'))})({ mode, log: ${JSON.stringify(settingsLog)} }); return; }
 let input=''; process.stdin.on('data', bytes=>input+=bytes); process.stdin.on('end', ()=>{
 fs.writeFileSync(${JSON.stringify(marker)}, input.startsWith('Perform agent.review')?'review':'classify');
 if (mode === 'hang' || mode === 'cancel' || mode === 'hang_review' && input.startsWith('Perform agent.review')) {
@@ -58,6 +59,7 @@ const classify=input.startsWith('Perform agent.classify');
 const missing=data.missingEvidence;
 let result=classify?{schemaVersion:1,headSha:data.sources.headSha,labels:[{name:data.allowedLabels.includes('other')?'other':data.allowedLabels[0],reason:'The value changed.',evidence:[{path:'src/value.js',side:'head',startLine:1,endLine:1,explanation:'Updates the exported value.'}]}],uncertain:missing.length>0}:{schemaVersion:1,headSha:data.sources.headSha,baseSha:data.sources.baseSha,summary:'Reviewed the pinned value change.',verdict:missing.length?'inconclusive':'acceptable',coverage:missing.length?'partial':'complete',missingEvidence:missing,findings:[]};
 if(classify && !data.allowedLabels.length)result.labels=[];
+if(mode==='findings' && !classify){result.verdict='concerns';result.findings=[{id:'value-boundary',kind:'reliability',severity:'medium',confidence:0.9,title:'The changed value needs a boundary test',reason:'The fictional change alters the exported value without a matching boundary test.',evidence:[{path:'src/value.js',side:'head',startLine:1,endLine:1,explanation:'The exported value is now two.'}]}];}
 if(mode==='invalid')result={};
 if(mode==='citation' && classify)result.labels[0].evidence[0].endLine=99;
 if(mode==='wrong_side' && classify)result.labels[0].evidence[0].side='absent';
@@ -79,6 +81,6 @@ console.log(JSON.stringify({type:'turn.completed',...(mode==='no_usage'?{}:{usag
     const result = spawnSync(process.execPath, [cli, ...args, ...extra], { encoding: 'utf8', timeout: 30_000 });
     return { ...result, json: result.stdout ? JSON.parse(result.stdout) : null };
   };
-  return { temporary, repository, head, base, pkg, inspection, capture, executable, log, marker, childPid, profile, settings, output, args, run,
+  return { temporary, repository, head, base, pkg, inspection, capture, executable, log, settingsLog, marker, childPid, profile, settings, output, args, run,
     cleanup: () => rm(temporary, { recursive: true, force: true }) };
 }

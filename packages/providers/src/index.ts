@@ -9,3 +9,4 @@ export type { ProviderProfile, ProviderRequest, ProviderResult, SessionIdentity,
 export { runConversationTurn, conversationVersions } from './conversation.js';
 export { conversationLimits } from './conversation-types.js';
 export type { ConversationSessionIdentity, ConversationQuestion, ConversationInputRequest, ConversationInputAnswer, ConversationEvent, ConversationErrorCode, ConversationTool, ConversationTurnRequest, ConversationTurnResult } from './conversation-types.js';
+export { runAnalysis, type AnalysisRecord, type AnalysisOptions } from './analysis.js';

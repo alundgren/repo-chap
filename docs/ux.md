@@ -68,8 +68,7 @@ editing resumes. Schema errors select their referenced source file, including
 references with JSON Pointer fragments.
 
 The app displays plain source for JSON and Markdown. It does not render Markdown
-HTML or follow links. Discuss adds a provider conversation; live trials remain a
-later task view.
+HTML or follow links. Discuss adds a provider conversation; explicit live analysis has its own Live trial view.
 
 ## Desktop process editing and simulation
 
@@ -204,6 +203,57 @@ Each tool operation captures ongoing human input. An incomplete inspector field
 stays focused and visible if capture rejects; accepted earlier fields are kept.
 The conversation controls remain reachable while capture is blocked. A test or
 edit completion never changes the task view or steals the person's selection.
+
+## Desktop live trials
+
+Live trial is a separate task view beside Process, Source, Simulate and Discuss.
+The form shows the current unsaved draft revision, repository/PR, named provider
+and model, local Git source, and required live calls before Start. Prepare proposal
+shows an unstarted proposal without contacting GitHub or a provider. Only Start
+begins classification and review. The call summary says that the selected provider
+may charge usage. Source saving and daemon activation are separate operations.
+Both assistants can populate an unstarted proposal after capturing pending human
+input. The form labels it as prepared only and shows the chosen profile, source
+and draft revision. Preparation failures preserve input and explain the rejection;
+the assistant cannot press Start. Profiles loaded in Discuss are available when
+the prepared proposal appears in Live trial.
+Reloading settings in either view updates both selectors. A same-named provider,
+model or effort change is visible before another Start. Changed or removed
+settings clear the prepared proposal; an outdated Start rejects before calls and
+asks the person to review the refreshed selection. Retained findings keep their
+original provider identity.
+
+If Codex's native settings include unsupported ambient instructions, the retained
+blocked result explains the instruction-free `CODEX_HOME` and normal login needed
+before another run. It says that analysis inputs were not sent. The draft and
+selection stay available; fixing the local setup requires another explicit Start.
+
+The result leads with completion status and the analysis decision. Actual findings
+and missing evidence precede detailed identities. Tested head, target base and
+comparison base have separate labels. Actual token counts and estimates have
+separate wording. A result matches remote evidence only at its visible last-check
+time. Refresh reads GitHub again without calling a model, marks changed evidence
+stale, and marks an unavailable check unknown. There is no background refresh.
+This keeps remote activity explicit while preserving useful retained findings.
+
+Cancel trial stays above task views and works while document input or a picker is
+pending. Editing selected inputs or pending source/inspector text stops active
+work. A rejected inspector field stays visible. Opening or closing first protects
+source drafts, then offers to stop active trial work. Private records survive that
+transition, conversation cleanup and restart. Unfinished records never resume
+implicitly. History names each retained trial and keeps at most ten across
+workspaces.
+
+Save as offline fixture requires an explicit private directory outside Git and
+writes a separate provenance file. Discuss can include the latest finished trial
+with its actual analysis and tested/last-checked identity. Oversized conversation
+context rejects before dispatch; it does not silently shorten trial findings.
+
+The view reuses the approved presentation's warm-paper roles, local Plex fonts,
+form controls and focus treatment. Repository and PR fields share a row on a
+laptop and stack on narrow windows. Findings wrap, identifiers wrap, and retained
+JSON scrolls inside a bounded disclosure. Native selects preserve keyboard
+operation for long profile and history labels.
 
 ## Offline CLI
 
