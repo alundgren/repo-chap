@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { prepareCaptureDirectory, validateTarget, type Inspection } from '@repo-chap/github';
 import { buildPackage, canonicalJson, digest, parseFixture, referencePath, supportedCapabilities, validateActionPayload, type ControlState, type Diagnostic, type WorkflowPackage } from '@repo-chap/workflow';
+import { readArtifact, readRepairResult, validateTestedCandidate, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
+import { applyPolicyDigest, requireApplyPolicy, type ApplyPolicy } from './policy.js';
 import { ArtifactStore, RuntimeError } from './artifacts.js';
-import { defaultLimits, type AnalysisJob, type AnalysisResult, type ArtifactRef, type Claim, type EffectRecord, type EffectRequest, type EffectState, type MigrationRecord, type Registration, type RepositoryRecord, type RunRecord, type RuntimeLimits, type SourceRegistration, type WorkflowVersion } from './types.js';
+import { defaultLimits, type AnalysisJob, type AnalysisResult, type ArtifactRef, type Claim, type EffectRecord, type EffectRequest, type EffectState, type EffectLease, type EffectAttempt, type RepairAttemptJob, type RepairAttemptResult, type MigrationRecord, type Registration, type RepositoryRecord, type RunRecord, type RuntimeLimits, type SourceRegistration, type WorkflowVersion } from './types.js';
 
 const json = (value: unknown): string => canonicalJson(JSON.parse(JSON.stringify(value)));
 const day = (now: number) => new Date(now).toISOString().slice(0, 10);
@@ -24,11 +26,13 @@ export function validateLimits(input: Partial<RuntimeLimits> = {}): RuntimeLimit
 }
 export class RuntimeStore {
   readonly artifacts: ArtifactStore;
+  private readonly repairDirectory: string;
   private constructor(private readonly db: DatabaseSync, directory: string, readonly limits: RuntimeLimits) {
     this.artifacts = new ArtifactStore(join(directory, 'artifacts'));
+    this.repairDirectory = join(directory, 'repairs');
     if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='metadata'").get()) {
       const version = db.prepare("SELECT value FROM metadata WHERE key='schema'").get() as { value: string } | undefined;
-      if (!['1', '2'].includes(version?.value ?? '')) { db.close(); throw new RuntimeError('Unsupported runtime database version.'); }
+      if (!['1', '2', '3'].includes(version?.value ?? '')) { db.close(); throw new RuntimeError('Unsupported runtime database version.'); }
     }
     db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -39,6 +43,8 @@ export class RuntimeStore {
       CREATE TABLE IF NOT EXISTS reservations (attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), repository_id TEXT NOT NULL REFERENCES repositories(id), day TEXT NOT NULL, units INTEGER NOT NULL, runtime_ms INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS notes (run_id TEXT NOT NULL REFERENCES runs(id), revision INTEGER NOT NULL, artifact TEXT NOT NULL, PRIMARY KEY(run_id, revision));
       CREATE TABLE IF NOT EXISTS effects (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), state TEXT NOT NULL, token INTEGER NOT NULL, request TEXT NOT NULL, receipt TEXT);
+      CREATE TABLE IF NOT EXISTS effect_leases (effect_id TEXT PRIMARY KEY REFERENCES effects(id), owner TEXT NOT NULL, token INTEGER NOT NULL, until INTEGER NOT NULL, pid INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS effect_attempts (effect_id TEXT NOT NULL REFERENCES effects(id), token INTEGER NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER, state TEXT NOT NULL, receipt TEXT, PRIMARY KEY(effect_id,token));
       CREATE TABLE IF NOT EXISTS workflow_versions (id TEXT PRIMARY KEY, repository_id TEXT NOT NULL REFERENCES repositories(id), data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS migrations (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS attempt_run ON attempts(run_id, head_sha);
@@ -52,7 +58,11 @@ export class RuntimeStore {
           for (const run of this.runs(repo.id)) { run.workflowVersionId = version.id; run.waitTiming = null; this.saveRun(run); }
         }
       }
-      db.prepare("INSERT INTO metadata VALUES ('schema','2') ON CONFLICT(key) DO UPDATE SET value='2'").run();
+      if (schema && schema.value !== '3') {
+        // An older daemon could have sent a request without a durable effect lease.
+        db.prepare("UPDATE effects SET state='unknown' WHERE state='sending'").run();
+      }
+      db.prepare("INSERT INTO metadata VALUES ('schema','3') ON CONFLICT(key) DO UPDATE SET value='3'").run();
     });
   }
   static async open(directory: string, input: Partial<RuntimeLimits> = {}): Promise<RuntimeStore> {
@@ -222,10 +232,10 @@ export class RuntimeStore {
       // Migration fences workers without changing any effect receipt or semantic identity.
       run.token++; run.owner = null; run.leaseUntil = null;
       this.db.prepare("UPDATE attempts SET state='superseded' WHERE run_id=? AND state='running'").run(run.id);
-      this.db.prepare("UPDATE effects SET state='unknown' WHERE run_id=? AND state='sending'").run(run.id);
+      this.fenceEffects(run.id);
       if (changed) {
         run.control.memory = { ...run.control.memory, classificationCurrent: false, reviewCurrent: false, packetCurrent: false };
-        delete run.control.review; delete run.control.classification;
+        delete run.control.review; delete run.control.classification; run.repair = null;
         for (const [id, evidence] of Object.entries(run.failedActions)) for (const [nextId, action] of Object.entries(next.workflow.actions))
           if (old.workflow.actions[id]?.uses === action.uses) run.failedActions[nextId] = evidence;
         const continuation = run.nextAction;
@@ -280,7 +290,7 @@ export class RuntimeStore {
           this.invalidate(run, 'superseded');
           run.evidenceKey = key; run.headSha = pr.headSha; run.baseSha = pr.baseSha;
           run.control = { ...run.control, memory: { classificationCurrent: false, reviewCurrent: false, packetCurrent: false } };
-          delete run.control.review; delete run.control.classification;
+          delete run.control.review; delete run.control.classification; run.repair = null;
           run.nextAction = null; run.suppression = null; run.steps = 0; run.agents = 0;
           run.failedActions = {}; run.retryAction = null;
           if (run.status !== 'cancelled') { run.status = 'ready'; run.reason = 'Evidence changed.'; run.dueAt = now; }
@@ -291,18 +301,18 @@ export class RuntimeStore {
       return run;
     });
   }
-  private invalidate(run: RunRecord, state: string): void {
+  private invalidate(run: RunRecord, state: string, rejectPlanned = true): void {
     run.token++; run.owner = null; run.leaseUntil = null;
     this.db.prepare("UPDATE attempts SET state=? WHERE run_id=? AND state='running'").run(state, run.id);
-    this.db.prepare("UPDATE effects SET state='rejected' WHERE run_id=? AND state='planned'").run(run.id);
-    this.db.prepare("UPDATE effects SET state='unknown' WHERE run_id=? AND state='sending'").run(run.id);
+    if (rejectPlanned) this.db.prepare("UPDATE effects SET state='rejected' WHERE run_id=? AND state='planned'").run(run.id);
+    this.fenceEffects(run.id);
   }
   unavailable(runId: string, reason: string, dueAt: number): void {
     this.transaction(() => {
-      const run = this.run(runId); this.invalidate(run, 'superseded'); run.evidenceAvailable = false;
+      const run = this.run(runId); this.invalidate(run, 'superseded', false); run.evidenceAvailable = false;
       run.control.memory = { classificationCurrent: false, reviewCurrent: false, packetCurrent: false };
       delete run.control.review; delete run.control.classification;
-      if (!['cancelled', 'closed'].includes(run.status)) { run.status = 'waiting'; run.reason = reason; run.dueAt = dueAt; run.nextAction = null; }
+      if (!['cancelled', 'closed'].includes(run.status)) { run.status = 'waiting'; run.reason = reason; run.dueAt = dueAt; if (!run.repair) run.nextAction = null; }
       this.saveRun(run);
     });
   }
@@ -310,9 +320,15 @@ export class RuntimeStore {
     return this.transaction(() => {
       let count = 0;
       for (const run of this.runs()) if (run.owner && run.leaseUntil! <= now) {
-        this.invalidate(run, 'abandoned'); run.status = 'ready'; run.dueAt = now; run.reason = 'Expired attempt recovered; its reservation remains consumed.'; this.saveRun(run); count++;
+        run.token++; run.owner = null; run.leaseUntil = null;
+        this.db.prepare("UPDATE attempts SET state='abandoned' WHERE run_id=? AND state='running'").run(run.id); run.status = 'ready'; run.dueAt = now; run.reason = 'Expired attempt recovered; its reservation remains consumed.'; this.saveRun(run); count++;
       }
-      this.db.prepare("UPDATE effects SET state='unknown' WHERE state='sending' AND NOT EXISTS (SELECT 1 FROM runs WHERE runs.id=effects.run_id AND json_extract(data,'$.owner') IS NOT NULL)").run();
+      const sending = this.db.prepare("SELECT effects.id, effect_leases.until, effect_leases.pid FROM effects LEFT JOIN effect_leases ON effects.id=effect_leases.effect_id WHERE effects.state='sending'").all();
+      for (const row of sending) {
+        let abandoned = row.until === null || Number(row.until) <= now;
+        if (!abandoned) { try { process.kill(Number(row.pid), 0); } catch (error) { abandoned = (error as NodeJS.ErrnoException).code === 'ESRCH'; } }
+        if (abandoned) this.unknownEffect(String(row.id), now);
+      }
       return count;
     });
   }
@@ -322,7 +338,9 @@ export class RuntimeStore {
     return this.transaction(() => {
       const run = this.run(runId), repo = this.repository(run.repositoryId);
       if (!owner || repo.paused || run.owner || ['cancelled', 'closed'].includes(run.status) || run.dueAt === null || run.dueAt > now) return null;
-      const active = this.runs().filter(value => value.owner && value.leaseUntil! > now);
+      const sending = new Set(this.db.prepare("SELECT DISTINCT effects.run_id FROM effects JOIN effect_leases ON effects.id=effect_id WHERE effects.state='sending' AND effect_leases.until>?").all(now).map(row => String(row.run_id)));
+      if (sending.has(run.id)) return null;
+      const active = this.runs().filter(value => value.owner && value.leaseUntil! > now || sending.has(value.id));
       if (active.length >= this.limits.concurrency || active.filter(value => value.repositoryId === repo.id).length >= this.limits.repositoryConcurrency) return null;
       run.token++; run.owner = owner; run.leaseUntil = now + Math.min(seconds, this.limits.maxAttemptSeconds) * 1000;
       run.status = 'running'; this.saveRun(run);
@@ -348,10 +366,22 @@ export class RuntimeStore {
     return this.transaction(() => { const run = this.requireCurrent(claim, now); if (run.steps >= Math.min(maximum, this.limits.maxImmediateSteps)) return false; run.steps++; this.saveRun(run); return true; });
   }
   reserve(claim: Claim, input: { actionId: string; sources: ArtifactRef; profile: string; profileDigest: string; package: WorkflowPackage }, now: number): AnalysisJob {
+    return this.reserveAttempt(claim, input, now) as AnalysisJob;
+  }
+  reserveRepair(claim: Claim, input: { actionId: string; sources: ExecutionArtifact; profile: string; profileDigest: string; package: WorkflowPackage; applyPolicy: ApplyPolicy }, now: number): RepairAttemptJob {
+    const policy = requireApplyPolicy(input.applyPolicy, this.repository(this.run(claim.runId).repositoryId).name, ['workspace.write', 'checks.run']);
+    if (!policy.execution) throw new RuntimeError('Repair requires a private execution policy with required checks.');
+    return this.reserveAttempt(claim, input, now, policy) as RepairAttemptJob;
+  }
+  private reserveAttempt(claim: Claim, input: { actionId: string; sources: ArtifactRef; profile: string; profileDigest: string; package: WorkflowPackage }, now: number, apply?: ApplyPolicy): AnalysisJob | RepairAttemptJob {
     return this.transaction(() => {
       const run = this.requireCurrent(claim, now), limits = input.package.workflow.limits;
       if (run.packageDigest !== input.package.digest || this.repository(run.repositoryId).paused) throw new RuntimeError('The repository is paused or package is not current.');
-      if (!['agent.classify', 'agent.review'].includes(input.package.workflow.actions[input.actionId]?.uses ?? '')) throw new RuntimeError('Analysis mode cannot reserve this action.');
+      const repair = !!apply, uses = input.package.workflow.actions[input.actionId]?.uses;
+      if (!(repair ? ['agent.resolve_conflict', 'agent.address_review'] : ['agent.classify', 'agent.review']).includes(uses ?? '')) throw new RuntimeError('Cannot reserve this action in the selected execution mode.');
+      if (repair && this.effects(run.id).some(effect => effect.kind === 'github.push_candidate' && ['sending', 'unknown'].includes(effect.state))) throw new RuntimeError('Reconcile the pending remote effect before starting another provider attempt.');
+      const repairs = Number((this.db.prepare("SELECT COUNT(*) AS count FROM attempts WHERE run_id=? AND json_extract(job,'$.kind')='repair'").get(run.id) as { count: number }).count);
+      if (repair && repairs >= Math.min(limits.maxRepairsPerLifecycle, apply!.maxRepairsPerLifecycle)) throw new RuntimeError('Total repair limit reached across all PR heads. A human decision is required.');
       if (run.suppression === run.evidenceKey || run.failedActions?.[input.actionId] === run.evidenceKey) throw new RuntimeError('Unchanged work is suppressed. Use a bounded retry or wait for new evidence.');
       if (this.db.prepare("SELECT id FROM attempts WHERE run_id=? AND state='running'").get(run.id)) throw new RuntimeError('This run already has a reserved attempt.');
       const count = this.db.prepare('SELECT COUNT(*) AS total, SUM(CASE WHEN head_sha=? THEN 1 ELSE 0 END) AS head FROM attempts WHERE run_id=?').get(run.headSha, run.id) as { total: number; head: number };
@@ -362,15 +392,20 @@ export class RuntimeStore {
       if (spent('SELECT SUM(units) AS total FROM reservations WHERE day=?', day(now)) + units > this.limits.dailyCostUnits ||
         spent('SELECT SUM(units) AS total FROM reservations WHERE day=? AND repository_id=?', day(now), run.repositoryId) + units > limits.maxDailyCostUnits) throw new RuntimeError('Daily cost-unit budget exhausted. Wait until the next UTC day; previous reservations remain recorded.');
       const id = randomUUID(), deadline = Math.min(claim.until, now + limits.maxAttemptSeconds * 1000);
-      const job: AnalysisJob = { schemaVersion: 1, runId: run.id, attemptId: id, ownershipToken: claim.token, deadline: new Date(deadline).toISOString(),
+      const job: AnalysisJob | RepairAttemptJob = { schemaVersion: 1, runId: run.id, attemptId: id, ownershipToken: claim.token, deadline: new Date(deadline).toISOString(),
         repositoryId: run.repositoryId, subjectId: run.subjectId, actionId: input.actionId, headSha: run.headSha!, baseSha: run.baseSha!, package: run.package, packageDigest: run.packageDigest,
-        inspection: run.inspection, sources: input.sources, evidenceKey: run.evidenceKey, notesRevision: run.notesRevision, profile: input.profile, profileDigest: input.profileDigest, workflowVersionId: run.workflowVersionId };
+        inspection: run.inspection, sources: input.sources, evidenceKey: run.evidenceKey, notesRevision: run.notesRevision, profile: input.profile, profileDigest: input.profileDigest, workflowVersionId: run.workflowVersionId,
+        ...(apply ? { kind: 'repair' as const, sources: input.sources as ExecutionArtifact, policy: apply.execution!, policyDigest: digest(canonicalJson(apply.execution!)), applyPolicyDigest: applyPolicyDigest(apply) } : {}) };
       this.db.prepare('INSERT INTO attempts VALUES (?,?,?,?,?,?,NULL)').run(id, run.id, job.headSha, claim.token, 'running', json(job));
       this.db.prepare('INSERT INTO reservations VALUES (?,?,?,?,?)').run(id, run.repositoryId, day(now), units, deadline - now);
       run.agents++; run.nextAction = input.actionId; run.control.attemptsThisHead = count.head + 1;
-      const uses = input.package.workflow.actions[input.actionId]!.uses;
+      if (repair) {
+        run.repair = null; run.control.repairsThisLifecycle = repairs + 1;
+        run.control.memory = { ...run.control.memory, packetCurrent: false, repairSuppressed: false };
+      } else {
       run.control.memory = { ...run.control.memory, packetCurrent: false, [uses === 'agent.review' ? 'reviewCurrent' : 'classificationCurrent']: false };
       if (uses === 'agent.review') delete run.control.review; else delete run.control.classification;
+      }
       this.saveRun(run); return job;
     });
   }
@@ -409,6 +444,79 @@ export class RuntimeStore {
       this.saveRun(run); return true;
     });
   }
+  readRepair(reference: ExecutionArtifact) { return readRepairResult(this.repairDirectory, reference); }
+  async failRepair(claim: Claim, job: RepairAttemptJob, reason: string, now: number): Promise<boolean> {
+    const pkg = await this.artifacts.get<WorkflowPackage>(job.package), ref = await this.artifacts.put({ schemaVersion: 1, job, status: 'worker_error', diagnostic: reason });
+    return this.transaction(() => {
+      if (!this.isCurrent(claim, now)) return false;
+      const attempt = this.db.prepare('SELECT state,job FROM attempts WHERE id=? AND run_id=?').get(job.attemptId, claim.runId) as { state: string; job: string } | undefined;
+      if (attempt?.state !== 'running' || attempt.job !== json(job)) return false;
+      const run = this.run(claim.runId);
+      this.db.prepare("UPDATE attempts SET state='worker_error',result=? WHERE id=?").run(json(ref), job.attemptId);
+      run.notesRevision++; this.db.prepare('INSERT INTO notes VALUES (?,?,?)').run(run.id, run.notesRevision, json(ref));
+      run.failedActions[job.actionId] = run.evidenceKey; run.retryAction = job.actionId; run.nextAction = pkg.workflow.actions[job.actionId]!.onFailure;
+      run.reason = reason; run.owner = null; run.leaseUntil = null; run.status = 'ready'; run.dueAt = now; this.saveRun(run); return true;
+    });
+  }
+  async completeRepair(claim: Claim, value: RepairAttemptResult, now: number): Promise<boolean> {
+    const job = value.job, result = await this.readRepair(value.reference);
+    const pkg = await this.artifacts.get<WorkflowPackage>(job.package), inspection = await this.artifacts.get<Inspection>(job.inspection);
+    if (value.schemaVersion !== 1 || job.kind !== 'repair' || json(result) !== json(value.repair) || (result.provider?.attempts.length ?? 0) > 1 ||
+      result.runId !== job.runId || result.attemptId !== job.attemptId || result.ownershipToken !== String(job.ownershipToken) || result.deadline !== job.deadline ||
+      result.repositoryId !== job.repositoryId || result.pullRequestId !== job.subjectId || result.headSha !== job.headSha || result.baseSha !== job.baseSha ||
+      result.packageDigest !== job.packageDigest || pkg.digest !== job.packageDigest || result.policyDigest !== job.policyDigest ||
+      result.profileDigest !== job.profileDigest || result.evidenceDigest !== inspection.evidenceDigest || result.fixtureDigest !== digest(canonicalJson(inspection.fixture)))
+      throw new RuntimeError('Repair result does not satisfy its reserved job and pinned inputs.');
+    if (result.payload) validateActionPayload(pkg, job.actionId, result.payload);
+    if (result.status === 'candidate') {
+      validateTestedCandidate(result, job.policy);
+      for (const check of result.checks) await readArtifact(this.repairDirectory, check.log!);
+      await readArtifact(this.repairDirectory, result.candidate!.bundle);
+    }
+    const ref = await this.artifacts.put(value);
+    return this.transaction(() => {
+      if (!this.isCurrent(claim, now) || job.runId !== claim.runId || job.ownershipToken !== claim.token || Date.parse(job.deadline) <= now) return false;
+      const attempt = this.db.prepare('SELECT job,state FROM attempts WHERE id=?').get(job.attemptId) as { job: string; state: string } | undefined;
+      if (!attempt || attempt.state !== 'running' || attempt.job !== json(job)) return false;
+      const run = this.run(job.runId), action = pkg.workflow.actions[job.actionId]!;
+      this.db.prepare('UPDATE attempts SET state=?,result=? WHERE id=?').run(result.status, json(ref), job.attemptId);
+      run.notesRevision++; this.db.prepare('INSERT INTO notes VALUES (?,?,?)').run(run.id, run.notesRevision, json(ref));
+      run.repair = { job, result: value.reference, candidateSha: result.candidate?.sha ?? null, checksCurrent: false, pushEffectId: null };
+      run.reason = result.diagnostic;
+      if (result.status === 'candidate') {
+        run.nextAction = action.onSuccess; delete run.failedActions[job.actionId]; run.retryAction = null;
+      } else {
+        run.failedActions = { ...run.failedActions, [job.actionId]: run.evidenceKey }; run.retryAction = job.actionId; run.nextAction = action.onFailure;
+        run.control.memory = { ...run.control.memory, repairSuppressed: true };
+        run.control.repairSuppression = { evidenceDigest: inspection.evidenceDigest, reason: result.diagnostic };
+      }
+      run.owner = null; run.leaseUntil = null; run.status = 'ready'; run.dueAt = now; this.saveRun(run); return true;
+    });
+  }
+  markChecks(claim: Claim, candidateSha: string, nextAction: string, now: number): void {
+    this.transaction(() => {
+      const run = this.requireCurrent(claim, now);
+      if (!run.repair || run.repair.candidateSha !== candidateSha || run.repair.job.evidenceKey !== run.evidenceKey) throw new RuntimeError('No current tested candidate is retained.');
+      run.repair.checksCurrent = true; run.nextAction = nextAction; run.status = 'ready'; run.dueAt = now;
+      run.reason = 'Required checks passed on the retained candidate.'; run.owner = null; run.leaseUntil = null; this.saveRun(run);
+    });
+  }
+  bindPush(claim: Claim, id: string, actionId: string, now: number): void {
+    this.transaction(() => {
+      const run = this.requireCurrent(claim, now), effect = this.effects(run.id).find(value => value.id === id);
+      if (!run.repair?.checksCurrent || !effect || effect.kind !== 'github.push_candidate') throw new RuntimeError('Push requires current tested candidate evidence.');
+      run.repair.pushEffectId = id; run.retryAction = actionId; this.saveRun(run);
+    });
+  }
+  pushBudgetCurrent(runId: string, pkg: WorkflowPackage, policy: ApplyPolicy, now: number): boolean {
+    const run = this.run(runId), total = this.db.prepare('SELECT COUNT(*) AS count FROM attempts WHERE run_id=?').get(runId) as { count: number };
+    const repairs = this.db.prepare("SELECT COUNT(*) AS count FROM attempts WHERE run_id=? AND json_extract(job,'$.kind')='repair'").get(runId) as { count: number };
+    const units = (sql: string, ...args: string[]) => Number((this.db.prepare(sql).get(...args) as { total: number }).total ?? 0);
+    return total.count <= this.limits.maxAttemptsPerLifecycle && repairs.count <= Math.min(pkg.workflow.limits.maxRepairsPerLifecycle, policy.maxRepairsPerLifecycle) &&
+      units('SELECT SUM(units) AS total FROM reservations WHERE repository_id=?', run.repositoryId) <= this.limits.repositoryCostUnits &&
+      units('SELECT SUM(units) AS total FROM reservations WHERE day=?', day(now)) <= this.limits.dailyCostUnits &&
+      units('SELECT SUM(units) AS total FROM reservations WHERE day=? AND repository_id=?', day(now), run.repositoryId) <= pkg.workflow.limits.maxDailyCostUnits;
+  }
   pause(repository: string, paused: boolean, now: number): RepositoryRecord {
     return this.transaction(() => { const repo = this.repository(repository); repo.paused = paused; if (!paused) repo.nextPollAt = now; this.saveRepository(repo); return repo; });
   }
@@ -429,6 +537,14 @@ export class RuntimeStore {
     const id = digest(json({ repositoryId: run.repositoryId, runId: run.id, ...request })).slice(7);
     this.db.prepare("INSERT OR IGNORE INTO effects VALUES (?,?, 'planned', ?,?,NULL)").run(id, run.id, token, json(request)); return id;
   }
+  private unknownEffect(id: string, now: number): void {
+    this.db.prepare("UPDATE effects SET state='unknown' WHERE id=? AND state='sending'").run(id);
+    this.db.prepare("UPDATE effect_attempts SET state='unknown',finished_at=? WHERE effect_id=? AND state='sending'").run(now, id);
+    this.db.prepare('DELETE FROM effect_leases WHERE effect_id=?').run(id);
+  }
+  private fenceEffects(runId: string): void {
+    for (const row of this.db.prepare("SELECT id FROM effects WHERE run_id=? AND state='sending'").all(runId)) this.unknownEffect(String(row.id), Date.now());
+  }
   planEffect(claim: Claim, request: EffectRequest, now: number): string { return this.transaction(() => this.insertEffect(this.requireCurrent(claim, now), claim.token, request)); }
   effects(runId: string): EffectRecord[] {
     return this.db.prepare('SELECT * FROM effects WHERE run_id=?').all(runId).map(row => ({ ...JSON.parse(String(row.request)), id: row.id, runId: row.run_id, token: row.token, state: row.state, receipt: row.receipt ? JSON.parse(String(row.receipt)) : null })) as EffectRecord[];
@@ -438,13 +554,80 @@ export class RuntimeStore {
       this.requireCurrent(claim, now);
       const allowed: Record<EffectState, EffectState[]> = { planned: ['sending', 'rejected'], sending: ['confirmed', 'rejected', 'unknown'], unknown: ['confirmed', 'rejected'], confirmed: [], rejected: [] };
       if (!allowed[expected].includes(next) || ['confirmed', 'rejected'].includes(next) && receipt == null) throw new RuntimeError('Invalid effect transition or missing receipt.');
-      return this.db.prepare('UPDATE effects SET state=?,receipt=?,token=? WHERE id=? AND run_id=? AND state=?').run(next, receipt == null ? null : json(receipt), claim.token, id, claim.runId, expected).changes === 1;
+      const changed = this.db.prepare('UPDATE effects SET state=?,receipt=?,token=? WHERE id=? AND run_id=? AND state=?').run(next, receipt == null ? null : json(receipt), claim.token, id, claim.runId, expected).changes === 1;
+      if (changed && next === 'sending') this.saveEffectLease(id, claim.runId, claim.owner, now, claim.until);
+      if (changed && next !== 'sending') {
+        this.db.prepare('UPDATE effect_attempts SET state=?,receipt=?,finished_at=? WHERE effect_id=? AND state IN (\'sending\',\'unknown\')').run(next, receipt == null ? null : json(receipt), now, id);
+        this.db.prepare('DELETE FROM effect_leases WHERE effect_id=?').run(id);
+      }
+      return changed;
     });
   }
-  inspect(runId: string): { run: RunRecord; version: WorkflowVersion; migrations: MigrationRecord[]; attempts: unknown[]; reservations: unknown[]; notes: unknown[]; effects: EffectRecord[] } {
+  private saveEffectLease(id: string, runId: string, owner: string, now: number, until: number): EffectLease {
+    const token = Number((this.db.prepare('SELECT MAX(token) AS token FROM effect_attempts WHERE effect_id=?').get(id) as { token: number | null }).token ?? 0) + 1;
+    this.db.prepare('INSERT INTO effect_leases VALUES (?,?,?,?,?)').run(id, owner, token, until, process.pid);
+    this.db.prepare("INSERT INTO effect_attempts VALUES (?,?,?,NULL,'sending',NULL)").run(id, token, now);
+    return { effectId: id, runId, owner, token, until };
+  }
+  beginEffect(claim: Claim, id: string, maximumAttempts: number, now: number, seconds = 120): EffectLease {
+    return this.transaction(() => {
+      const run = this.requireCurrent(claim, now), effect = this.effects(run.id).find(value => value.id === id);
+      if (!Number.isSafeInteger(maximumAttempts) || maximumAttempts < 1 || maximumAttempts > 100 || !Number.isFinite(seconds) || seconds <= 0 || seconds > 3600 ||
+        this.repository(run.repositoryId).paused || !effect || !(effect.state === 'planned' || effect.state === 'rejected' && (effect.receipt as { retryable?: boolean } | null)?.retryable === true) || effect.evidenceKey !== run.evidenceKey ||
+        this.effects(run.id).some(value => value.id !== id && value.kind === effect.kind && ['sending', 'unknown'].includes(value.state))) throw new RuntimeError('Effect dispatch requires current ownership, inputs and a planned request without an unresolved write.');
+      if (this.effectAttempts(id).length >= Math.min(maximumAttempts, this.limits.maxRetries + 1)) throw new RuntimeError('Remote effect attempt limit reached. Inspect the retained candidate and receipts; a human decision is required.');
+      this.db.prepare("UPDATE effects SET state='sending',receipt=NULL WHERE id=?").run(id);
+      return this.saveEffectLease(id, run.id, claim.owner, now, now + seconds * 1000);
+    });
+  }
+  effectCurrent(lease: EffectLease, now: number): boolean {
+    const row = this.db.prepare('SELECT * FROM effect_leases WHERE effect_id=?').get(lease.effectId), run = this.run(lease.runId);
+    const effect = this.effects(run.id).find(value => value.id === lease.effectId);
+    return !!row && row.owner === lease.owner && row.token === lease.token && Number(row.until) > now && effect?.state === 'sending' &&
+      effect.evidenceKey === run.evidenceKey && !['cancelled', 'closed'].includes(run.status) && !this.repository(run.repositoryId).paused;
+  }
+  ownsEffect(runId: string, owner: string, now: number): boolean {
+    return this.db.prepare('SELECT effect_leases.* FROM effect_leases JOIN effects ON effects.id=effect_id WHERE effects.run_id=? AND effect_leases.owner=?').all(runId, owner)
+      .some(row => this.effectCurrent({ effectId: String(row.effect_id), runId, owner, token: Number(row.token), until: Number(row.until) }, now));
+  }
+  finishEffect(lease: EffectLease, next: 'confirmed' | 'rejected' | 'unknown', receipt: unknown, now: number): boolean {
+    return this.transaction(() => {
+      if (receipt == null) return false;
+      if (!this.effectCurrent(lease, now)) {
+        const row = this.db.prepare('SELECT owner,token FROM effect_leases WHERE effect_id=?').get(lease.effectId);
+        if (row?.owner === lease.owner && row.token === lease.token) this.unknownEffect(lease.effectId, now);
+        return false;
+      }
+      this.db.prepare('UPDATE effects SET state=?,receipt=? WHERE id=?').run(next, json(receipt), lease.effectId);
+      this.db.prepare('UPDATE effect_attempts SET state=?,receipt=?,finished_at=? WHERE effect_id=? AND token=?').run(next, json(receipt), now, lease.effectId, lease.token);
+      this.db.prepare('DELETE FROM effect_leases WHERE effect_id=?').run(lease.effectId); return true;
+    });
+  }
+  reconcileEffect(id: string, next: 'confirmed' | 'rejected' | 'unknown', receipt: unknown, now: number): boolean {
+    return this.transaction(() => {
+      if (receipt == null) throw new RuntimeError('Reconciliation requires an observed receipt.');
+      const changed = this.db.prepare("UPDATE effects SET state=?,receipt=? WHERE id=? AND state='unknown'").run(next, json(receipt), id).changes === 1;
+      if (changed) this.db.prepare("UPDATE effect_attempts SET state=?,receipt=?,finished_at=? WHERE effect_id=? AND state='unknown'").run(next, json(receipt), now, id);
+      return changed;
+    });
+  }
+  effectAttempts(id: string): EffectAttempt[] {
+    return this.db.prepare('SELECT * FROM effect_attempts WHERE effect_id=? ORDER BY token').all(id).map(row => ({ effectId: String(row.effect_id), token: Number(row.token),
+      startedAt: Number(row.started_at), finishedAt: row.finished_at === null ? null : Number(row.finished_at), state: row.state as EffectState, receipt: row.receipt ? JSON.parse(String(row.receipt)) : null }));
+  }
+  wakeAfterEffect(id: string, now: number, dueAt = now): void {
+    this.transaction(() => {
+      const row = this.db.prepare('SELECT run_id FROM effects WHERE id=?').get(id);
+      if (!row) return;
+      const run = this.run(String(row.run_id)), effect = this.effects(run.id).find(value => value.id === id)!;
+      if (run.owner || ['closed', 'cancelled'].includes(run.status) || effect.evidenceKey !== run.evidenceKey) return;
+      run.status = dueAt > now ? 'waiting' : 'ready'; run.dueAt = dueAt; run.reason = 'Remote effect receipt updated. Inspect before continuing.'; this.saveRun(run);
+    });
+  }
+  inspect(runId: string): { run: RunRecord; version: WorkflowVersion; migrations: MigrationRecord[]; attempts: unknown[]; reservations: unknown[]; notes: unknown[]; effects: EffectRecord[]; effectAttempts: EffectAttempt[] } {
     return { run: this.run(runId), attempts: this.db.prepare('SELECT * FROM attempts WHERE run_id=?').all(runId).map(row => ({ ...row, job: JSON.parse(String(row.job)), result: row.result ? JSON.parse(String(row.result)) : null })),
       version: this.version(this.run(runId).repositoryId, this.run(runId).workflowVersionId), migrations: this.db.prepare('SELECT data FROM migrations WHERE run_id=? ORDER BY json_extract(data,\'$.at\')').all(runId).map(row => decode<MigrationRecord>(row)),
       reservations: this.db.prepare('SELECT reservations.* FROM reservations JOIN attempts ON attempts.id=attempt_id WHERE attempts.run_id=?').all(runId),
-      notes: this.db.prepare('SELECT revision,artifact FROM notes WHERE run_id=? ORDER BY revision').all(runId).map(row => ({ revision: row.revision, artifact: JSON.parse(String(row.artifact)) })), effects: this.effects(runId) };
+      notes: this.db.prepare('SELECT revision,artifact FROM notes WHERE run_id=? ORDER BY revision').all(runId).map(row => ({ revision: row.revision, artifact: JSON.parse(String(row.artifact)) })), effects: this.effects(runId), effectAttempts: this.effects(runId).flatMap(effect => this.effectAttempts(effect.id)) };
   }
 }

@@ -198,9 +198,9 @@ test('waiting migration retains receipts, suppression, failure continuation, bac
     const request = { kind: 'notice', destination: 'fictional-team', evidenceKey: claim.evidenceKey, expectedRevision: s.head, payload: await s.store.artifacts.put({ message: 'Please review.' }) };
     const effect = s.store.planEffect(claim, request, s.now); s.store.transitionEffect(claim, effect, 'planned', 'sending', null, s.now);
     s.store.transitionEffect(claim, effect, 'sending', 'confirmed', { remoteId: 'fictional-receipt' }, s.now);
-    const uncertain = s.store.planEffect(claim, { ...request, destination: 'fictional-other' }, s.now); s.store.transitionEffect(claim, uncertain, 'planned', 'sending', null, s.now);
     const failed = completed(job); failed.provider.outcome = 'provider_error'; delete failed.provider.payload;
     await s.store.complete(claim, failed, s.now); const next = s.store.claim(run.id, 'checkpoint-owner', s.now, 300)!;
+    const uncertain = s.store.planEffect(next, { ...request, destination: 'fictional-other' }, s.now); s.store.transitionEffect(next, uncertain, 'planned', 'sending', null, s.now);
     const control = { ...s.store.run(run.id).control, refreshAttempts: 5 };
     s.store.park(next, 'waiting', 'Wait at failure continuation.', s.now + 61_000, control, 'handoff', s.now, true);
     const before = s.store.inspect(run.id), document = structuredClone(s.pkg.workflow); document.settings.reviewDeadlineSeconds *= 2;

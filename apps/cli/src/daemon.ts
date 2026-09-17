@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { loadWorkflow } from '@repo-chap/workflow';
 import { requestControl, startDaemon, type ControlRequest } from '@repo-chap/daemon';
 
-export const daemonHelp = `Daemon commands use a private local Unix socket. The daemon runs analysis on Linux.
+export const daemonHelp = `Daemon commands use a private local Unix socket. The daemon runs on Linux. Private apply policies can authorize bounded repair and push.
 
   repo-chap daemon start --state-dir <private-directory> --config <private-installation.json>
   repo-chap daemon register <workflow.json> --repo <owner/name> --profile <name> --state-dir <directory> [--repo-root <directory>] [--reviewers <login,login>] [--json]
@@ -23,8 +23,8 @@ Pause stops new dispatch for a repository; active analysis can finish.
 Cancel fences a run and stops its provider. Retry retains every attempt and budget charge.
 Register-source watches the repository default branch unless --branch is supplied.
 Rollback holds the selected version until resume-auto. It does not migrate existing runs.
-Migrate records a checkpoint, stops active analysis and retains all receipts and charges.
-Analysis never pushes, publishes, sends messages, or merges. Exit 7 means a daemon command failed.
+Migrate records a checkpoint, stops active work and retains all receipts and charges.
+Analysis never writes remotely. Apply uses private policy; every mode leaves merge to a human. Exit 7 means a daemon command failed.
 `;
 export async function daemonCommand(args: string[]): Promise<void> {
   const json = args.includes('--json');
@@ -49,7 +49,8 @@ export async function daemonCommand(args: string[]): Promise<void> {
     if (command === 'start') {
       if (!options['--config']) throw new Error('Start requires --config <private-installation.json>.');
       const daemon = await startDaemon(directory, resolve(options['--config']));
-      process.stdout.write(json ? `${JSON.stringify({ schemaVersion: 1, status: 'started', mode: 'analysis' })}\n` : 'Daemon started in analysis mode. Use daemon status with the same state directory.\n');
+      const mode = (daemon.service.status() as { mode: string }).mode;
+      process.stdout.write(json ? `${JSON.stringify({ schemaVersion: 1, status: 'started', mode })}\n` : `Daemon started in ${mode} mode. Use daemon status with the same state directory.\n`);
       await new Promise<void>(done => {
         const stop = () => { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); void daemon.stop().then(done, done); };
         process.once('SIGINT', stop); process.once('SIGTERM', stop);
@@ -79,17 +80,20 @@ export async function daemonCommand(args: string[]): Promise<void> {
     if (json) process.stdout.write(`${JSON.stringify({ schemaVersion: 1, ok: false, error: message })}\n`); else process.stderr.write(`${message}\n`);
   }
 }
-function humanResult(command: string, value: unknown): string {
+export function humanResult(command: string, value: unknown): string {
   const data = value as Record<string, any>;
-  if (command === 'status') return ['Daemon analysis mode', ...(data.githubRetryAt ? [`GitHub retry after ${new Date(data.githubRetryAt).toISOString()}`] : []),
+  if (command === 'status') return [`Daemon ${data.mode} mode`, ...(data.githubRetryAt ? [`GitHub retry after ${new Date(data.githubRetryAt).toISOString()}`] : []),
     ...data.repositories.flatMap((repo: any) => repositoryLines(repo)),
     ...data.runs.map((run: any) => `${run.id} PR #${run.number}: ${run.status}. ${run.reason}${run.dueAt ? ` Next wake ${new Date(run.dueAt).toISOString()}.` : ''}`),
     ...(data.repositories.length ? [] : ['No repositories registered. Use daemon register.'])].join('\n') + '\n';
   if (command === 'inspect') return [`Run ${data.run.id}: ${data.run.status}`, data.run.reason, `Head ${data.run.headSha ?? 'unknown'}`, `Package ${data.run.packageDigest}`, `Run workflow version ${data.version.id}; source ${data.version.sourceRevision ?? 'explicit local package'}`,
+    ...(data.run.dueAt ? [`Next wake ${new Date(data.run.dueAt).toISOString()}`] : []),
     `Migration checkpoints ${data.migrations.length}`,
     `Attempts ${data.attempts.length}; reservations ${data.reservations.reduce((sum: number, entry: any) => sum + entry.units, 0)} cost units; operator retries ${data.run.retries}`,
-    ...data.results.map((note: any) => `${note.result.job.actionId}: ${note.result.provider.outcome}. ${note.result.provider.diagnostic}`), 'Use --json for complete evidence, results, and receipts.'].join('\n') + '\n';
-  if (command === 'register') return `Registered ${data.name} in analysis mode. Package ${data.packageDigest}.\n`;
+    ...data.results.map((note: any) => { const result = note.result.repair ?? note.result.provider ?? note.result; return `${note.result.job.actionId}: ${result.status ?? result.outcome}. ${result.diagnostic}`; }),
+    ...(data.run.repair ? [`Candidate ${data.run.repair.candidateSha ?? 'none'}; required checks ${data.run.repair.checksCurrent ? 'validated' : 'not validated'}`] : []),
+    ...data.effects.map((effect: any) => `Effect ${effect.id}: ${effect.state}. ${effect.kind} to ${effect.destination}; expected ${effect.expectedRevision}. ${effect.receipt?.reason ?? 'Planned effect retained locally.'}`), 'Use --json for complete evidence, results, and receipts.'].join('\n') + '\n';
+  if (command === 'register') return `Registered ${data.name}. Private installation policy controls apply permissions. Package ${data.packageDigest}.\n`;
   if (command === 'versions') return [...repositoryLines(data.repository), ...data.versions.map((version: any) =>
     `${version.id}${version.id === data.repository.activeVersionId ? ' ACTIVE' : ''}: source ${version.sourceRevision ?? 'explicit local package'}; package ${version.packageDigest}`),
     ...(data.versions.length ? ['Use rollback <version-id> to select and hold a version; resume-auto permits source activation again.'] : ['No valid package yet. Correct the source files and commit a new source revision.'])].join('\n') + '\n';

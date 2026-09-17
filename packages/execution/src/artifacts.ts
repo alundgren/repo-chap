@@ -22,6 +22,7 @@ export async function putArtifact(directory: string, kind: ArtifactRef['kind'], 
     try { await handle.writeFile(data); await handle.sync(); } finally { await handle.close(); }
     try { await link(temporary, join(root, ref.id)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; await readArtifact(root, ref); }
+    const folder = await open(root, 'r'); try { await folder.sync(); } finally { await folder.close(); }
   } finally { await rm(temporary, { force: true }); }
   return ref;
 }

@@ -5,6 +5,7 @@ import { inspectCommand } from './inspect.js';
 import { analyzeCommand } from './analyze.js';
 import { workspaceCommand } from './workspace.js';
 import { daemonCommand } from './daemon.js';
+import { applyCommand } from './apply.js';
 import { ExecutionError } from '@repo-chap/execution';
 import { readProfile, ProviderConfigurationError } from '@repo-chap/providers';
 
@@ -17,6 +18,7 @@ Usage:
   repo-chap analyze <workflow.json> --capture <inspection-directory> --source-repo <local-git-repository> --output-dir <private-directory> --provider-config <private-settings.json> --profile <name> [--resume <decision.json>] [--repo-root <directory>] [--json]
   repo-chap workspace <workflow.json> --capture <inspection-directory> --source-repo <local-git-repository> --output-dir <private-directory> --provider-config <private-settings.json> --profile <name> --execution-policy <policy.json> --action <repair-action-id> [--repo-root <directory>] [--json]
   repo-chap daemon <start|register|status|inspect|pause|resume|cancel|retry> --state-dir <private-directory> [options]
+  repo-chap apply <workflow.json|inspect|reconcile> [options] (see apply --help)
 
 Replay uses supplied observations, results, control state, and time.
 It never runs providers, commands, or remote effects. Humans merge.
@@ -28,6 +30,7 @@ It saves a private decision and never publishes, pushes, sends messages, or merg
 
 Workspace edits a disposable local checkout, finalizes a candidate, and runs required checks.
 It retains private artifacts and removes the checkout. It performs no remote effects.
+Apply uses local GitHub auth and private policy for bounded repair and push, with durable plans and recovery.
 
 Exit codes: 0 valid or replay completed, 2 invalid workflow/package,
 3 invalid fixture, 4 incomplete inspection/access/capture failure, 5 analysis failure, 6 repair blocked/failed,
@@ -52,6 +55,7 @@ function humanReplay(result: ReplayResult): string {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args[0] === 'daemon') { await daemonCommand(args.slice(1)); return; }
+  if (args[0] === 'apply') { await applyCommand(args.slice(1)); return; }
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) { process.stdout.write(help); return; }
   const json = args.includes('--json');
   let phase = 64;

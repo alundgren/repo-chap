@@ -42,6 +42,7 @@ function validateJob(job: RepairJob, profile: ProviderProfile): void {
 interface RepairOptions {
   sourceRepository: string; artifactDirectory: string; profile: ProviderProfile; signal?: AbortSignal;
   isCurrent?: (job: RepairJob) => boolean | Promise<boolean>;
+  maximumProviderAttempts?: number;
 }
 const unresolvedThreads = (job: RepairJob) => job.inspection.evidence.threads.items.filter(thread => !thread.resolved);
 function verifyThreads(job: RepairJob, payload: Candidate | RepairStop, source: SourceBundle): void {
@@ -113,7 +114,7 @@ export async function runRepair(input: RepairJob, options: RepairOptions): Promi
       allowedPaths: job.policy.allowedPaths, excludedPaths: job.policy.excludedPaths, requiredChecks: job.policy.requiredChecks.map(check => check.id), evidenceRefs,
       instructions: 'Edit only permitted repository files. Read and follow checked-out repository instructions. Do not commit or change HEAD. The host owns staging, final commit creation and required checks. For a candidate proposal set candidateSha to expectedHeadSha and list the actual paths changed relative to that head, including merged base changes. Account for every supplied unresolved thread using only the evidenceRefs listed here. Unknown product intent must return blocked, with the question in its reason. Suggested checks are advisory only. Keep notes in notesMarkdown, never create runtime files in the checkout. Do not access credentials or perform any remote effect.' } };
     const providerDirectory = join(worker, 'provider');
-    result.provider = await runProvider({ package: job.package, actionId: job.actionId, profile: { ...profile, timeoutMs: Math.max(1, Math.min(profile.timeoutMs, deadline - Date.now())) }, mode: 'workspace',
+    result.provider = await runProvider({ package: job.package, actionId: job.actionId, profile: { ...profile, maxAttempts: Math.min(profile.maxAttempts, options.maximumProviderAttempts ?? profile.maxAttempts), timeoutMs: Math.max(1, Math.min(profile.timeoutMs, deadline - Date.now())) }, mode: 'workspace',
       workingDirectory: checkout, artifactDirectory: providerDirectory, sources: source, evidence: providerEvidence, evidenceDigest: digest(canonicalJson(providerEvidence)), fixtureDigest: result.fixtureDigest,
       missingEvidence: source.missingEvidence, signal: controller.signal, isCurrent: options.isCurrent ? () => options.isCurrent!(job) : undefined });
     await current();

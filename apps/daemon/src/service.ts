@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { controlDecision, currentFacts, evaluate, hasCompleteEvidence, WorkflowError, type Capability, type WorkflowPackage, type Observation, type Workflow } from '@repo-chap/workflow';
-import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions } from '@repo-chap/github';
+import { GitHubReader, GitHubReadError, inspectPullRequest, listOpenPullRequests, resolveWorkflowSource, type CredentialSource, type Inspection, type ReadOptions, type PushCredentials, type PushTransport } from '@repo-chap/github';
+import { ExecutionError, validateTestedCandidate, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
 import type { ProviderProfile, SourceBundle } from '@repo-chap/providers';
-import { RuntimeError, RuntimeStore, StaleObservationError, type AnalysisJob, type AnalysisResult, type Claim, type Registration, type RepositoryRecord, type RunRecord, type SourceRegistration } from '@repo-chap/runtime';
-import { executeAnalysis, fetchSources, profileDigest } from './worker.js';
+import { RuntimeError, RuntimeStore, StaleObservationError, requireApplyPolicy, applyPolicyDigest, type ApplyPolicy, type EffectRecord, type RepairAttemptJob, type RepairAttemptResult, type AnalysisJob, type AnalysisResult, type Claim, type Registration, type RepositoryRecord, type RunRecord, type SourceRegistration } from '@repo-chap/runtime';
+import { executeAnalysis, fetchSources, executeRepair, fetchRepairSources, profileDigest } from './worker.js';
+import { dispatchCandidatePush, reconcilePendingPushes } from './push.js';
 import { fetchWorkflowCommit } from './source.js';
 
 export interface DaemonDependencies {
@@ -12,6 +14,14 @@ export interface DaemonDependencies {
   readOptions?: ReadOptions; now?: () => number;
   sources?: (repository: string, inspection: Inspection, signal: AbortSignal) => Promise<SourceBundle>;
   workflowSource?: (repository: string, revision: string, path: string, maximumCapabilities: readonly Capability[], signal: AbortSignal) => Promise<WorkflowPackage>;
+  applyPolicy?: (repository: string) => Promise<ApplyPolicy | null>;
+  pushCredentials?: (repository: string) => Promise<PushCredentials>;
+  repairSources?: (repository: string, inspection: Inspection, signal: AbortSignal) => Promise<ExecutionArtifact>;
+  repair?: (job: RepairAttemptJob, profile: ProviderProfile, signal: AbortSignal, isCurrent: () => boolean) => Promise<RepairAttemptResult>;
+  pushTransport?: (repository: string, checkout: string, signal: AbortSignal) => Promise<PushTransport>;
+  target?: { repository: string; number: number };
+  planOnly?: boolean;
+  onPlannedEffect?: (effect: EffectRecord) => void | Promise<void>;
   execute?: (job: AnalysisJob, profile: ProviderProfile, signal: AbortSignal, isCurrent: () => boolean) => Promise<AnalysisResult>;
 }
 export class DaemonService {
@@ -83,7 +93,9 @@ export class DaemonService {
     this.polling = true;
     try {
       this.store.recover(this.now()); this.abortStale();
+      await reconcilePendingPushes(this.store, this.dependencies, this.now, this.shutdown.signal);
       for (const repo of this.store.repositories().sort((a, b) => a.nextPollAt - b.nextPollAt)) {
+        if (this.dependencies.target && repo.name.toLowerCase() !== this.dependencies.target.repository.toLowerCase()) continue;
         if (this.stopped || this.store.cooldown() > this.now()) break;
         if (repo.nextPollAt <= this.now()) await this.poll(repo);
       }
@@ -100,7 +112,7 @@ export class DaemonService {
       let diagnostic = listing.coverage.status === 'complete' ? null : listing.coverage.failure?.message ?? 'PR listing is incomplete.';
       if (listing.repository && listing.repository.id !== repo.id) throw new RuntimeError('Repository identity changed; registration must be inspected.');
       this.store.cooldown(Math.max(reader.nextRequestAt, Date.parse(listing.coverage.failure?.retryAt ?? '') || 0));
-      const known = this.store.runs(repo.id), ordered = [...new Set([...listing.numbers, ...known.filter(run => run.status !== 'closed').map(run => run.number)])].sort((a, b) => a - b);
+      const known = this.store.runs(repo.id), ordered = this.dependencies.target ? [this.dependencies.target.number] : [...new Set([...listing.numbers, ...known.filter(run => run.status !== 'closed').map(run => run.number)])].sort((a, b) => a - b);
       const after = this.store.repository(repo.id).lastPolledPr ?? 0, numbers = [...ordered.filter(number => number > after), ...ordered.filter(number => number <= after)];
       for (const number of numbers) {
         if (this.stopped || this.store.cooldown() > this.now()) break;
@@ -125,13 +137,15 @@ export class DaemonService {
       this.store.pollFinished(repo.id, Math.max(next(), this.store.cooldown()), diagnostic);
     } catch {
       this.store.cooldown(reader.nextRequestAt);
-      for (const run of this.store.runs(repo.id)) if (run.status !== 'closed') this.store.unavailable(run.id, 'Repository polling failed. Check GitHub App access and retained evidence.', Math.max(next(), this.store.cooldown()));
+      for (const run of this.store.runs(repo.id)) if (run.status !== 'closed' && (!this.dependencies.target || run.number === this.dependencies.target.number)) this.store.unavailable(run.id, 'Repository polling failed. Check GitHub access and retained evidence.', Math.max(next(), this.store.cooldown()));
       this.store.pollFinished(repo.id, Math.max(next(), this.store.cooldown()), 'Repository polling failed. Check GitHub App access and private artifact storage.');
     }
   }
   dispatch(): void {
     if (this.stopped) return;
     for (const run of this.store.runs()) {
+      const target = this.dependencies.target;
+      if (target && (run.number !== target.number || this.store.repository(run.repositoryId).name.toLowerCase() !== target.repository.toLowerCase())) continue;
       if (this.active.has(run.id)) continue;
       const claim = this.store.claim(run.id, this.owner, this.now(), this.store.limits.maxAttemptSeconds);
       if (!claim) continue;
@@ -139,7 +153,7 @@ export class DaemonService {
       const done = this.advance(claim, controller.signal).catch(() => {
         if (this.store.isCurrent(claim, this.now())) {
           const current = this.store.run(run.id);
-          this.store.park(claim, 'blocked', 'Analysis could not prepare or persist its inputs. Inspect private storage and retry within the retained limits.', null, current.control, current.nextAction, this.now(), true);
+          this.store.park(claim, 'blocked', 'Work could not prepare or persist its inputs. Inspect private policy, storage and retained artifacts, then retry within the existing limits.', null, current.control, current.nextAction, this.now(), true);
         }
       }).finally(() => { this.active.delete(run.id); });
       this.active.set(run.id, { controller, done, claim });
@@ -165,12 +179,49 @@ export class DaemonService {
       park(status, scheduling.reason, scheduling.nextWakeAt ? Math.max(Date.parse(scheduling.nextWakeAt), retryAt(inspection)) : status === 'waiting' ? this.now() + this.store.limits.pollSeconds * 1000 : null);
       return;
     }
-    if (!['agent.classify', 'agent.review'].includes(action.uses)) { park('blocked', `Analysis mode stopped before ${action.uses}. Review retained analysis locally.`, null, actionId, true); return; }
+    const repairing = ['agent.resolve_conflict', 'agent.address_review'].includes(action.uses);
+    const applying = repairing || ['checks.validate_candidate', 'github.push_candidate'].includes(action.uses);
+    if (!['agent.classify', 'agent.review'].includes(action.uses) && !(applying && this.dependencies.applyPolicy)) { park('blocked', `Analysis mode stopped before ${action.uses}. Review retained analysis locally.`, null, actionId, true); return; }
     const facts = currentFacts(workflow, observation, clock);
     if (!hasCompleteEvidence(facts) || facts.lifecycle !== 'open' || facts.draft !== false || facts.young !== false || facts.headDebouncing !== false) {
       park('waiting', 'Analysis requires complete evidence and an open, non-draft PR after its delays.', Math.max(this.now() + this.store.limits.pollSeconds * 1000, retryAt(inspection))); return;
     }
-    const profile = await this.dependencies.profile(this.store.repository(run.repositoryId).profile);
+    const repo = this.store.repository(run.repositoryId), profile = await this.dependencies.profile(repo.profile);
+    if (!action.capabilities.every(cap => profile.maximumCapabilities.includes(cap) && pkg.workflow.requestedCapabilities.includes(cap))) { park('blocked', 'Current operator capabilities do not permit this action.', null, actionId); return; }
+    if (action.uses === 'github.push_candidate') {
+      try { await dispatchCandidatePush(this.store, claim, actionId, pkg, this.dependencies, () => this.reader(), this.now, signal); }
+      catch (error) { if (this.store.isCurrent(claim, this.now())) park('blocked', error instanceof RuntimeError ? error.message : 'Push validation failed. Inspect the retained candidate, checks and policy.', null, actionId); }
+      return;
+    }
+    if (applying) {
+      try {
+        const policy = requireApplyPolicy(await this.dependencies.applyPolicy!(repo.name), repo.name, repairing ? ['workspace.write', 'checks.run'] : ['checks.run']);
+        if (!policy.execution) throw new RuntimeError('Repair and checks require a private execution policy.');
+        if (action.uses === 'checks.validate_candidate') {
+          if (!run.repair || run.repair.job.evidenceKey !== run.evidenceKey || run.repair.job.applyPolicyDigest !== applyPolicyDigest(policy) || run.repair.job.profileDigest !== profileDigest(profile)) throw new RuntimeError('No tested candidate matches the current policy, profile and PR evidence.');
+          const result = await this.store.readRepair(run.repair.result); validateTestedCandidate(result, policy.execution);
+          this.store.markChecks(claim, result.candidate!.sha, action.onSuccess, this.now()); return;
+        }
+        if (this.store.cooldown() > this.now()) { park('waiting', 'GitHub reads are waiting for the installation cooldown.', this.store.cooldown(), actionId); return; }
+        const repairSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, claim.until - this.now()))]);
+        const source = await (this.dependencies.repairSources?.(repo.name, inspection, repairSignal) ?? fetchRepairSources(join(this.dependencies.directory, 'git-cache'), repo.name, inspection, this.dependencies.credentials, join(this.dependencies.directory, 'repairs'), repairSignal));
+        const currentPolicy = requireApplyPolicy(await this.dependencies.applyPolicy!(repo.name), repo.name, ['workspace.write', 'checks.run']);
+        if (applyPolicyDigest(currentPolicy) !== applyPolicyDigest(policy)) throw new RuntimeError('Apply policy changed while repair inputs were prepared.');
+        const job = this.store.reserveRepair(claim, { actionId, sources: source, profile: profile.name, profileDigest: profileDigest(profile), package: pkg, applyPolicy: policy }, this.now());
+        const isCurrent = () => this.store.isCurrent(claim, this.now());
+        try {
+          const result = await (this.dependencies.repair?.(job, profile, repairSignal, isCurrent) ?? executeRepair(job, { artifacts: this.store.artifacts, profile, artifactDirectory: join(this.dependencies.directory, 'repairs'), workerDirectory: join(this.dependencies.directory, 'workers'), signal: repairSignal, isCurrent }));
+          await this.store.completeRepair(claim, result, this.now());
+        } catch { await this.store.failRepair(claim, job, 'Repair could not retain a valid result. Inspect its attempt and private storage; any retry keeps the consumed reservation.', this.now()); }
+      } catch (error) {
+        if (this.store.isCurrent(claim, this.now())) {
+          const reason = error instanceof RuntimeError || error instanceof ExecutionError ? error.message : 'Cannot prepare repair with the current private policy. Check private settings and storage.';
+          if (reason.startsWith('Daily cost-unit')) { const date = new Date(this.now()); date.setUTCHours(24, 0, 0, 0); park('waiting', reason, date.getTime(), actionId); }
+          else park('blocked', reason, null, actionId);
+        }
+      }
+      return;
+    }
     if (this.store.cooldown() > this.now()) { park('waiting', 'GitHub reads are waiting for the installation cooldown.', this.store.cooldown(), actionId); return; }
     const sourceSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, claim.until - this.now()))]);
     const sources = await (this.dependencies.sources?.(this.store.repository(run.repositoryId).name, inspection, sourceSignal) ?? fetchSources(join(this.dependencies.directory, 'git-cache'), this.store.repository(run.repositoryId).name, inspection, this.dependencies.credentials, sourceSignal));
@@ -191,10 +242,10 @@ export class DaemonService {
     await this.store.complete(claim, result, this.now());
     run = this.store.run(claim.runId);
   }
-  abortStale(): void { for (const active of this.active.values()) if (!this.store.isCurrent(active.claim, this.now())) active.controller.abort('superseded'); }
+  abortStale(): void { for (const active of this.active.values()) if (!this.store.isCurrent(active.claim, this.now()) && !this.store.ownsEffect(active.claim.runId, this.owner, this.now())) active.controller.abort('superseded'); }
   async idle(): Promise<void> { await Promise.all([...this.active.values()].map(value => value.done)); }
   async stop(): Promise<void> { this.stopped = true; this.shutdown.abort(); for (const active of this.active.values()) active.controller.abort(); await this.cycle; await Promise.all(this.sourceReads.values()); await this.idle(); }
-  status(): unknown { return { schemaVersion: 1, mode: 'analysis', githubRetryAt: this.store.cooldown() || null, limits: this.store.limits, repositories: this.store.repositories(), runs: this.store.runs() }; }
+  status(): unknown { return { schemaVersion: 1, mode: this.dependencies.applyPolicy ? 'apply' : 'analysis', githubRetryAt: this.store.cooldown() || null, limits: this.store.limits, repositories: this.store.repositories(), runs: this.store.runs() }; }
 }
 function waitingWorkflow(workflow: Workflow, run: RunRecord, observation: Observation): Workflow {
   const timing = run.waitTiming;

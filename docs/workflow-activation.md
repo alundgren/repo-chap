@@ -98,14 +98,14 @@ It does not clear suppression or grant another uncharged attempt.
 Effect records keep their semantic IDs, payloads and receipts. A sending effect
 becomes `unknown` at the interruption checkpoint and still requires reconciliation.
 Confirmed effects stay confirmed. Planning the same payload, evidence and destination
-after a prompt change finds the same record. This daemon adds no remote effect
-handlers; later handlers must still validate current inputs before sending a
-planned effect and must not resend an unknown one.
+after a prompt change finds the same record. Effect handlers validate current inputs before sending a planned effect and
+must reconcile an unknown outcome before another write. Conditional push uses
+the independent effect leases described in [conditional repair and push](conditional-push.md).
 
 Provider profile selection and reviewer logins remain operator-controlled inputs.
 The separate repair execution policy is unchanged; source activation does not
-change its digest or grant command permissions. Repair scheduling remains outside
-this daemon's analysis mode.
+change its digest or grant command permissions. Repair scheduling requires an explicit private apply policy. Analysis mode
+continues to stop before repair.
 
 ## Local trials and storage
 
@@ -115,7 +115,7 @@ before execution and captures bind to that exact package digest. A proposed loca
 trial does not activate the daemon or require the source branch to be merged.
 Workflow source, PR head/base and private capture revisions remain distinct.
 
-Runtime database schema 2 upgrades schema-1 explicit registrations in one
+Runtime database schema 2 introduced upgrades for schema-1 explicit registrations in one
 transaction. Each receives a retained local-package version, and each existing
 run receives its version ID. Existing jobs, ownership, attempts, reservations,
 notes and effect receipts remain unchanged. The old schema-1 daemon cannot open
@@ -130,3 +130,6 @@ executables. They cover source validation, exact commit reads, local trials,
 activation during analysis, cancellation/fencing, rollback across reopen,
 waiting migration, effect identity and retained budgets. Actual GitHub App access,
 provider accounts and macOS local operation remain human pilot checks.
+
+Current runtime schema 3 also retains these version and migration records. It adds
+independent effect leases and send-attempt receipts. See [the upgrade behavior](conditional-push.md).
