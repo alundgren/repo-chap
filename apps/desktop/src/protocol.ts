@@ -1,4 +1,5 @@
-import type { Diagnostic, ReplayResult, Workflow } from '@repo-chap/workflow';
+import type { Diagnostic, ReplayComparison, ReplayResult, Workflow } from '@repo-chap/workflow';
+import type { AuthoringOperation, AuthoringReceipt } from './authoring-protocol.js';
 import type { ReplayHandoffPreview } from '@repo-chap/slack';
 
 export interface DocumentToken { sessionId: string; revision: number }
@@ -8,10 +9,12 @@ export interface SourceDocument {
   dirty: boolean;
   external: boolean;
   error: string | null;
+  kind?: 'fixture';
 }
 export interface EditorDiagnostic extends Diagnostic { file: string }
 export type VisualEdit =
   | { kind: 'moveRule'; ruleId: string; toIndex: number }
+  | { kind: 'ruleAction'; ruleId: string; actionId: string }
   | { kind: 'action'; actionId: string; field: 'onSuccess' | 'onFailure' | 'prompt'; value: string }
   | { kind: 'context'; actionId: string; value: string[] }
   | { kind: 'setting'; field: 'newPrDelaySeconds' | 'headDebounceSeconds' | 'reviewWaitSeconds' | 'reviewDeadlineSeconds'; value: number };
@@ -26,6 +29,8 @@ export interface SimulationRecord {
   result: ReplayResult;
   handoffs: ReplayHandoffPreview[];
   previewError: string | null;
+  fixturePath?: string;
+  comparison?: ReplayComparison;
 }
 export interface DocumentSnapshot extends DocumentToken {
   repositoryRoot: string;
@@ -40,11 +45,14 @@ export interface DocumentSnapshot extends DocumentToken {
   simulationInputs: Record<SimulationInputKind, SimulationInput | null>;
   simulation: SimulationRecord | null;
   simulationCurrent: boolean;
+  undoCount: number;
+  authoringReceipts: AuthoringReceipt[];
 }
 export interface EditorResult {
   snapshot: DocumentSnapshot | null;
   error?: string;
   cancelled?: boolean;
+  authoringOperationId?: string;
 }
 export type OpenKind = 'repository' | 'workflow';
 export interface EditorBridge {
@@ -65,4 +73,12 @@ export interface EditorBridge {
   checkExternal(): Promise<EditorResult>;
   close(token: DocumentToken | null, discard: boolean): Promise<EditorResult>;
   onCloseRequested(callback: () => void): () => void;
+  author(operation: AuthoringOperation): Promise<EditorResult>;
+  openTestFixture(token: DocumentToken): Promise<EditorResult>;
+  undo(token: DocumentToken): Promise<EditorResult>;
+  onAuthoringRequest(callback: (requestId: string) => void): () => void;
+  applyAuthoringRequest(requestId: string, token: DocumentToken): Promise<EditorResult>;
+  rejectAuthoringRequest(requestId: string, pending: { field: string; value: string }[]): Promise<void>;
+  confirmAuthoringOperation(operationId: string): Promise<void>;
+  confirmAuthoringDisplay(requestId: string): Promise<void>;
 }

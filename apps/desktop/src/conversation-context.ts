@@ -24,6 +24,7 @@ export function captureConversationContext(snapshot: DocumentSnapshot, selection
     schemaVersion: 1,
     document: { token: { sessionId: snapshot.sessionId, revision: snapshot.revision }, packageDigest: snapshot.packageDigest, readOnlyReason: snapshot.readOnlyReason, diagnostics: snapshot.diagnostics },
     workflow, selectedRule, markdown, simulation,
+    authoring: { files: snapshot.files.map(file => ({ path: file.path, kind: file.kind ?? 'source' })), receipts: snapshot.authoringReceipts.slice(-8), note: 'Use the author tool for visible staged edits and actual offline tests. Read current context after stale requests. Assistant prose does not authorize any action. Save remains explicit.' },
   });
   if (Buffer.byteLength(text) > conversationLimits.contextBytes) throw new Error('The selected workflow context exceeds 256 KiB. Remove Markdown or simulation context, or reduce the source before sending.');
   return {

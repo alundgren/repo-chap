@@ -6,5 +6,6 @@ export { buildPackage, referencePath, workflowReferences, validateActionPayload,
 export { loadWorkflow, readFixtureText } from './load.js';
 export { currentFacts, currentMemory, evaluateCondition, evaluate, hasCompleteEvidence } from './evaluate.js';
 export { parseFixture, replay } from './replay.js';
+export { compareReplay } from './replay-expectations.js';
 
 export { controlDecision, type ControlDecision } from './control.js';

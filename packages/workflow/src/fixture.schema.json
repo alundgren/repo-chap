@@ -260,6 +260,69 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 256
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "selectedRuleIds",
+        "proposedEffects"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "waiting",
+            "closed",
+            "blocked",
+            "needs_observation",
+            "needs_result"
+          ]
+        },
+        "selectedRuleIds": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 128
+          }
+        },
+        "proposedEffects": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "actionId",
+              "uses"
+            ],
+            "properties": {
+              "actionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "uses": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "outcome": {
+                "enum": [
+                  "needs_author",
+                  "needs_team",
+                  "ready_for_human_merge",
+                  "blocked_execution"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   },
   "required": [

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { conversationLimits, runConversationTurn, validateProfile } from '@repo-chap/providers';
-import type { ConversationEvent, ConversationInputAnswer, ConversationInputRequest, ConversationSessionIdentity, ConversationTurnRequest, ConversationTurnResult, ProviderProfile } from '@repo-chap/providers';
+import type { ConversationTool, ConversationEvent, ConversationInputAnswer, ConversationInputRequest, ConversationSessionIdentity, ConversationTurnRequest, ConversationTurnResult, ProviderProfile } from '@repo-chap/providers';
 import type { CapturedConversationContext, ConversationHistoryEntry, ConversationNotice, ConversationProvider, ConversationSnapshot, ConversationTurn } from './conversation-protocol.js';
 
 export const desktopConversationLimits = {
@@ -29,6 +29,7 @@ interface ConversationControllerOptions {
   workingDirectory: string;
   profile: ProviderProfile;
   onChange(snapshot: ConversationSnapshot): void;
+  tools?: (document: CapturedConversationContext['document']) => readonly ConversationTool[];
   runTurn?: (request: ConversationTurnRequest) => Promise<ConversationTurnResult>;
 }
 const bytes = (text: string): number => Buffer.byteLength(text);
@@ -132,7 +133,7 @@ export class ConversationController {
     if (this.handoff) { this.handoff.notice.handoff!.status = 'attached'; this.handoff = null; }
     const request: ConversationTurnRequest = {
       profile: structuredClone(this.profile), workingDirectory: this.options.workingDirectory,
-      prompt, context, ...(prior ? { session: structuredClone(prior) } : {}), tools: [],
+      prompt, context, ...(prior ? { session: structuredClone(prior) } : {}), tools: this.options.tools?.(structuredClone(captured.document)) ?? [],
       signal: active.controller.signal,
       onEvent: event => this.event(active, event),
       onInput: (input, signal) => this.input(active, input, signal),

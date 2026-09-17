@@ -1,18 +1,20 @@
 import { randomUUID } from 'node:crypto';
-import { access, open, realpath, rename, rm, stat } from 'node:fs/promises';
+import { access, link, lstat, open, realpath, rename, rm, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   actionRegistry, buildPackage, limits, loadWorkflow, parseJson, readFixtureText,
-  referencePath, WorkflowError, parseFixture, replay, digest,
+  referencePath, WorkflowError, parseFixture, replay, digest, compareReplay,
 } from '@repo-chap/workflow';
 import { previewReplayHandoffs } from '@repo-chap/slack';
 import type { DecisionPacket } from '@repo-chap/slack';
 import type { WorkflowPackage } from '@repo-chap/workflow';
+import type { AuthoringContext, AuthoringOperation, AuthoringReceipt, AuthoringResponse } from './authoring-protocol.js';
+import { parseAuthoringOperation } from './authoring-contract.ts';
 import { editWorkflow, semanticChanges } from './authoring.ts';
 import type { DocumentSnapshot, DocumentToken, EditorDiagnostic, SimulationInput, SimulationInputKind, SimulationRecord, SourceDocument, VisualEdit } from './protocol.js';
 
 interface DiskSource { target: string; text: string; mode: number }
-interface BufferSource extends SourceDocument { saved: DiskSource | null }
+interface BufferSource extends SourceDocument { saved: DiskSource | null; created?: boolean }
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const within = (root: string, path: string): boolean => {
   const part = relative(root, path);
@@ -36,6 +38,8 @@ export class DocumentSession {
   private savedTexts: Record<string, string> = Object.create(null);
   private inputs: Record<SimulationInputKind, (SimulationInput & { loadedText: string }) | null> = { fixture: null, packets: null };
   private simulation: SimulationRecord | null = null;
+  private undoGroups: { path: string; source: BufferSource | null }[][] = [];
+  private receipts = new Map<string, AuthoringResponse>();
   readonly repositoryRoot: string;
   readonly workflowPath: string;
 
@@ -117,7 +121,7 @@ export class DocumentSession {
     if (!references) return;
     const needed = new Set([this.workflowPath, ...references]);
     // Keep removed references until their drafts have been saved or explicitly discarded.
-    for (const [path, file] of this.files) if (!needed.has(path) && !file.dirty) this.files.delete(path);
+    for (const [path, file] of this.files) if (!needed.has(path) && !file.dirty && file.kind !== 'fixture') this.files.delete(path);
     for (const path of references) await this.add(path);
   }
 
@@ -145,7 +149,7 @@ export class DocumentSession {
 
   snapshot(): DocumentSnapshot {
     const texts: Record<string, string> = Object.create(null);
-    for (const [path, file] of this.files) if (file.saved) texts[path] = file.text;
+    for (const [path, file] of this.files) if (file.saved && file.kind !== 'fixture') texts[path] = file.text;
     let diagnostics: EditorDiagnostic[] = [];
     let packageDigest: string | null = null;
     let workflow: DocumentSnapshot['workflow'] = null;
@@ -153,6 +157,13 @@ export class DocumentSession {
     catch (error) {
       const items = error instanceof WorkflowError ? error.diagnostics : [{ code: 'validation', path: this.workflowPath, message: message(error) }];
       diagnostics = items.map(item => ({ ...item, file: this.diagnosticFile(item.path) }));
+    }
+    for (const file of this.files.values()) if (file.kind === 'fixture') {
+      try { parseFixture(parseJson(file.text, file.path)); }
+      catch (error) {
+        const errors = error instanceof WorkflowError ? error.diagnostics : [{ code: 'fixture', path: file.path, message: message(error) }];
+        diagnostics.push(...errors.map(item => ({ ...item, file: file.path })));
+      }
     }
     const needed = new Set([this.workflowPath, ...this.references() ?? []]);
     for (const file of this.files.values()) if (file.error && needed.has(file.path)) {
@@ -165,10 +176,11 @@ export class DocumentSession {
     return {
       sessionId: this.sessionId, revision: this.revision, repositoryRoot: this.repositoryRoot,
       workflowPath: this.workflowPath, readOnlyReason: this.readOnlyReason, diagnostics, packageDigest,
-      files: [...this.files.values()].map(({ saved: _saved, ...file }) => ({ ...file })),
+      files: [...this.files.values()].map(({ saved: _saved, created: _created, ...file }) => ({ ...file })),
       workflow, semanticChanges: changes, semanticError, simulationInputs, simulation: structuredClone(this.simulation),
+      undoCount: this.undoGroups.length, authoringReceipts: [...this.receipts.values()].map(value => structuredClone(value.receipt)),
       simulationCurrent: !!this.simulation && this.simulation.packageDigest === packageDigest &&
-        this.simulation.fixtureDigest === this.inputDigest('fixture') && this.simulation.packetsDigest === this.inputDigest('packets'),
+        this.simulation.fixtureDigest === (this.simulation.fixturePath ? this.fixtureDigest(this.simulation.fixturePath) : this.inputDigest('fixture')) && this.simulation.packetsDigest === this.inputDigest('packets'),
     };
   }
 
@@ -177,7 +189,7 @@ export class DocumentSession {
     if (this.readOnlyReason) throw new Error(this.readOnlyReason);
     const snapshot = this.snapshot();
     if (!snapshot.packageDigest || snapshot.diagnostics.length) throw new Error('Fix the workflow validation errors before simulation or export. Your drafts are still here.');
-    return buildPackage(this.workflowPath, Object.fromEntries([...this.files].filter(([, file]) => file.saved).map(([path, file]) => [path, file.text])));
+    return buildPackage(this.workflowPath, Object.fromEntries([...this.files].filter(([, file]) => file.saved && file.kind !== 'fixture').map(([path, file]) => [path, file.text])));
   }
 
   async visualEdit(token: DocumentToken, edit: VisualEdit): Promise<void> {
@@ -187,7 +199,11 @@ export class DocumentSession {
 
   async reset(token: DocumentToken): Promise<void> {
     this.assertCurrent(token);
-    for (const file of this.files.values()) if (file.saved) { file.text = file.saved.text; file.dirty = false; }
+    for (const file of this.files.values()) {
+      if (file.created) this.files.delete(file.path);
+      else if (file.saved) { file.text = file.saved.text; file.dirty = false; }
+    }
+    this.undoGroups = [];
     this.revision++;
     await this.refreshReferences();
   }
@@ -249,21 +265,150 @@ export class DocumentSession {
   }
 
   async edit(token: DocumentToken, path: string, text: string): Promise<void> {
+    await this.editDocuments(token, [{ path, text }]);
+  }
+
+  private remember(paths: string[]): void {
+    const group = paths.map(path => ({ path, source: structuredClone(this.files.get(path) ?? null) }));
+    if (Buffer.byteLength(JSON.stringify(group)) > limits.packageBytes) throw new Error('This undo group exceeds 8 MiB. Edit fewer files together.');
+    this.undoGroups.push(group);
+    while (this.undoGroups.length > 32 || this.undoGroups.length > 1 && Buffer.byteLength(JSON.stringify(this.undoGroups)) > limits.packageBytes) this.undoGroups.shift();
+  }
+
+  async editDocuments(token: DocumentToken, changes: { path: string; text: string }[]): Promise<void> {
     this.assertCurrent(token);
     if (this.readOnlyReason) throw new Error(this.readOnlyReason);
-    const file = this.files.get(path);
-    if (!file?.saved) throw new Error('Reload the file after correcting its read error.');
-    if (typeof text !== 'string' || Buffer.byteLength(text) > limits.fileBytes) throw new Error('A source file must fit within 1 MiB. Your text has not been saved.');
-    const total = [...this.files.values()].reduce((sum, item) => sum + Buffer.byteLength(item === file ? text : item.text), 0);
-    if (total > limits.packageBytes) throw new Error('The document session exceeds 8 MiB. Your text has not been saved.');
-    file.text = text;
-    file.dirty = text !== file.saved.text;
+    if (!changes.length || new Set(changes.map(change => change.path)).size !== changes.length) throw new Error('Choose each target file once.');
+    for (const { path, text } of changes) {
+      const file = this.files.get(path);
+      if (!file || file.error || !file.saved && !file.created) throw new Error('Choose a loaded readable source or fixture file.');
+      if (typeof text !== 'string' || Buffer.byteLength(text) > limits.fileBytes) throw new Error('A source file must fit within 1 MiB. Your text has not been saved.');
+    }
+    const replacements = new Map(changes.map(change => [change.path, change.text]));
+    if ([...this.files.values()].reduce((sum, file) => sum + Buffer.byteLength(replacements.get(file.path) ?? file.text), 0) > limits.packageBytes) throw new Error('The document session exceeds 8 MiB. Your text has not been saved.');
+    this.remember(changes.map(change => change.path));
+    for (const { path, text } of changes) { const file = this.files.get(path)!; file.text = text; file.dirty = file.created || text !== file.saved!.text; }
     this.revision++;
     await this.refreshReferences();
   }
 
+  async undo(token: DocumentToken): Promise<void> {
+    this.assertCurrent(token);
+    const group = this.undoGroups.pop();
+    if (!group) throw new Error('There is no draft operation to undo.');
+    for (const { path, source } of group) {
+      const file = this.files.get(path);
+      if (source === null) { if (file?.created) this.files.delete(path); }
+      else this.files.set(path, source);
+    }
+    this.revision++;
+    await this.refreshReferences();
+  }
+
+  private fixtureDigest(path: string): string | null {
+    const file = this.files.get(path);
+    return file?.kind === 'fixture' ? digest(file.text) : null;
+  }
+
+  async createFixture(token: DocumentToken, path: string, text: string, signal?: AbortSignal): Promise<void> {
+    this.assertCurrent(token);
+    if (this.readOnlyReason) throw new Error(this.readOnlyReason);
+    const normalized = referencePath('workflow.json', path);
+    if (normalized.path !== path || normalized.fragment || !path.endsWith('.json')) throw new Error('Choose a repository-relative JSON fixture path.');
+    if (this.files.has(path) || await lstat(resolve(this.repositoryRoot, path)).catch(() => null)) throw new Error('That path already exists. Edit its loaded buffer or choose a new fixture path.');
+    const parent = await realpath(dirname(resolve(this.repositoryRoot, path)));
+    if (!within(this.repositoryRoot, parent)) throw new Error('Keep fixtures inside the repository.');
+    if (this.files.size >= limits.files || Buffer.byteLength(text) > limits.fileBytes || [...this.files.values()].reduce((sum, file) => sum + Buffer.byteLength(file.text), Buffer.byteLength(text)) > limits.packageBytes) throw new Error('The fixture exceeds the document session limits.');
+    const fixture = parseFixture(parseJson(text, path));
+    if (!fixture.expected) throw new Error('A test fixture needs explicit expected status, selectedRuleIds and proposedEffects.');
+    this.assertCurrent(token);
+    if (signal?.aborted) throw new Error('Cancelled before creating the fixture. Earlier applied edits remain in the draft.');
+    this.remember([path]);
+    this.files.set(path, { path, text, kind: 'fixture', created: true, saved: null, dirty: true, external: false, error: null });
+    this.revision++;
+  }
+
+  async openTestFixture(token: DocumentToken, absolute: string): Promise<void> {
+    this.assertCurrent(token);
+    const path = relative(this.repositoryRoot, resolve(absolute)).split(sep).join('/');
+    if (!within(this.repositoryRoot, resolve(absolute)) || this.files.has(path)) throw new Error('Choose a repository fixture that is not already open.');
+    const saved = await this.capture(path);
+    parseFixture(parseJson(saved.text, path));
+    if (this.files.size >= limits.files || [...this.files.values()].reduce((sum, file) => sum + Buffer.byteLength(file.text), Buffer.byteLength(saved.text)) > limits.packageBytes) throw new Error('The fixture exceeds the document session limits.');
+    this.assertCurrent(token);
+    this.files.set(path, { path, text: saved.text, kind: 'fixture', saved, dirty: false, external: false, error: null });
+    this.revision++;
+  }
+
+  testFixture(token: DocumentToken, path: string): SimulationRecord {
+    const pkg = this.package(token), file = this.files.get(path);
+    if (file?.kind !== 'fixture') throw new Error('Choose an authored fixture document.');
+    const fixture = parseFixture(parseJson(file.text, path));
+    if (!fixture.expected) throw new Error('Add explicit expectations before running this test.');
+    const result = replay(pkg, fixture);
+    this.simulation = { token: { sessionId: this.sessionId, revision: this.revision }, packageDigest: pkg.digest, fixtureDigest: digest(file.text), fixturePath: path, packetsDigest: this.inputDigest('packets'), result, comparison: compareReplay(result, fixture.expected), handoffs: [], previewError: null };
+    try {
+      const packets = this.inputs.packets ? parseJson(this.inputs.packets.text, this.inputs.packets.name) : [];
+      this.simulation.handoffs = previewReplayHandoffs(result, (Array.isArray(packets) ? packets : [packets]) as DecisionPacket[], pkg.workflow.slack);
+    } catch (error) { this.simulation.previewError = message(error); }
+    return structuredClone(this.simulation);
+  }
+
+  authoringContext(): AuthoringContext {
+    const snapshot = this.snapshot();
+    const files: AuthoringContext['files'] = [];
+    for (const file of snapshot.files) {
+      const entry = { path: file.path, kind: file.kind ?? 'source' as const, digest: digest(file.text), dirty: file.dirty };
+      if (Buffer.byteLength(JSON.stringify([...files, entry])) > 24 * 1024) break;
+      files.push(entry);
+    }
+    return { token: { sessionId: this.sessionId, revision: this.revision }, workflowPath: this.workflowPath, packageDigest: snapshot.packageDigest,
+      files, filesOmitted: snapshot.files.length - files.length };
+  }
+
+  authoringReceipt(id: string): AuthoringResponse | undefined {
+    const previous = this.receipts.get(id);
+    return previous ? { ...structuredClone(previous), context: this.authoringContext() } : undefined;
+  }
+
+  confirmDisplay(id: string): void { const response = this.receipts.get(id); if (response) response.receipt.display = 'confirmed'; }
+
+  async author(value: unknown, signal?: AbortSignal): Promise<AuthoringResponse> {
+    const operation = parseAuthoringOperation(value), previous = this.authoringReceipt(operation.operationId);
+    if (previous) return previous;
+    if (this.receipts.size >= 128) throw new Error('This document session reached 128 authoring receipts. Save and reopen the workflow to continue.');
+    const before = { sessionId: this.sessionId, revision: this.revision };
+    const receipt: AuthoringReceipt = { operationId: operation.operationId, kind: operation.action.kind, before, after: before, status: 'rejected', changedPaths: [], message: '', display: 'not-needed' };
+    let data: unknown;
+    try {
+      if (signal?.aborted) { receipt.status = 'cancelled'; throw new Error('Cancelled before the operation. Earlier applied edits remain in the draft.'); }
+      this.assertCurrent(operation.expected);
+      const action = operation.action;
+      if (action.kind === 'read') {
+        data = action.paths.map(path => { const file = this.files.get(path); if (!file || file.error) throw new Error('Choose loaded readable source or fixture paths.'); return { path, text: file.text }; });
+        if (Buffer.byteLength(JSON.stringify(data)) > 40 * 1024) throw new Error('Selected documents exceed the tool result limit. Read fewer files; full source stays in the editor.');
+      } else if (action.kind === 'edit') {
+        await this.editDocuments(operation.expected, action.changes); receipt.changedPaths = action.changes.map(change => change.path);
+      } else if (action.kind === 'visual') {
+        await this.visualEdit(operation.expected, action.edit); receipt.changedPaths = [this.workflowPath];
+      } else if (action.kind === 'createFixture') {
+        await this.createFixture(operation.expected, action.path, action.text, signal); receipt.changedPaths = [action.path];
+      } else if (action.kind === 'test') data = this.testFixture(operation.expected, action.fixturePath);
+      else data = { valid: this.snapshot().diagnostics.length === 0, diagnostics: this.snapshot().diagnostics };
+      receipt.after = { sessionId: this.sessionId, revision: this.revision };
+      receipt.status = receipt.changedPaths.length ? 'applied' : 'completed';
+      receipt.display = receipt.status === 'applied' || action.kind === 'test' ? 'unconfirmed' : 'not-needed';
+      receipt.message = receipt.status === 'applied' ? 'Applied to unsaved drafts. Save remains explicit; Undo reverses this operation.' : action.kind === 'test' ? `Offline test ${this.simulation!.comparison!.passed ? 'passed' : 'failed'}. No model, network or effect adapter ran.` : 'Operation completed.';
+    } catch (error) { receipt.message = message(error); data = undefined; if (signal?.aborted && this.revision === before.revision) receipt.status = 'cancelled'; }
+    const response: AuthoringResponse = { receipt, context: this.authoringContext(), ...(data === undefined ? {} : { data }) };
+    if (Buffer.byteLength(JSON.stringify(response)) > 60 * 1024) response.data = { detailsOmitted: true, message: 'The complete result exceeds the provider result limit and remains visible in the editor.', ...(operation.action.kind === 'test' && this.simulation ? { token: this.simulation.token, packageDigest: this.simulation.packageDigest, fixtureDigest: this.simulation.fixtureDigest, status: this.simulation.result.status, passed: this.simulation.comparison?.passed } : {}) };
+    this.receipts.set(receipt.operationId, structuredClone(response));
+    return response;
+  }
+
   async checkExternal(): Promise<void> {
     for (const file of this.files.values()) {
+      if (file.created) { file.external = !!await lstat(resolve(this.repositoryRoot, file.path)).catch(() => null); continue; }
       try {
         const current = await this.capture(file.path);
         file.external = !file.saved || current.target !== file.saved.target || current.text !== file.saved.text;
@@ -278,6 +423,8 @@ export class DocumentSession {
     const saved = await this.capture(path);
     Object.assign(file, { saved, text: saved.text, dirty: false, external: false, error: null });
     this.savedTexts[path] = saved.text;
+    this.undoGroups = [];
+    delete file.created;
     this.revision++;
     await this.refreshReferences();
     if (path === this.workflowPath) this.setReadOnly();
@@ -286,7 +433,9 @@ export class DocumentSession {
   async discard(token: DocumentToken, path: string): Promise<void> {
     this.assertCurrent(token);
     const file = this.files.get(path);
+    if (file?.created) { this.files.delete(path); this.undoGroups = []; this.revision++; return; }
     if (!file?.saved) throw new Error('Choose a readable file.');
+    this.undoGroups = [];
     file.text = file.saved.text;
     file.dirty = false;
     this.revision++;
@@ -297,6 +446,7 @@ export class DocumentSession {
     this.assertCurrent(token);
     if (this.readOnlyReason) throw new Error(this.readOnlyReason);
     const snapshot = this.snapshot();
+    for (const file of this.files.values()) if (file.kind === 'fixture') parseFixture(parseJson(file.text, file.path));
     if (snapshot.diagnostics.length) throw new Error('Fix the validation errors before saving. Your drafts are still here.');
     await this.checkExternal();
     if ([...this.files.values()].some(file => file.external)) throw new Error('Files changed on disk. Reload each changed file before saving; your drafts are still here.');
@@ -305,22 +455,26 @@ export class DocumentSession {
     let savedCount = 0;
     try {
       for (const file of dirty) {
-        if (dirty.some(other => other !== file && other.saved!.target === file.saved!.target)) throw new Error('Two edited references point to the same file. Reload one of them before saving.');
-        const temporary = resolve(dirname(file.saved!.target), `.repo-chap-${randomUUID()}.tmp`);
-        const handle = await open(temporary, 'wx', file.saved!.mode & 0o777);
+        if (dirty.some(other => other !== file && other.saved?.target === file.saved?.target && !!file.saved)) throw new Error('Two edited references point to the same file. Reload one of them before saving.');
+        const temporary = resolve(dirname(file.saved?.target ?? resolve(this.repositoryRoot, file.path)), `.repo-chap-${randomUUID()}.tmp`);
+        const handle = await open(temporary, 'wx', (file.saved?.mode ?? 0o644) & 0o777);
         staged.push({ file, temporary });
         try { await handle.writeFile(file.text, 'utf8'); await handle.sync(); } finally { await handle.close(); }
       }
       await this.checkExternal();
       if ([...this.files.values()].some(file => file.external)) throw new Error('Files changed while preparing the save. Reload the changed files before saving.');
       for (const { file, temporary } of staged) {
-        const current = await this.capture(file.path);
-        if (current.text !== file.saved!.text || current.target !== file.saved!.target) {
+        const current = file.created ? null : await this.capture(file.path);
+        if (current && (current.text !== file.saved!.text || current.target !== file.saved!.target)) {
           file.external = true;
           throw new Error(`${file.path} changed on disk. Reload it before saving.`);
         }
-        await rename(temporary, file.saved!.target);
-        file.saved = { ...file.saved!, text: file.text };
+        if (file.created) {
+          const target = resolve(this.repositoryRoot, file.path);
+          if (await realpath(dirname(target)) !== dirname(target)) throw new Error('The fixture parent directory changed. Reload before saving.');
+          await link(temporary, target);
+          file.saved = { target, text: file.text, mode: 0o644 }; delete file.created;
+        } else { await rename(temporary, file.saved!.target); file.saved = { ...file.saved!, text: file.text }; }
         this.savedTexts[file.path] = file.text;
         file.dirty = false;
         savedCount++;
@@ -329,7 +483,7 @@ export class DocumentSession {
       throw new Error(`${savedCount ? `Saved ${savedCount} of ${dirty.length} files. ` : ''}${message(error)} Remaining drafts have been kept.`);
     } finally {
       for (const { temporary } of staged) await rm(temporary, { force: true }).catch(() => {});
-      if (savedCount) { this.revision++; await this.refreshReferences(); }
+      if (savedCount) { this.undoGroups = []; this.revision++; await this.refreshReferences(); }
     }
   }
 }

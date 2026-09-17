@@ -47,6 +47,16 @@ export interface StubResult {
 export interface ReplayFixture {
   schemaVersion: 1; now: string; observations: Observation[]; control?: ControlState;
   results?: Record<string, StubResult[]>; maxSteps?: number;
+  expected?: ReplayExpectation;
+}
+export interface ReplayExpectation {
+  status: ReplayResult['status'];
+  selectedRuleIds: (string | null)[];
+  proposedEffects: { actionId: string; uses: string; outcome?: PacketOutcome }[];
+}
+export interface ReplayComparison {
+  passed: boolean;
+  checks: { field: keyof ReplayExpectation; expected: unknown; actual: unknown; passed: boolean }[];
 }
 export type PacketOutcome = 'needs_author' | 'needs_team' | 'ready_for_human_merge' | 'blocked_execution';
 export interface ConditionTrace { value: Truth; reason: string; children?: ConditionTrace[] }

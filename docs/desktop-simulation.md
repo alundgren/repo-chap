@@ -79,8 +79,7 @@ reset clears them only after confirmation and a successful document reset.
 The internal capture-disabled `perform` call belongs only to `flush`, to avoid
 recursion. Future context or authoring operations must use the normal capture
 path and wait for the renderer queue before reading `DocumentSnapshot`; a main
-process snapshot alone cannot include an unfinished human field. No assistant
-operations or general patch/undo API are introduced here.
+process snapshot alone cannot include an unfinished human field. The [authoring operations](desktop-authoring.md) extend this capture path with typed tools, host receipts and grouped undo.
 
 Temporary fixture and packet inputs live only in the current document session.
 Save all writes workflow JSON and its referenced files. Reset workflow affects
