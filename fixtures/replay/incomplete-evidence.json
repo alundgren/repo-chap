@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "now": "2026-05-01T12:00:00Z",
+  "observations": [
+    {
+      "facts": {
+        "lifecycle": "open",
+        "draft": false,
+        "evidenceComplete": false,
+        "young": false,
+        "headDebouncing": false,
+        "conflict": null,
+        "unaddressedReview": false,
+        "externalReviewPending": false
+      },
+      "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "evidenceDigest": "fictional-evidence-1"
+    }
+  ],
+  "control": {
+    "memory": {
+      "classificationCurrent": true,
+      "reviewCurrent": true,
+      "packetCurrent": false,
+      "repairSuppressed": false
+    },
+    "review": {
+      "verdict": "acceptable",
+      "coverage": "complete"
+    },
+    "classification": {
+      "uncertain": false
+    }
+  }
+}

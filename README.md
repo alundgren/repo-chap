@@ -4,8 +4,10 @@ Repo Chap looks after trusted teams' repositories. The first release keeps
 GitHub pull requests moving through review, bounded repairs, and readable Slack
 handoffs. People merge.
 
-Status: design and implementation plan. The `repo-chap` CLI, Electron app, and
-Linux daemon are not implemented yet.
+Status: offline workflow validation and replay are implemented in the
+`repo-chap` CLI. Live execution, Electron, and the daemon remain planned.
+See [workflow commands and shared contracts](docs/workflow-api.md) to build,
+install, validate the supplied example, and replay fictional fixtures.
 
 - [Product brief](docs/product-brief.md)
 - [Architecture](docs/pr-workflows/architecture.md)

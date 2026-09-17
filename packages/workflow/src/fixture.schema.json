@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "now": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+    },
+    "observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "facts": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "draft": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "evidenceComplete": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "young": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "headDebouncing": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "conflict": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "unaddressedReview": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "externalReviewPending": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "lifecycle": {
+                "enum": [
+                  "open",
+                  "closed",
+                  "merged",
+                  null
+                ]
+              }
+            },
+            "required": []
+          },
+          "headSha": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "baseSha": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "evidenceDigest": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+          },
+          "headChangedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+          },
+          "externalReviewStartedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+          }
+        },
+        "required": [
+          "facts"
+        ]
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "memory": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "classificationCurrent": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "reviewCurrent": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "packetCurrent": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "repairSuppressed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": []
+        },
+        "attemptsThisHead": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "repairsThisLifecycle": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "refreshAttempts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "repairSuppression": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "evidenceDigest": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                }
+              },
+              "required": [
+                "evidenceDigest",
+                "reason"
+              ]
+            }
+          ]
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "verdict": {
+              "enum": [
+                "acceptable",
+                "concerns",
+                "blocking",
+                "inconclusive"
+              ]
+            },
+            "coverage": {
+              "enum": [
+                "complete",
+                "partial"
+              ]
+            }
+          },
+          "required": [
+            "verdict",
+            "coverage"
+          ]
+        },
+        "classification": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "uncertain": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "uncertain"
+          ]
+        }
+      },
+      "required": []
+    },
+    "results": {
+      "type": "object",
+      "maxProperties": 128,
+      "additionalProperties": {
+        "type": "array",
+        "maxItems": 256,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "success",
+                "failure",
+                "unknown"
+              ]
+            },
+            "payload": {},
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          },
+          "required": [
+            "status"
+          ]
+        }
+      }
+    },
+    "maxSteps": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "now",
+    "observations"
+  ]
+}

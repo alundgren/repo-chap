@@ -1,5 +1,5 @@
 {
-  "name": "repo-chap",
+  "name": "@repo-chap/workspace",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,9 +10,17 @@
   "scripts": {
     "docs:build": "python3 docs/pr-workflows/build_presentation.py",
     "docs:browser": "node docs/pr-workflows/check-presentation.mjs",
-    "browser:install": "playwright install chromium webkit"
+    "browser:install": "playwright install chromium webkit",
+    "build": "pnpm --filter @repo-chap/workflow build && pnpm --filter repo-chap build",
+    "typecheck": "pnpm build && tsc --noEmit",
+    "test": "pnpm build && node --test --test-reporter=dot tests/*.test.ts",
+    "check": "pnpm typecheck && pnpm test"
   },
   "devDependencies": {
-    "@playwright/test": "1.62.1"
+    "@playwright/test": "1.62.1",
+    "@repo-chap/workflow": "workspace:*",
+    "@types/node": "^24.13.4",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
   }
 }

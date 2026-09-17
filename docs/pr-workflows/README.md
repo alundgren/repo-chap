@@ -1,8 +1,9 @@
 # PR workflow investigation
 
-Status: design proposal, revised 2026-09-16. No engine implementation or real-PR
-trial has been performed. Repo Chap is a standalone product with a CLI, local
-Electron editor, and private Linux daemon.
+Status: design proposal, revised 2026-09-16. The shared workflow validator and
+offline CLI replay are now implemented; see [their contracts](../workflow-api.md).
+No real-PR trial has been performed. Repo Chap targets a CLI, local Electron
+editor, and private Linux daemon.
 
 Start with the [product brief](../product-brief.md), [specification](specification.md),
 [architecture](architecture.md), and [decisions](decisions.md). The

@@ -1,0 +1,399 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repo-chap.example.test/schemas/workflow.json",
+  "title": "Repo Chap workflow definition",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "newPrDelaySeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600
+        },
+        "headDebounceSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 600
+        },
+        "reviewWaitSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 1800
+        },
+        "reviewDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 86400
+        },
+        "mergeMode": {
+          "const": "human"
+        }
+      },
+      "required": [
+        "newPrDelaySeconds",
+        "headDebounceSeconds",
+        "reviewWaitSeconds",
+        "reviewDeadlineSeconds",
+        "mergeMode"
+      ]
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxAttemptsPerHead": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "maxRepairsPerLifecycle": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "maxAgentActionsPerWake": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "maxAttemptSeconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 3600
+        },
+        "maxDailyCostUnits": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        }
+      },
+      "required": [
+        "maxAttemptsPerHead",
+        "maxRepairsPerLifecycle",
+        "maxAgentActionsPerWake",
+        "maxAttemptSeconds",
+        "maxDailyCostUnits"
+      ]
+    },
+    "requestedCapabilities": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "workspace.read",
+          "workspace.write",
+          "checks.run",
+          "pr.push",
+          "review.resolve",
+          "labels.set",
+          "review.publish",
+          "notify.send",
+          "pr.merge"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "security",
+          "ux",
+          "auth",
+          "db_migration",
+          "tests",
+          "other"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "when": {
+            "$ref": "#/$defs/condition"
+          },
+          "action": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "when",
+          "action"
+        ]
+      }
+    },
+    "otherwise": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actions": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/action"
+      }
+    },
+    "slack": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "pattern": "^T[A-Z0-9]+$"
+        },
+        "users": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^U[A-Z0-9]+$"
+          }
+        },
+        "channels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[CG][A-Z0-9]+$"
+          }
+        },
+        "defaultChannel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "routes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "needs_author": {
+              "type": "string",
+              "minLength": 1
+            },
+            "needs_team": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ready_for_human_merge": {
+              "type": "string",
+              "minLength": 1
+            },
+            "blocked_execution": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "needs_author",
+            "needs_team",
+            "ready_for_human_merge",
+            "blocked_execution"
+          ]
+        }
+      },
+      "required": [
+        "workspaceId",
+        "users",
+        "channels",
+        "defaultChannel",
+        "routes"
+      ]
+    },
+    "layout": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "id",
+    "version",
+    "settings",
+    "limits",
+    "requestedCapabilities",
+    "labels",
+    "rules",
+    "otherwise",
+    "actions"
+  ],
+  "$defs": {
+    "condition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "enum": [
+                "facts.lifecycle",
+                "facts.draft",
+                "facts.evidenceComplete",
+                "facts.young",
+                "facts.headDebouncing",
+                "facts.conflict",
+                "facts.unaddressedReview",
+                "facts.externalReviewPending",
+                "memory.classificationCurrent",
+                "memory.reviewCurrent",
+                "memory.packetCurrent",
+                "memory.repairSuppressed"
+              ]
+            },
+            "op": {
+              "enum": [
+                "eq",
+                "ne"
+              ]
+            },
+            "value": {
+              "type": [
+                "string",
+                "boolean"
+              ]
+            }
+          },
+          "required": [
+            "field",
+            "op",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "all": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "items": {
+                "$ref": "#/$defs/condition"
+              }
+            }
+          },
+          "required": [
+            "all"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "any": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "items": {
+                "$ref": "#/$defs/condition"
+              }
+            }
+          },
+          "required": [
+            "any"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/condition"
+            }
+          },
+          "required": [
+            "not"
+          ]
+        }
+      ]
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "execution": {
+          "enum": [
+            "code",
+            "agent"
+          ]
+        },
+        "uses": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "outputSchema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "workspace.read",
+              "workspace.write",
+              "checks.run",
+              "pr.push",
+              "review.resolve",
+              "labels.set",
+              "review.publish",
+              "notify.send",
+              "pr.merge"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "onSuccess": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onFailure": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contextFiles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "maxItems": 32
+        }
+      },
+      "required": [
+        "execution",
+        "uses",
+        "capabilities",
+        "onSuccess",
+        "onFailure"
+      ]
+    }
+  }
+}
