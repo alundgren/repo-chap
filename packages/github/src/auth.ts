@@ -1,0 +1,103 @@
+import { execFile } from 'node:child_process';
+import { sign } from 'node:crypto';
+import { promisify } from 'node:util';
+import { GitHubReadError } from './errors.js';
+import { responseText } from './http.js';
+
+export interface CredentialSource {
+  token(signal?: AbortSignal): Promise<string>;
+  invalidate?(): void;
+  redact(text: string): string;
+}
+function secrets() {
+  const values = new Set<string>();
+  return {
+    add(value: string): string { if (value) values.add(value); return value; },
+    redact(text: string): string {
+      for (const value of values) text = text.split(value).join('[redacted]');
+      return text;
+    },
+  };
+}
+export function tokenCredentials(token: string): CredentialSource {
+  if (!token.trim() || /\s/.test(token)) throw new GitHubReadError('credentials');
+  const vault = secrets(); vault.add(token);
+  return { token: async () => token, redact: vault.redact };
+}
+export async function localCredentials(options: {
+  env?: NodeJS.ProcessEnv;
+  runGh?: () => Promise<string>;
+} = {}): Promise<CredentialSource> {
+  const env = options.env ?? process.env;
+  const token = env.GH_TOKEN || env.GITHUB_TOKEN;
+  if (token) return tokenCredentials(token);
+  try {
+    const text = await (options.runGh ?? (async () => (await promisify(execFile)('gh',
+      ['auth', 'token', '--hostname', 'github.com'], { env, timeout: 10_000, maxBuffer: 16_384, encoding: 'utf8' })).stdout))();
+    return tokenCredentials(text.trim());
+  } catch { throw new GitHubReadError('credentials'); }
+}
+
+export interface InstallationOptions {
+  appId: string;
+  installationId: number;
+  privateKey: string;
+  fetch?: typeof globalThis.fetch;
+  now?: () => number;
+}
+export function installationCredentials(options: InstallationOptions): CredentialSource {
+  if (!options.appId || !Number.isSafeInteger(options.installationId) || options.installationId < 1)
+    throw new GitHubReadError('credentials');
+  const vault = secrets(); vault.add(options.privateKey);
+  const now = options.now ?? Date.now;
+  const request = options.fetch ?? globalThis.fetch;
+  let cached: { token: string; expires: number } | undefined;
+  let pending: Promise<string> | undefined;
+  let failed: { until: number; error: GitHubReadError } | undefined;
+  async function refresh(signal?: AbortSignal): Promise<string> {
+    try {
+      const seconds = Math.floor(now() / 1000);
+      const encoded = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+      const unsigned = `${encoded({ alg: 'RS256', typ: 'JWT' })}.${encoded({ iat: seconds - 60, exp: seconds + 540, iss: options.appId })}`;
+      const jwt = vault.add(`${unsigned}.${sign('RSA-SHA256', Buffer.from(unsigned), options.privateKey).toString('base64url')}`);
+      const response = await request(`https://api.github.com/app/installations/${options.installationId}/access_tokens`, {
+        method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+        body: JSON.stringify({ permissions: { contents: 'read', pull_requests: 'read', checks: 'read', statuses: 'read' } }),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        if (response.status === 429 || response.status === 403 && (response.headers.has('retry-after') || response.headers.get('x-ratelimit-remaining') === '0')) {
+          const guide = response.headers.get('retry-after');
+          const wait = guide && /^\d+$/.test(guide) ? now() + Number(guide) * 1000 : guide ? Date.parse(guide) : 0;
+          const reset = Number(response.headers.get('x-ratelimit-reset')) * 1000;
+          const until = Math.max(now() + 60_000, Number.isFinite(wait) ? wait : 0, Number.isFinite(reset) ? reset + 1000 : 0);
+          const error = new GitHubReadError('rate_limit', new Date(until).toISOString());
+          failed = { until, error }; throw error;
+        }
+        throw new GitHubReadError('credentials');
+      }
+      const text = await responseText(response, 65_536);
+      const data = JSON.parse(text) as { token?: unknown; expires_at?: unknown };
+      if (typeof data.token !== 'string' || !data.token || typeof data.expires_at !== 'string' || Date.parse(data.expires_at) <= now() + 60_000 || !Number.isFinite(Date.parse(data.expires_at)))
+        throw new GitHubReadError('credentials');
+      cached = { token: vault.add(data.token), expires: Date.parse(data.expires_at) };
+      return cached.token;
+    } catch (error) {
+      const safe = signal?.aborted ? new GitHubReadError('cancelled') : error instanceof GitHubReadError ? error : new GitHubReadError('credentials');
+      if (!signal?.aborted) failed ??= { until: now() + 60_000, error: safe };
+      throw safe;
+    }
+  }
+  return {
+    async token(signal) {
+      if (cached && cached.expires > now() + 60_000) return cached.token;
+      if (failed && now() < failed.until) throw failed.error;
+      failed = undefined;
+      if (!pending) pending = refresh(signal).finally(() => { pending = undefined; });
+      return pending;
+    },
+    invalidate() { cached = undefined; },
+    redact: vault.redact,
+  };
+}

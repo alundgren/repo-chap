@@ -43,6 +43,10 @@ A simulated block, wait, missing result, or request for another observation is a
 successful simulation. Check the JSON `status`, rather than interpreting exit 0
 as permission to act. `merge` is not a command and no package may request merge.
 
+GitHub inspection and its bound private evidence files are documented in
+[the inspect contract](github-inspect.md). Inspect exports this same fixture
+format; offline replay remains credential-free and accepts the fixture directly.
+
 ## Pinned packages
 
 `loadWorkflow(path, { repositoryRoot, maximumCapabilities })` reads local UTF-8

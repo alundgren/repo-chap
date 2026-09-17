@@ -41,3 +41,18 @@ The user asked to explain a workflow, so these are simulation results rather
 than command failures. JSON includes an explicit status; human output starts
 with that status. Missing results identify the exact fixture key to supply.
 Commands print help without requiring repository access or credentials.
+
+## GitHub inspection CLI
+
+`inspect` requires a repository, PR, and explicit private capture directory. It
+prints collection status, pinned package/head/base, missing evidence, and saved
+paths. Text and JSON distinguish complete, partial, and unavailable results;
+complete describes collection and never claims readiness to merge. Partial reads
+still produce a replay fixture and retain their evidence. Ctrl-C cancels reads,
+saves collected evidence, and returns exit 130. Authentication and file failures
+name the corrective action without exposing credential or response contents.
+
+The default command performs reads and capture only. Provider analysis requires
+an explicit later command or mode. Reviewer logins are optional; their PR eyes
+reactions are waiting hints with the original reaction timestamp and the workflow
+expiry, never approval evidence.
