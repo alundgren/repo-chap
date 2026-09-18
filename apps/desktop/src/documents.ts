@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { access, link, lstat, open, realpath, rename, rm, stat } from 'node:fs/promises';
+import { access, link, lstat, mkdir, open, realpath, rename, rm, rmdir, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   actionRegistry, buildPackage, limits, loadWorkflow, parseJson, readFixtureText,
@@ -12,6 +12,13 @@ import type { AuthoringContext, AuthoringOperation, AuthoringReceipt, AuthoringR
 import { parseAuthoringOperation } from './authoring-contract.ts';
 import { editWorkflow, semanticChanges } from './authoring.ts';
 import type { DocumentSnapshot, DocumentToken, EditorDiagnostic, SimulationInput, SimulationInputKind, SimulationRecord, SourceDocument, VisualEdit } from './protocol.js';
+
+interface DirectoryIdentity { dev: number; ino: number }
+const sameDirectory = (a: DirectoryIdentity, b: DirectoryIdentity): boolean => a.dev === b.dev && a.ino === b.ino;
+async function existingEntry(path: string) {
+  try { return await lstat(path); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
+}
 
 interface DiskSource { target: string; text: string; mode: number }
 interface BufferSource extends SourceDocument { saved: DiskSource | null; created?: boolean }
@@ -40,6 +47,7 @@ export class DocumentSession {
   private simulation: SimulationRecord | null = null;
   private undoGroups: { path: string; source: BufferSource | null }[][] = [];
   private receipts = new Map<string, AuthoringResponse>();
+  private creationDirectories: { root: DirectoryIdentity; metadata: DirectoryIdentity | null } | null = null;
   readonly repositoryRoot: string;
   readonly workflowPath: string;
 
@@ -66,6 +74,49 @@ export class DocumentSession {
     await session.refreshReferences();
     session.setReadOnly();
     return session;
+  }
+
+  static async create(repositoryRoot: string): Promise<DocumentSession> {
+    const root = await realpath(repositoryRoot);
+    const info = await lstat(root);
+    if (!info.isDirectory()) throw new Error('Choose a repository directory.');
+    const session = new DocumentSession(root, '.repo-chap/workflow.json');
+    const metadata = await existingEntry(resolve(root, '.repo-chap'));
+    if (metadata && (!metadata.isDirectory() || metadata.isSymbolicLink())) throw new Error('.repo-chap must be a directory inside the repository.');
+    session.creationDirectories = { root: info, metadata };
+    await session.checkCreationDestination();
+    const text = JSON.stringify({
+      schemaVersion: 1, id: 'repository-pr', version: '0.1.0',
+      settings: { newPrDelaySeconds: 120, headDebounceSeconds: 30, reviewWaitSeconds: 300, reviewDeadlineSeconds: 1800, mergeMode: 'human' },
+      limits: { maxAttemptsPerHead: 1, maxRepairsPerLifecycle: 1, maxAgentActionsPerWake: 1, maxAttemptSeconds: 300, maxDailyCostUnits: 1 },
+      requestedCapabilities: [], labels: [],
+      rules: [{ id: 'closed', when: { any: [
+        { field: 'facts.lifecycle', op: 'eq', value: 'closed' },
+        { field: 'facts.lifecycle', op: 'eq', value: 'merged' },
+      ] }, action: 'stop' }],
+      otherwise: 'park',
+      actions: {
+        stop: { uses: 'control.close', execution: 'code', capabilities: [], onSuccess: '$closed', onFailure: '$blocked' },
+        park: { uses: 'control.wait_signal', execution: 'code', capabilities: [], onSuccess: '$wait', onFailure: '$blocked' },
+      },
+    }, null, 2) + '\n';
+    buildPackage(session.workflowPath, { [session.workflowPath]: text });
+    session.files.set(session.workflowPath, { path: session.workflowPath, text, created: true, saved: null, dirty: true, external: false, error: null });
+    return session;
+  }
+
+  get isNewWorkflow(): boolean { return !!this.files.get(this.workflowPath)?.created; }
+
+  private async checkCreationDestination(): Promise<void> {
+    const expected = this.creationDirectories;
+    if (!expected) return;
+    const root = await lstat(this.repositoryRoot);
+    if (!root.isDirectory() || !sameDirectory(root, expected.root) || await realpath(this.repositoryRoot) !== this.repositoryRoot) throw new Error('The repository directory changed. Keep the draft and reopen the intended repository.');
+    const path = resolve(this.repositoryRoot, '.repo-chap');
+    const metadata = await existingEntry(path);
+    if (expected.metadata ? !metadata || !metadata.isDirectory() || !sameDirectory(metadata, expected.metadata) : metadata !== null) throw new Error('The .repo-chap destination changed. Restore the original directory before saving.');
+    if (metadata && await realpath(path) !== path) throw new Error('The .repo-chap directory must not redirect outside its original path.');
+    if (await existingEntry(resolve(this.repositoryRoot, this.workflowPath))) throw new Error('The workflow destination already exists. Your draft has been kept; open the existing workflow separately.');
   }
 
   assertCurrent(token: DocumentToken): void {
@@ -101,6 +152,7 @@ export class DocumentSession {
   }
 
   private references(): string[] | null {
+    if (!this.files.has(this.workflowPath)) return null;
     try {
       const value = parseJson(this.files.get(this.workflowPath)!.text, this.workflowPath);
       if (!record(value) || !record(value.actions)) return null;
@@ -149,7 +201,7 @@ export class DocumentSession {
 
   snapshot(): DocumentSnapshot {
     const texts: Record<string, string> = Object.create(null);
-    for (const [path, file] of this.files) if (file.saved && file.kind !== 'fixture') texts[path] = file.text;
+    for (const [path, file] of this.files) if ((file.saved || file.created) && file.kind !== 'fixture') texts[path] = file.text;
     let diagnostics: EditorDiagnostic[] = [];
     let packageDigest: string | null = null;
     let workflow: DocumentSnapshot['workflow'] = null;
@@ -170,12 +222,12 @@ export class DocumentSession {
       if (!diagnostics.some(item => item.file === file.path)) diagnostics.push({ code: 'file_read', path: file.path, file: file.path, message: file.error });
     }
     let changes: DocumentSnapshot['semanticChanges'] = [], semanticError: string | null = null;
-    try { changes = semanticChanges(this.workflowPath, this.savedTexts, texts); }
+    try { changes = this.isNewWorkflow ? [{ path: this.workflowPath, before: 'Not saved', after: 'New workflow' }] : semanticChanges(this.workflowPath, this.savedTexts, texts); }
     catch { semanticError = 'Repair the JSON source to compare execution changes against saved files.'; }
     const simulationInputs = Object.fromEntries(Object.entries(this.inputs).map(([kind, input]) => [kind, input ? { name: input.name, text: input.text, changed: input.changed } : null])) as DocumentSnapshot['simulationInputs'];
     return {
       sessionId: this.sessionId, revision: this.revision, repositoryRoot: this.repositoryRoot,
-      workflowPath: this.workflowPath, readOnlyReason: this.readOnlyReason, diagnostics, packageDigest,
+      workflowPath: this.workflowPath, isNewWorkflow: this.isNewWorkflow, readOnlyReason: this.readOnlyReason, diagnostics, packageDigest,
       files: [...this.files.values()].map(({ saved: _saved, created: _created, ...file }) => ({ ...file })),
       workflow, semanticChanges: changes, semanticError, simulationInputs, simulation: structuredClone(this.simulation),
       undoCount: this.undoGroups.length, authoringReceipts: [...this.receipts.values()].map(value => structuredClone(value.receipt)),
@@ -189,7 +241,7 @@ export class DocumentSession {
     if (this.readOnlyReason) throw new Error(this.readOnlyReason);
     const snapshot = this.snapshot();
     if (!snapshot.packageDigest || snapshot.diagnostics.length) throw new Error('Fix the workflow validation errors before simulation or export. Your drafts are still here.');
-    return buildPackage(this.workflowPath, Object.fromEntries([...this.files].filter(([, file]) => file.saved && file.kind !== 'fixture').map(([path, file]) => [path, file.text])));
+    return buildPackage(this.workflowPath, Object.fromEntries([...this.files].filter(([, file]) => (file.saved || file.created) && file.kind !== 'fixture').map(([path, file]) => [path, file.text])));
   }
 
   async visualEdit(token: DocumentToken, edit: VisualEdit): Promise<void> {
@@ -433,7 +485,7 @@ export class DocumentSession {
   async discard(token: DocumentToken, path: string): Promise<void> {
     this.assertCurrent(token);
     const file = this.files.get(path);
-    if (file?.created) { this.files.delete(path); this.undoGroups = []; this.revision++; return; }
+    if (file?.created) { if (path === this.workflowPath) this.files.clear(); else this.files.delete(path); this.undoGroups = []; this.revision++; return; }
     if (!file?.saved) throw new Error('Choose a readable file.');
     this.undoGroups = [];
     file.text = file.saved.text;
@@ -448,12 +500,21 @@ export class DocumentSession {
     const snapshot = this.snapshot();
     for (const file of this.files.values()) if (file.kind === 'fixture') parseFixture(parseJson(file.text, file.path));
     if (snapshot.diagnostics.length) throw new Error('Fix the validation errors before saving. Your drafts are still here.');
+    if (this.isNewWorkflow) await this.checkCreationDestination();
     await this.checkExternal();
     if ([...this.files.values()].some(file => file.external)) throw new Error('Files changed on disk. Reload each changed file before saving; your drafts are still here.');
     const dirty = [...this.files.values()].filter(file => file.dirty).sort((a, b) => Number(a.path === this.workflowPath) - Number(b.path === this.workflowPath));
     const staged: { file: BufferSource; temporary: string }[] = [];
     let savedCount = 0;
+    let createdDirectory: DirectoryIdentity | null = null;
+    const metadataPath = resolve(this.repositoryRoot, '.repo-chap');
     try {
+      if (this.isNewWorkflow && this.creationDirectories && !this.creationDirectories.metadata) {
+        await mkdir(metadataPath);
+        createdDirectory = await lstat(metadataPath);
+        this.creationDirectories.metadata = createdDirectory;
+      }
+      if (this.isNewWorkflow) await this.checkCreationDestination();
       for (const file of dirty) {
         if (dirty.some(other => other !== file && other.saved?.target === file.saved?.target && !!file.saved)) throw new Error('Two edited references point to the same file. Reload one of them before saving.');
         const temporary = resolve(dirname(file.saved?.target ?? resolve(this.repositoryRoot, file.path)), `.repo-chap-${randomUUID()}.tmp`);
@@ -464,6 +525,7 @@ export class DocumentSession {
       await this.checkExternal();
       if ([...this.files.values()].some(file => file.external)) throw new Error('Files changed while preparing the save. Reload the changed files before saving.');
       for (const { file, temporary } of staged) {
+        if (this.isNewWorkflow) await this.checkCreationDestination();
         const current = file.created ? null : await this.capture(file.path);
         if (current && (current.text !== file.saved!.text || current.target !== file.saved!.target)) {
           file.external = true;
@@ -474,6 +536,7 @@ export class DocumentSession {
           if (await realpath(dirname(target)) !== dirname(target)) throw new Error('The fixture parent directory changed. Reload before saving.');
           await link(temporary, target);
           file.saved = { target, text: file.text, mode: 0o644 }; delete file.created;
+          if (file.path === this.workflowPath) this.creationDirectories = null;
         } else { await rename(temporary, file.saved!.target); file.saved = { ...file.saved!, text: file.text }; }
         this.savedTexts[file.path] = file.text;
         file.dirty = false;
@@ -483,6 +546,15 @@ export class DocumentSession {
       throw new Error(`${savedCount ? `Saved ${savedCount} of ${dirty.length} files. ` : ''}${message(error)} Remaining drafts have been kept.`);
     } finally {
       for (const { temporary } of staged) await rm(temporary, { force: true }).catch(() => {});
+      if (createdDirectory && this.isNewWorkflow) {
+        try {
+          const root = await lstat(this.repositoryRoot), directory = await lstat(metadataPath);
+          if (sameDirectory(root, this.creationDirectories!.root) && sameDirectory(directory, createdDirectory) && directory.isDirectory() && await realpath(metadataPath) === metadataPath) {
+            await rmdir(metadataPath);
+            this.creationDirectories!.metadata = null;
+          }
+        } catch { /* Keep directories that changed or gained content. */ }
+      }
       if (savedCount) { this.undoGroups = []; this.revision++; await this.refreshReferences(); }
     }
   }

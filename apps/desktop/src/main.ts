@@ -184,24 +184,28 @@ registerConversation('reject-authoring', (id: string, pending: { field: string; 
 registerConversation('confirm-operation', (id: string) => documents?.confirmDisplay(id), false);
 registerConversation('confirm-authoring', (id: string) => authoring.confirm(id), false);
 register('open', async (kind: OpenKind, token: DocumentToken | null, discard: boolean) => {
-  if (!window || (kind !== 'repository' && kind !== 'workflow')) throw new Error('Choose a repository or workflow.');
+  if (!window || (kind !== 'repository' && kind !== 'workflow' && kind !== 'create')) throw new Error('Choose a repository or workflow.');
   if (documents) {
     documents.assertCurrent(token!);
     if (documents.dirty && discard !== true) throw new Error('Save or discard your drafts before opening another workflow.');
   }
   let repositoryRoot: string | undefined;
-  if (kind === 'repository') {
-    const result = await dialog.showOpenDialog(window, { title: 'Open repository', properties: ['openDirectory'] });
+  if (kind === 'repository' || kind === 'create') {
+    const result = await dialog.showOpenDialog(window, { title: kind === 'create' ? 'Choose repository for new workflow' : 'Open repository', properties: ['openDirectory'] });
     if (result.canceled || !result.filePaths[0]) return { ...current(), cancelled: true };
     repositoryRoot = result.filePaths[0];
   }
-  const result = await dialog.showOpenDialog(window, {
-    title: 'Choose workflow JSON', properties: ['openFile'],
-    ...(repositoryRoot ? { defaultPath: repositoryRoot } : {}),
-    filters: [{ name: 'Workflow JSON', extensions: ['json'] }],
-  });
-  if (result.canceled || !result.filePaths[0]) return { ...current(), cancelled: true };
-  const next = await DocumentSession.open(result.filePaths[0], repositoryRoot);
+  let next: DocumentSession;
+  if (kind === 'create') next = await DocumentSession.create(repositoryRoot!);
+  else {
+    const result = await dialog.showOpenDialog(window, {
+      title: 'Choose workflow JSON', properties: ['openFile'],
+      ...(repositoryRoot ? { defaultPath: repositoryRoot } : {}),
+      filters: [{ name: 'Workflow JSON', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePaths[0]) return { ...current(), cancelled: true };
+    next = await DocumentSession.open(result.filePaths[0], repositoryRoot);
+  }
   await closeConversation();
   await trials?.close();
   documents = next; trials = null; sourceRepositories = new Set([next.repositoryRoot]);
@@ -209,9 +213,22 @@ register('open', async (kind: OpenKind, token: DocumentToken | null, discard: bo
 register('edit', async (token: DocumentToken, path: string, text: string) => requireDocuments(token).edit(token, path, text));
 register('save', async (token: DocumentToken) => requireDocuments(token).save(token));
 register('reload', async (token: DocumentToken, path: string) => requireDocuments(token).reload(token, path));
-register('discard', (token: DocumentToken, path: string) => requireDocuments(token).discard(token, path));
+async function discardNewWorkflow(): Promise<void> {
+  await closeConversation();
+  await trials?.close();
+  documents = null; trials = null; sourceRepositories.clear();
+}
+register('discard', async (token: DocumentToken, path: string) => {
+  const source = requireDocuments(token);
+  if (source.isNewWorkflow && path === source.workflowPath) await discardNewWorkflow();
+  else await source.discard(token, path);
+});
 register('visual-edit', (token: DocumentToken, edit: VisualEdit) => requireDocuments(token).visualEdit(token, edit));
-register('reset', (token: DocumentToken) => requireDocuments(token).reset(token));
+register('reset', async (token: DocumentToken) => {
+  const source = requireDocuments(token);
+  if (source.isNewWorkflow) await discardNewWorkflow();
+  else await source.reset(token);
+});
 register('load-simulation-input', async (token: DocumentToken, kind: SimulationInputKind) => {
   const session = requireDocuments(token);
   if (!window || !['fixture', 'packets'].includes(kind)) throw new Error('Choose fixture or packet input.');

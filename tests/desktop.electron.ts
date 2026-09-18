@@ -41,7 +41,7 @@ test('actual Electron opens, edits, saves and recovers local workflow sources wi
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (/^https?:/.test(request.url())) requests.push(request.url()); });
   await electron.context().setOffline(true);
-  await expect(page.getByRole('heading', { name: 'Edit your workflow.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Create or edit your workflow.' })).toBeVisible();
   await page.screenshot({ path: join(proof, '01-welcome.png'), fullPage: true });
   await electron.evaluate(({ dialog }, choices) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [choices.shift()!] });
