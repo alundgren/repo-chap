@@ -35,6 +35,7 @@ export interface SimulationRecord {
 export interface DocumentSnapshot extends DocumentToken {
   repositoryRoot: string;
   workflowPath: string;
+  isNewWorkflow?: boolean;
   files: SourceDocument[];
   readOnlyReason: string | null;
   diagnostics: EditorDiagnostic[];
@@ -54,7 +55,7 @@ export interface EditorResult {
   cancelled?: boolean;
   authoringOperationId?: string;
 }
-export type OpenKind = 'repository' | 'workflow';
+export type OpenKind = 'repository' | 'workflow' | 'create';
 export interface EditorBridge {
   current(): Promise<EditorResult>;
   open(kind: OpenKind, token: DocumentToken | null, discard: boolean): Promise<EditorResult>;

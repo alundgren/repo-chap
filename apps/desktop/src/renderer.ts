@@ -68,7 +68,7 @@ async function perform(operation: () => Promise<EditorResult>, message?: string,
 function render(replaceSource = false): void {
   element('welcome').hidden = !!state;
   element('workspace').hidden = !state;
-  if (!state) return;
+  if (!state) { document.title = 'Repo Chap'; return; }
   for (const name of ['source', 'process', 'simulation', 'conversation', 'trial'] as const) {
     element(`${name}-view`).hidden = view !== name;
     element(`${name}-tab`).setAttribute('aria-pressed', String(view === name));
@@ -248,10 +248,14 @@ async function openWorkflow(kind: OpenKind): Promise<void> {
     if (choice === 'cancel') return;
     await enqueue(async () => {
       const result = await bridge.open(kind, state ? token() : null, choice === 'discard');
-      if (receive(result, true)) say('Workflow opened.');
+      if (receive(result, true)) {
+        if (kind === 'create') { view = 'source'; render(true); source.focus(); }
+        say(kind === 'create' ? 'New workflow draft. Save all creates .repo-chap/workflow.json.' : 'Workflow opened.');
+      } else if (kind === 'create') element('create-workflow').focus();
     });
   } finally { setPrompting(false); }
 }
+element('create-workflow').onclick = () => { void openWorkflow('create'); };
 element('open-workflow').onclick = () => { void openWorkflow('workflow'); };
 element('open-repository').onclick = () => { void openWorkflow('repository'); };
 element('create-fixture').onclick = () => {
@@ -271,8 +275,8 @@ element('reset').onclick = () => {
     setPrompting(true);
     try {
       await queue;
-      if (await confirm('Reset all workflow drafts?', 'Discard unapplied action settings and restore every workflow source file to its last loaded or saved text. Temporary simulation inputs and current disk changes are kept.', [{ id: 'reset', label: 'Reset workflow', style: 'danger' }, { id: 'cancel', label: 'Cancel' }]) !== 'reset') return;
-      await enqueue(async () => { const result = await bridge.reset(token()); if (!result.error) { unsent.clear(); process.discardDrafts(); } if (receive(result, true)) say('Workflow drafts restored to saved source.'); });
+      if (await confirm(state!.isNewWorkflow ? 'Discard the new workflow?' : 'Reset all workflow drafts?', state!.isNewWorkflow ? 'Discard this new workflow and all unsaved file edits, stop any conversation or live trial, and return to the welcome screen. Existing files stay unchanged.' : 'Discard unapplied action settings and restore every workflow source file to its last loaded or saved text. Temporary simulation inputs and current disk changes are kept.', [{ id: 'reset', label: 'Reset workflow', style: 'danger' }, { id: 'cancel', label: 'Cancel' }]) !== 'reset') return;
+      await enqueue(async () => { const result = await bridge.reset(token()); if (!result.error) { unsent.clear(); process.discardDrafts(); } if (receive(result, true)) { say(state ? 'Workflow drafts restored to saved source.' : 'New workflow discarded.'); if (!state) element('create-workflow').focus(); } });
     } finally { setPrompting(false); }
   })();
 };
@@ -301,12 +305,13 @@ element('discard').onclick = () => {
     try {
       await queue;
       const path = selected;
-      if (await confirm('Discard changes to this file?', `This restores the last loaded or saved text of ${path}. External disk changes are loaded only when you choose Reload file.`, [{ id: 'discard', label: 'Discard changes', style: 'danger' }, { id: 'cancel', label: 'Cancel' }]) !== 'discard') return;
+      const discardsWorkflow = state!.isNewWorkflow && path === state!.workflowPath;
+      if (await confirm(discardsWorkflow ? 'Discard the new workflow?' : 'Discard changes to this file?', discardsWorkflow ? 'Discard this new workflow and all unsaved file edits, stop any conversation or live trial, and return to the welcome screen. Existing files stay unchanged.' : `This restores the last loaded or saved text of ${path}. External disk changes are loaded only when you choose Reload file.`, [{ id: 'discard', label: 'Discard changes', style: 'danger' }, { id: 'cancel', label: 'Cancel' }]) !== 'discard') return;
       await enqueue(async () => {
         say('Discarding changes…');
         const result = await bridge.discard(token(), path);
         if (!result.error) unsent.delete(path);
-        if (receive(result, true)) say('Changes to this file discarded.');
+        if (receive(result, true)) { say(state ? 'Changes to this file discarded.' : 'New workflow discarded.'); if (!state) element('create-workflow').focus(); }
       });
     } finally { setPrompting(false); }
   })();

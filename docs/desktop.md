@@ -14,7 +14,15 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm desktop
 ```
 
-Choose **Open repository**, select the repository directory, then choose its
+Choose **Create workflow** and select a repository directory to start a valid
+unsaved draft at `.repo-chap/workflow.json`. The starter stops processing closed or merged PRs and otherwise waits for a
+signal. It requests no capabilities and references no files.
+Source, Process, Simulate and Discuss are available immediately. Creation and
+editing write nothing to the repository. **Save all** creates the metadata
+directory and workflow file explicitly. Discarding the new workflow returns to
+the welcome screen; cancelling a picker keeps the current draft.
+
+For existing files, choose **Open repository**, select the repository directory, then choose its
 workflow JSON. **Open workflow** selects a JSON file directly and uses its
 nearest Git repository as the root. For a plain directory, that shortcut uses
 the JSON file's directory. Use Open repository when references need a wider
@@ -59,7 +67,15 @@ external disk changes. Cancel leaves the draft in place. Opening another workflo
 and closing the window offer save, discard and cancel. Cancelling a native file
 picker retains the previous drafts even after choosing Discard and open.
 
-Saving stages files beside their destinations, then replaces each file by rename.
+The first workflow save checks that the repository and metadata directory still
+refer to the original directories and that the workflow destination is absent.
+A conflicting file or redirected path rejects the save without overwriting it.
+If setup or staging fails, the draft stays unsaved. An empty metadata directory
+created by that attempt is removed only if it still refers to that same directory.
+A pre-existing or nonempty directory is kept.
+
+Saving stages files beside their destinations, then replaces existing files by
+rename. New files are published atomically without replacing existing content.
 The workflow JSON is written last. A save across several files is not a filesystem
 transaction. If a file changes or an I/O operation fails after an earlier file
 was saved, the error reports the saved count and keeps the remaining drafts dirty.

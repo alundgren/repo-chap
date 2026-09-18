@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { watch, writeFileSync } from 'node:fs';
+import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -226,12 +227,15 @@ test('an external edit between file commits reports a partial save and retains t
   await session.edit(session.snapshot(), reviewPath, '# Saved first\n');
   await session.edit(session.snapshot(), workflowPath, workflowDraft);
   let changed = false;
-  const watcher = watch(dirname(join(root, reviewPath)), (_event, name) => {
-    if (!changed && name === 'review.md') {
+  const rename = fs.rename;
+  t.mock.method(fs, 'rename', async (from: Parameters<typeof fs.rename>[0], to: Parameters<typeof fs.rename>[1]) => {
+    await rename(from, to);
+    if (to === join(root, reviewPath)) {
       changed = true;
-      writeFileSync(join(root, workflowPath), original.files.find(file => file.path === workflowPath)!.text + '\n\n');
+      await writeFile(join(root, workflowPath), original.files.find(file => file.path === workflowPath)!.text + '\n\n');
     }
   });
+  syncBuiltinESMExports();
   try {
     await assert.rejects(session.save(session.snapshot()), /Saved 1 of 2 files/);
     assert.equal(changed, true);
@@ -239,5 +243,5 @@ test('an external edit between file commits reports a partial save and retains t
     assert.equal(fileText(session, workflowPath), workflowDraft);
     assert.equal(session.snapshot().files.find(file => file.path === workflowPath)!.dirty, true);
     assert.equal((await readdir(dirname(join(root, reviewPath)))).some(name => name.endsWith('.tmp')), false);
-  } finally { watcher.close(); }
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
 });
