@@ -123,7 +123,8 @@ if [[ $platform == linux ]]; then
   desktop_executable="$desktop_target/repo-chap-desktop"
 else
   packaged_desktop="$temporary/desktop/Repo Chap-darwin-$architecture/Repo Chap.app"
-  desktop_target="$prefix/share/repo-chap/Repo Chap.app"
+  mkdir -p "$HOME/Applications"
+  desktop_target="$HOME/Applications/Repo Chap.app"
   desktop_executable="$desktop_target/Contents/MacOS/repo-chap-desktop"
 fi
 
@@ -133,6 +134,33 @@ fi
 rm -rf "$desktop_target"
 mv "$packaged_desktop" "$desktop_target"
 ln -sfn "$desktop_executable" "$prefix/bin/repo-chap-desktop"
+
+# Installers cannot change the parent shell, so persist PATH for new terminals.
+path_files=()
+path_configured=no
+case ${SHELL:-} in
+  */zsh) path_files=("${ZDOTDIR:-$HOME}/.zshrc") ;;
+  */bash)
+    path_files=("$HOME/.bashrc")
+    if [[ -f $HOME/.bash_profile ]]; then
+      path_files+=("$HOME/.bash_profile")
+    elif [[ -f $HOME/.bash_login ]]; then
+      path_files+=("$HOME/.bash_login")
+    else
+      path_files+=("$HOME/.profile")
+    fi
+    ;;
+esac
+# Single quotes keep spaces, dollar signs, and command substitutions literal.
+quoted_bin=$(printf '%s' "$prefix/bin" | sed "s/'/'\\\\''/g")
+path_line="export PATH='$quoted_bin':\"\$PATH\""
+for path_file in ${path_files[@]+"${path_files[@]}"}; do
+  path_configured=yes
+  mkdir -p "$(dirname "$path_file")"
+  if ! grep -Fqx "$path_line" "$path_file" 2>/dev/null; then
+    printf '\n# Repo Chap CLI and desktop launcher\n%s\n' "$path_line" >> "$path_file"
+  fi
+done
 
 skill_input=
 skill_tty=no
@@ -165,7 +193,14 @@ fi
 
 printf '\nRepo Chap is installed and up to date.\n'
 if [[ :$PATH: != *":$prefix/bin:"* ]]; then
-  printf 'Add %s/bin to PATH, then open a new terminal.\n' "$prefix"
+  if [[ $path_configured == yes ]]; then
+    printf 'Open a new terminal, or run this in your current Bash/Zsh shell:\n  %s\n' "$path_line"
+  else
+    printf 'Add %s/bin to PATH in your shell configuration, then open a new terminal.\n' "$prefix"
+  fi
+fi
+if [[ $platform == darwin ]]; then
+  printf 'Desktop app: %s\n' "$desktop_target"
 fi
 printf 'From a configured repository, open the app with:\n'
 printf '  repo-chap-desktop --repo-root "$PWD" --workflow "$PWD/.repo-chap/workflow.json"\n'
