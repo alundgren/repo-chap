@@ -3,7 +3,7 @@ import { record } from './conversation-process.js';
 import type { ConversationRuntime } from './conversation.js';
 import { auditCodexTranscript, nativeOperationFailure } from './conversation-codex-transcript.js';
 
-const disabledFeatures = ['shell_tool', 'unified_exec', 'apps', 'plugins', 'hooks', 'multi_agent', 'multi_agent_v2', 'code_mode', 'code_mode_only', 'code_mode_host', 'view_image', 'image_generation', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'memories', 'skill_search', 'skill_mcp_dependency_install', 'goals', 'sleep_tool', 'tool_suggest', 'worktrees'];
+const disabledFeatures = ['shell_tool', 'unified_exec', 'apps', 'plugins', 'hooks', 'multi_agent', 'multi_agent_v2', 'code_mode', 'code_mode_only', 'view_image', 'image_generation', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'memories', 'skill_search', 'skill_mcp_dependency_install', 'goals', 'sleep_tool', 'tool_suggest', 'worktrees'];
 
 export async function runCodexConversation(runtime: ConversationRuntime): Promise<ConversationSessionIdentity> {
   const { request, probe, emit } = runtime;
@@ -14,7 +14,7 @@ export async function runCodexConversation(runtime: ConversationRuntime): Promis
   const model = record(catalog) && Array.isArray(catalog.models) ? catalog.models.find(value => record(value) && value.slug === request.profile.model) : undefined;
   const effort = request.profile.effort ?? model?.default_reasoning_level;
   if (!record(model) || !Array.isArray(model.supported_reasoning_levels) || !model.supported_reasoning_levels.some(level => record(level) && level.effort === effort)) throw new ConversationError('settings', 'The installed Codex catalog does not support the selected model and effort. Choose a supported profile.');
-  const options = { 'web_search': 'disabled', 'project_doc_max_bytes': 0, 'features.skip_host_skill_discovery': true, 'features.default_mode_request_user_input': true, ...Object.fromEntries(disabledFeatures.map(name => [`features.${name}`, false])) };
+  const options = { 'web_search': 'disabled', 'project_doc_max_bytes': 0, 'features.skip_host_skill_discovery': true, 'features.default_mode_request_user_input': true, 'features.code_mode_host': true, ...Object.fromEntries(disabledFeatures.map(name => [`features.${name}`, false])) };
   const peer = runtime.spawn(['app-server', '--stdio', '--strict-config', ...Object.entries(options).flatMap(([key, value]) => ['--config', `${key}=${JSON.stringify(value)}`])]);
   let session: ConversationSessionIdentity | undefined, turnId: string | undefined;
   let complete!: (session: ConversationSessionIdentity) => void;

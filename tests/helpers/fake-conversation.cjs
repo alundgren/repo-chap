@@ -21,6 +21,12 @@ const writeTranscript = () => {
   const item = (type, payload) => ({ type, payload });
   const lines = [item('session_meta', { id: mode === 'audit-session' ? 'other-session' : session, session_id: session, cwd: process.cwd(), cli_version: mode === 'audit-version' || mode === 'upgraded' ? '9.0.0-preview.1' : '0.154.0' }),
     item('event_msg', { type: 'task_started', turn_id: 'turn-1' }), item('turn_context', { turn_id: mode === 'audit-turn' ? 'other-turn' : 'turn-1', cwd: process.cwd() })];
+  if (['code-mode', 'author-code-mode', 'code-mode-incomplete', 'code-mode-unmatched-output'].includes(mode)) {
+    lines.push(item('response_item', { type: 'custom_tool_call', name: 'exec', call_id: 'exec-1', input: 'const result = await tools.read_context({}); text(result);' }));
+    if (mode !== 'code-mode-incomplete') lines.push(item('response_item', { type: 'custom_tool_call_output', call_id: mode === 'code-mode-unmatched-output' ? 'unknown-exec' : 'exec-1', output: [{ type: 'input_text', text: 'Script completed' }] }));
+    lines.push(item('response_item', { type: 'function_call', name: 'wait', call_id: 'wait-1', arguments: '{}' }));
+    lines.push(item('response_item', { type: 'function_call_output', call_id: 'wait-1', output: 'Script completed' }));
+  }
   if (mode === 'native-denial' || mode === 'author-native-denial') lines.push(item('response_item', { type: 'custom_tool_call', name: 'apply_patch', input: 'fictional denied edit' }));
   lines.push(item('response_item', { type: 'message', role: 'assistant', content: [] }));
   if (mode !== 'audit-incomplete') lines.push(item('event_msg', { type: 'task_complete', turn_id: 'turn-1' }));
@@ -119,6 +125,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (message.method === 'account/read') respond({ requiresOpenaiAuth: true, account: mode === 'login' ? null : { type: 'chatgpt' } });
     if (message.method === 'config/read') respond({ config: { instructions: mode === 'base-instructions' ? 'Fictional ambient instructions.' : null, model_instructions_file: mode === 'base-instructions-file' ? '/fictional/base-instructions.md' : null, mcp_servers: { 'ambient.with.dot': { enabled: true, url: 'https://example.invalid/mcp' } } }, origins: {} });
     if (message.method === 'skills/list') respond({ data: [{ cwd: message.params.cwds[0], skills: [{ path: '/fictional/ambient-skill/SKILL.md', enabled: true }], errors: mode === 'skills-error' ? [{ message: 'Cannot read a fictional skill.' }] : [] }] });
+    if ((message.method === 'thread/start' || message.method === 'thread/resume') && mode.includes('code-mode') && message.params.config['features.code_mode_host'] !== true) { process.exit(1); }
     if (message.method === 'thread/start' || message.method === 'thread/resume') respond({ thread: { id: session, path: transcript }, model: 'fictional-model', ...(mode === 'missing-instruction-sources' ? {} : { instructionSources: mode === 'ambient-instructions' ? ['/fictional/AGENTS.md'] : [] }) });
     if (message.method === 'turn/start') { currentInput = message.params.input[0].text; respond({ turn: { id: 'turn-1' } }); notify('turn/started', { turn: { id: 'turn-1' } }); void run(); }
     if ((message.id === 77 || message.id === 78) && pending) { pending = null; finish(); }

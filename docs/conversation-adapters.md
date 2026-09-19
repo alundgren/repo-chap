@@ -21,7 +21,11 @@ local account state without requesting a token refresh, and reads effective
 configuration before starting a thread. Each turn selects the requested model
 and effort. A changed model in the thread response stops the turn before sending
 the question. Dynamic tools use function registration and
-`item/tool/call` request/result protocol. Completed threads resume by ID.
+`item/tool/call` request/result protocol. The local Code Mode host remains enabled
+so models can call registered tools through `exec`. Transcript validation accepts
+paired `exec`/`wait` calls and their results while retaining native-operation
+checks. The wrapper dispatches app tools through the same validated handlers;
+JavaScript is not evaluated by Repo Chap. Completed threads resume by ID.
 The `default_mode_request_user_input` capability enables questions during
 ordinary conversation; without it Codex rejects the question tool internally.
 

@@ -95,3 +95,11 @@ record the tested head, package/fixture revision, provider and missing evidence.
 Changing the draft or PR head marks the old result stale. Cancellation stops
 work and preserves already visible edits. Offline simulation stays available
 without provider access.
+
+## Real CLI integration check
+
+Explicitly invoke `$real-cli-integration` to check desktop authoring with your
+installed Codex or Claude CLI and a selected model. This uses real model calls
+and a temporary fictional workflow. It checks draft edits, validation, session
+resume, Undo and Save. The skill does not run automatically or in CI.
+See [the skill](.agents/skills/real-cli-integration/SKILL.md) for the command.
