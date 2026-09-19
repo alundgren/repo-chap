@@ -1,0 +1,18 @@
+# Copy to the dedicated trusted private test repository and use its exact pilot label.
+name: Disposable pilot check
+on:
+  workflow_dispatch:
+    inputs:
+      pilot_label:
+        description: Exact rcp-RUN_ID label from the external pilot manifest
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ${{ inputs.pilot_label }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: bash ./pilot-check.sh

@@ -231,3 +231,7 @@ container/image. Logs stay in a private temporary directory or the external
 The suite uses fictional GitHub/provider responses and makes no paid model call.
 Real App access, provider entitlement, Slack permissions/rendering, private VM
 deployment and native macOS remain human pilot checks.
+
+For an opt-in disposable DigitalOcean host with tailnet diagnostics, a trusted
+repository Actions runner and verified cleanup, see the
+[disposable pilot guide](pilot-digitalocean.md).
