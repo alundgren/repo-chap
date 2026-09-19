@@ -76,7 +76,6 @@ export async function runCodexConversation(runtime: ConversationRuntime): Promis
     if (account.requiresOpenaiAuth !== false && !record(account.account)) throw new ConversationError('login', 'Codex is not logged in. Use the supported local Codex login, then start fresh.');
     const settings = await peer.request('config/read', { cwd: request.workingDirectory, includeLayers: false });
     if (!record(settings.config)) throw new ConversationError('settings', 'Cannot verify Codex conversation settings.');
-    if (settings.config.instructions != null || settings.config.model_instructions_file != null) throw new ConversationError('settings', 'Codex has custom base instructions enabled. Use an instruction-free CODEX_HOME without instructions or model_instructions_file settings. Your question has not been sent.');
     const mcp = settings.config.mcp_servers ?? {};
     if (!record(mcp)) throw new ConversationError('settings', 'Cannot verify Codex MCP configuration.');
     const disabledMcp = Object.fromEntries(Object.entries(mcp).map(([name, value]) => {
@@ -95,7 +94,6 @@ export async function runCodexConversation(runtime: ConversationRuntime): Promis
       ? await peer.request('thread/resume', { ...common, threadId: request.session.id, excludeTurns: true })
       : await peer.request('thread/start', { ...common, allowProviderModelFallback: false, ephemeral: false, dynamicTools: (request.tools ?? []).map(({ name, description, inputSchema }) => ({ type: 'function', name, description, inputSchema })) });
     if (thread.model !== request.profile.model) throw new ConversationError('settings', 'Codex changed the requested model. The conversation has stopped without sending the question.');
-    if (!Array.isArray(thread.instructionSources) || thread.instructionSources.length) throw new ConversationError('settings', 'Codex has ambient instructions enabled. Start Repo Chap with a separate instruction-free CODEX_HOME and log in there with the local Codex CLI. Your question has not been sent.');
     session = runtime.identify(thread.thread?.id); emit({ type: 'session', session });
     const turn = await peer.request('turn/start', { threadId: session.id, model: request.profile.model, effort, input: [{ type: 'text', text: runtime.input, text_elements: [] }] });
     if (!record(turn.turn) || typeof turn.turn.id !== 'string') throw new ConversationError('protocol', 'Codex did not start a supported turn.');

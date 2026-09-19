@@ -1,3 +1,4 @@
+import type { ProviderChoice, ProviderModel } from './provider-settings.js';
 import type { ConversationErrorCode, ConversationInputAnswer, ConversationInputRequest, ProviderProfile } from '@repo-chap/providers';
 import type { DocumentToken, EditorResult } from './protocol.js';
 
@@ -66,6 +67,8 @@ export interface ConversationResult extends EditorResult {
 }
 export interface ConversationBridge {
   current(): Promise<ConversationResult>;
+  models(provider: string): Promise<{ models: ProviderModel[]; error?: string }>;
+  saveProvider(documentSessionId: string, choice: ProviderChoice): Promise<ConversationResult>;
   loadProfiles(): Promise<ConversationResult>;
   selectProfile(documentSessionId: string, name: string): Promise<ConversationResult>;
   send(token: DocumentToken, prompt: string, selection: ConversationContextSelection): Promise<ConversationResult>;

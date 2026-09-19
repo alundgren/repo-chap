@@ -110,10 +110,22 @@
       <section id="conversation-view" hidden aria-label="Workflow conversation">
         <h2>Discuss this workflow</h2>
         <p class="secondary">Use your local CLI login. Sending a question contacts the selected model provider.</p>
+        <form id="provider-setup">
+          <div class="controls">
+            <label for="setup-provider">Provider</label>
+            <select id="setup-provider"><option value="">Choose a provider</option><option value="codex">Codex</option><option value="claude">Claude Code</option></select>
+            <label for="setup-model">Model</label>
+            <select id="setup-model" disabled><option value="">Choose a provider first</option></select>
+            <button id="setup-retry" type="button" hidden>Retry loading models</button>
+            <button id="setup-save" class="primary" type="submit" disabled>Save and use</button>
+          </div>
+          <p class="secondary">Uses your existing CLI login. Settings are saved privately on this computer for next time.</p>
+          <p id="setup-status" role="status"></p>
+        </form>
         <div class="conversation-setup controls">
-          <button id="conversation-load-profiles">Load provider settings</button>
-          <label for="conversation-profile">Provider and model</label>
-          <select id="conversation-profile"><option value="">Choose a provider profile</option></select>
+          <button id="conversation-load-profiles">Import settings file</button>
+          <label for="conversation-profile">Saved profiles</label>
+          <select id="conversation-profile"><option value="">Choose a saved profile</option></select>
           <button id="conversation-use-profile">Use profile</button>
         </div>
         <p id="conversation-selected-provider" class="secondary"></p>

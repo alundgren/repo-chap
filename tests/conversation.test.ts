@@ -141,33 +141,27 @@ for (const mode of ['native-edit', 'native-denial']) test(`Codex surfaces ${mode
   } finally { await f.cleanup(); }
 });
 
-test('Codex rejects ambient instructions before sending the question', async () => {
-  const f = await setup('codex', 'ambient-instructions');
-  try {
-    const result = await runConversationTurn(f.request);
-    assert.equal(result.status, 'error'); if (result.status === 'error') assert.equal(result.code, 'settings');
-    assert(!(await f.calls()).some(call => call.message?.method === 'turn/start'));
-    assert(!f.events.some(event => event.type === 'completed'));
-  } finally { await f.cleanup(); }
-});
-
-for (const mode of ['base-instructions', 'base-instructions-file']) test(`Codex rejects ${mode} before fresh or resumed dispatch`, async () => {
-  const f = await setup('codex');
+for (const mode of ['ambient-instructions', 'base-instructions', 'base-instructions-file', 'missing-instruction-sources']) test(`Codex permits ${mode} for fresh and resumed discussion`, async () => {
+  const f = await setup('codex', mode);
   try {
     const initial = await runConversationTurn(f.request);
     assert.equal(initial.status, 'completed'); if (initial.status !== 'completed') return;
-    const initialCalls = (await f.calls()).length;
-    await f.setMode(mode);
-    for (const session of [undefined, initial.session]) {
-      const result = await runConversationTurn({ ...f.request, session });
-      assert.equal(result.status, 'error'); if (result.status === 'error') assert.equal(result.code, 'settings');
+    const resumed = await runConversationTurn({ ...f.request, session: initial.session });
+    assert.equal(resumed.status, 'completed');
+    const calls = await f.calls();
+    assert.equal(calls.filter(call => call.message?.method === 'turn/start').length, 2);
+    for (const call of calls.filter(call => ['thread/start', 'thread/resume'].includes(call.message?.method))) {
+      assert.equal(call.message.params.sandbox, 'read-only');
+      assert.equal(call.message.params.approvalPolicy, 'never');
+      assert.equal(call.message.params.config.project_doc_max_bytes, 0);
+      assert.equal(call.message.params.config.mcp_servers['ambient.with.dot'].enabled, false);
+      assert.deepEqual(call.message.params.config.skills.config, [{ path: '/fictional/ambient-skill/SKILL.md', enabled: false }]);
+      assert.ok(call.message.params.developerInstructions.includes('Discuss the supplied Repo Chap workflow'));
     }
-    assert(!(await f.calls()).slice(initialCalls).some(call => ['thread/start', 'thread/resume', 'turn/start'].includes(call.message?.method)));
-    assert.equal(f.events.filter(event => event.type === 'completed').length, 1);
   } finally { await f.cleanup(); }
 });
 
-for (const mode of ['missing', 'truncated', 'session', 'version', 'turn', 'incomplete', 'ambiguous', 'oversize']) test(`Codex keeps the answer without resume when transcript evidence is ${mode}`, async () => {
+for (const mode of ['missing', 'truncated', 'session', 'turn', 'incomplete', 'ambiguous', 'oversize']) test(`Codex keeps the answer without resume when transcript evidence is ${mode}`, async () => {
   const f = await setup('codex', `audit-${mode}`);
   try {
     const result = await runConversationTurn(f.request);
@@ -194,4 +188,28 @@ test('conversation rejects oversized context before starting the provider', asyn
     assert.equal(result.status, 'error'); if (result.status === 'error') assert.equal(result.code, 'limit');
     assert.equal(await f.calls().catch(() => null), null);
   } finally { await f.cleanup(); }
+});
+
+for (const provider of ['codex', 'claude'] as const) test(`${provider} accepts CLI upgrades for new and resumed conversations`, async () => {
+  const f = await setup(provider);
+  try {
+    const first = await runConversationTurn(f.request);
+    assert.equal(first.status, 'completed');
+    if (first.status !== 'completed') return;
+    await f.setMode('upgraded');
+    const resumed = await runConversationTurn({ ...f.request, session: first.session });
+    assert.equal(resumed.status, 'completed');
+    if (resumed.status === 'completed') {
+      assert.equal(resumed.session.id, first.session.id);
+      assert.match(resumed.session.version, /9\.0\.0-preview\.1/);
+      assert.equal(resumed.session.turns, 2);
+    }
+    assert.equal((await runConversationTurn(f.request)).status, 'completed');
+  } finally { await f.cleanup(); }
+});
+
+test('Codex transcript version metadata does not restrict conversation compatibility', async () => {
+  const f = await setup('codex', 'audit-version');
+  try { assert.equal((await runConversationTurn(f.request)).status, 'completed'); }
+  finally { await f.cleanup(); }
 });
