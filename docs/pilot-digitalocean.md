@@ -65,7 +65,7 @@ VM administration access as the operator.
 Build the selected Repo Chap checkout with `vp install --frozen-lockfile` and
 `vp run build`. The pilot transfers that CLI bundle, identifies it by SHA-256,
 and invokes `deploy/install.sh` with the existing private systemd unit. It
-installs Node 24.21.0 using Vite+ 0.3.0, Codex CLI 0.116.0, Tailscale 1.94.2,
+installs Node 24.21.0 using Vite+ 0.3.0, Codex CLI 0.154.0, Tailscale 1.94.2,
 and Actions runner 2.337.0. The runner archive has a pinned SHA-256 check. Ubuntu
 security packages are installed through apt. Installed application versions and
 the CLI digest are recorded in the manifest. Review these pins before a new
@@ -178,6 +178,9 @@ Revoke the OAuth client and any unused keys in Tailscale administration. Revoke
 the dedicated Codex login, rotate the App key and optional Slack token if exposed,
 and revoke the DigitalOcean/GitHub operator tokens when no longer needed. These
 actions do not stop billing; still run cleanup or use the DigitalOcean console.
+
+For the complete operator scenario, fictional PR generator and no-credentials
+rehearsal, use the [guided pilot](pilot-guide.md).
 
 ## Two-job pilot fixture
 

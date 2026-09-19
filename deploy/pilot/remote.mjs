@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { PilotError } from './io.mjs';
 import { privateDirectory, privateRead, writePrivate } from './store.mjs';
 
-export const versions = { node: '24.21.0', vitePlus: '0.3.0', tailscale: '1.94.2', runner: '2.337.0', codex: '0.116.0', terraform: '1.14.7', digitalocean: '2.101.0' };
+export const versions = { node: '24.21.0', vitePlus: '0.3.0', tailscale: '1.94.2', runner: '2.337.0', codex: '0.154.0', terraform: '1.14.7', digitalocean: '2.101.0' };
 const runnerDigest = '70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613';
 export function bootstrap(run, key) {
   if (!/^tskey-auth-[a-zA-Z0-9-]+$/.test(key)) throw new PilotError('Invalid bootstrap key');
