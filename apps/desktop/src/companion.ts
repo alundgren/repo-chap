@@ -1,3 +1,4 @@
+import { repositoryIdentity } from './repository.ts';
 import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -19,7 +20,7 @@ interface Scenario {
 }
 const emptyScenario = (): Scenario => ({ input: null, packetsPath: null, packetsText: null, packetsError: null, simulation: null });
 const emptyState = (): CompanionState => ({
-  schemaVersion: 1, revision: 0, repositoryRoot: null, workflows: [], discoveryWarning: null,
+  schemaVersion: 1, revision: 0, repositoryRoot: null, repositoryName: null, worktreeName: null, workflows: [], discoveryWarning: null,
   workflowPath: null, workflow: null, packageDigest: null, files: [], changedPaths: [], diagnostics: [],
   view: 'overview', mode: 'tests', input: null, packetsPath: null, packetsError: null,
   simulation: null, simulationCurrent: false, guidance: null, targets: [],
@@ -70,7 +71,7 @@ export class CompanionSession {
         const workflowPath = command.workflowPath ? repositoryPath(root, command.workflowPath) : null;
         if (workflowPath) { repositoryPath(root, await realpath(resolve(root, workflowPath))); }
         const discovered = await discoverWorkflows(root, workflowPath ? [workflowPath] : []);
-        this.state = { ...emptyState(), revision: this.state.revision, repositoryRoot: root, workflows: discovered.workflows,
+        this.state = { ...emptyState(), revision: this.state.revision, repositoryRoot: root, ...await repositoryIdentity(root), workflows: discovered.workflows,
           discoveryWarning: discovered.warning, workflowPath: workflowPath ?? discovered.workflows.find(entry => entry.path === '.repo-chap/workflow.json')?.path ?? discovered.workflows[0]?.path ?? null };
         this.pkg = null; this.scenarios = { tests: emptyScenario(), pr: emptyScenario() };
         await this.readFiles();

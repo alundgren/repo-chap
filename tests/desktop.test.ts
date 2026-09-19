@@ -138,3 +138,25 @@ test('discovery respects Git ignores and outside symlinks, retains deleted selec
   assert.equal(state.workflow, null); assert.match(state.diagnostics.map(item => item.message).join(), /outside/);
   assert.equal((await session.execute({ schemaVersion: 1, command: { kind: 'select', workflowPath: f.workflow } })).ok, false);
 });
+
+test('repository identity distinguishes linked worktrees and plain directories', async t => {
+  const f = await companionFixture(); t.after(f.cleanup);
+  const repository = join(f.temporary, 'paperboat');
+  const worktree = join(f.temporary, 'agent-checkout');
+  await mkdir(repository);
+  const git = (...args: string[]) => execFileSync('git', ['-C', repository, ...args], { stdio: 'pipe' });
+  git('init');
+  git('-c', 'user.name=Willow', '-c', 'user.email=willow@example.invalid', 'commit', '--allow-empty', '-m', 'Initial commit');
+  git('worktree', 'add', '-b', 'agent-work', worktree);
+  const session = new CompanionSession();
+  let state = await execute(session, { kind: 'open', repositoryRoot: worktree });
+  assert.equal(state.repositoryName, 'paperboat');
+  assert.equal(state.worktreeName, 'agent-checkout');
+  state = await execute(session, { kind: 'open', repositoryRoot: repository });
+  assert.equal(state.repositoryName, 'paperboat');
+  assert.equal(state.worktreeName, null);
+  const plain = join(f.temporary, 'plain-directory'); await mkdir(plain);
+  state = await execute(session, { kind: 'open', repositoryRoot: plain });
+  assert.equal(state.repositoryName, 'plain-directory');
+  assert.equal(state.worktreeName, null);
+});

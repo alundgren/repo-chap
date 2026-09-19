@@ -31,6 +31,8 @@ export interface CompanionState {
   schemaVersion: 1;
   revision: number;
   repositoryRoot: string | null;
+  repositoryName?: string | null;
+  worktreeName?: string | null;
   workflows: WorkflowEntry[];
   discoveryWarning: string | null;
   workflowPath: string | null;

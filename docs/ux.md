@@ -18,7 +18,10 @@ text is 16px, secondary text 13.5px, section titles 22px, and the workflow title
 28px to 36px. Regular and semibold are the only weights. Primary text is #604939
 on #F2EADE; selected controls use #E0D2BD, fields #F9F6F0, and focus #3D5D71.
 
-The header has Open repository. The workflow picker shows names and relative
+The header shows the repository name and a separate worktree label for linked
+worktrees. The picker says Open repository before selection and Change repository
+afterward. Repository identity remains visible at narrow widths. The native
+Window menu provides macOS window management. The workflow picker shows names and relative
 paths, including multiple files with the same workflow ID. A native select is
 intentional for long labels and keyboard operation. New workflows appear as the
 agent saves them. An empty repository explains that the agent creates the file.
