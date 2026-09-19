@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "now": "2026-05-01T12:00:00Z",
+  "observations": [{ "facts": { "lifecycle": "closed" } }],
+  "expected": { "status": "closed", "selectedRuleIds": ["closed"], "proposedEffects": [] }
+}

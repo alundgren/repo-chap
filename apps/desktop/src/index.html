@@ -3,166 +3,78 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Repo Chap</title>
   <link rel="stylesheet" href="styles.css">
+  <script src="renderer.js" defer></script>
 </head>
 <body>
-  <a class="skip" href="#workspace">Skip to editor</a>
+  <a class="skip" href="#main">Skip to workflow</a>
   <header class="app-header">
     <span class="brand">Repo Chap</span>
-    <span class="secondary">Local workflow editor</span>
-    <div class="controls open-controls">
-      <button id="create-workflow" class="primary">Create workflow</button>
-      <button id="open-repository">Open repository</button>
-      <button id="open-workflow">Open workflow</button>
-    </div>
+    <span id="repository-name" class="secondary"></span>
+    <button id="open-repository">Open repository</button>
   </header>
-  <main>
+  <main id="main" tabindex="-1">
+    <p id="error" class="notice danger" role="alert" hidden></p>
     <section id="welcome" class="welcome">
-      <p class="eyebrow">Workflow files</p>
-      <h1>Create or edit your workflow.</h1>
-      <p>Create a workflow in your repository, or open an existing workflow JSON. Edit and simulate the draft, then choose Save all when you are ready.</p>
-      <p class="secondary">Files stay on this computer. Opening and editing makes no provider calls.</p>
+      <p class="eyebrow">Your workflow, in view</p>
+      <h1>Edit with your agent.<br>See what happens here.</h1>
+      <p>Open a repository, then use <code>$repo-chap-workflows</code> in your usual agent.</p>
     </section>
-    <section id="workspace" hidden aria-label="Workflow editor" tabindex="-1">
-      <div class="workspace-heading">
-        <div><p class="eyebrow">Workflow source</p><h1 id="workflow-name"></h1></div>
-        <p id="repository-path" class="path secondary"></p>
+    <section id="empty" class="welcome" hidden>
+      <h1>No workflows yet</h1>
+      <p>Ask your agent to create a Repo Chap workflow in this repository. It will appear here when saved.</p>
+    </section>
+    <section id="workspace" hidden>
+      <div class="workspace-heading" data-target="workflow">
+        <div><p id="workflow-path" class="eyebrow path"></p><h1 id="workflow-title"></h1></div>
+        <label class="workflow-picker">Workflow<select id="workflow-select" aria-label="Workflow"></select></label>
       </div>
-      <p id="read-only" class="notice" hidden></p>
-      <div class="editor-bar">
-        <div class="controls" role="group" aria-label="Editor view"><button id="process-tab" aria-pressed="false">Process</button><button id="source-tab" aria-pressed="true">Source</button><button id="simulation-tab" aria-pressed="false">Simulate</button><button id="conversation-tab" aria-pressed="false">Discuss</button><button id="trial-tab" aria-pressed="false">Live trial</button></div>
-        <p id="dirty-state" role="status" aria-live="polite">All changes saved</p>
-        <div class="controls">
-          <button id="reload">Reload file</button>
-          <button id="discard" class="danger">Discard changes</button>
-          <button id="undo">Undo draft operation</button>
-          <button id="reset" class="danger">Reset workflow</button>
-          <button id="export">Export JSON</button>
-          <button id="save" class="primary">Save all</button>
-        </div>
+      <div class="view-bar">
+        <nav aria-label="Workflow views">
+          <button id="overview-tab" aria-current="page">Overview</button>
+          <button id="simulation-tab">Simulate</button>
+        </nav>
+        <span id="validation-status" class="secondary"></span>
       </div>
-      <section id="trial-controls" hidden aria-label="Live trial controls"><div class="conversation-state"><p id="trial-progress" role="status" aria-live="polite"></p><button id="trial-cancel">Cancel trial</button></div></section>
-      <section id="conversation-controls" hidden aria-label="Conversation controls">
-        <div class="conversation-state"><p id="conversation-status" role="status" aria-live="polite">No provider selected</p><div class="controls"><button id="conversation-cancel" disabled>Cancel turn</button><button id="conversation-fresh" disabled>Fresh session</button></div></div>
-        <p id="conversation-failure" class="notice danger" hidden></p>
-        <p id="conversation-recovery" class="notice" hidden>Start a fresh session to continue. Earlier messages stay visible.</p>
-      </section>
-      <p id="conversation-error" class="notice danger" role="alert" hidden></p>
-      <p id="authoring-summary" class="notice" hidden></p>
-      <section id="conversation-input" aria-label="Provider input request" hidden></section>
-      <section id="process-view" hidden aria-label="Ordered process">
-        <p id="process-unavailable" class="notice" hidden>Repair the source or reset the workflow to use visual editing.</p>
-        <div id="process-content" class="process-layout">
-          <div><h2>First matching rule wins</h2><p class="secondary">Move a rule to change its priority. IDs stay the same.</p><ol id="rules" class="rules"></ol><p id="otherwise"></p></div>
-          <aside class="inspector" aria-label="Action inspector"><label for="action-select">Inspect action</label><select id="action-select"></select><div id="action-fields"></div><div class="controls"><button id="apply-settings" hidden>Apply settings</button><button id="discard-settings" class="danger" hidden>Discard settings</button></div></aside>
+      <p id="discovery-warning" class="notice" hidden></p>
+      <div id="diagnostics" role="status" hidden></div>
+      <section id="overview">
+        <p id="recent-changes" class="secondary" hidden></p>
+        <div id="workflow-content" class="workflow-layout">
+          <section data-target="rules">
+            <div class="section-heading"><h2>When a PR changes</h2><span class="secondary">First matching rule runs</span></div>
+            <ol id="rules" class="rules"></ol>
+            <p id="otherwise" class="fallback"></p>
+          </section>
+          <aside><h2>Actions</h2><div id="actions" class="actions"></div>
+            <details id="workflow-settings"><summary>Timing and limits</summary><div id="settings"></div></details>
+            <details id="workflow-files" data-target="files"><summary>Workflow files</summary><ul id="files"></ul></details>
+          </aside>
         </div>
       </section>
-      <div id="source-view" class="editor-layout">
-        <nav class="files" aria-label="Workflow files"><h2>Files</h2><div id="file-list"></div><p class="secondary file-help">Explicit references only. Switching files keeps your drafts.</p></nav>
-        <div class="source-pane">
-          <div class="file-heading"><label id="source-label" for="source">Source</label><span id="file-state" class="secondary"></span></div>
-          <p id="external" class="notice" hidden>This file changed on disk. Your draft has been kept. Use Reload file to read the disk version before saving.</p>
-          <p id="file-error" class="notice danger" hidden></p>
-          <textarea id="source" aria-describedby="source-help" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea>
-          <p id="source-help" class="secondary">Plain source. Save all writes the exact text of each changed file.</p>
-        </div>
-      </div>
-      <section id="simulation-view" hidden aria-label="Offline simulation">
-        <h2>Simulate a saved observation</h2>
-        <p class="secondary">Load fictional or explicitly captured private JSON. Simulation uses action stubs and fake time. No code, model or remote effect runs.</p>
-        <div class="controls simulation-controls"><button id="load-fixture">Load fixture</button><button id="load-packets">Load decision packets</button><button id="simulate" class="primary">Run simulation</button></div>
-        <p id="fixture-name" class="secondary"></p><p id="packets-name" class="secondary"></p>
-        <div class="controls clock-controls"><label for="fake-clock">Fake time, UTC</label><input id="fake-clock" type="text" placeholder="2026-05-01T12:00:00Z" spellcheck="false"><button id="set-clock">Set time</button><button id="reset-fixture">Reset fixture</button></div>
-        <p class="secondary">Time edits are temporary. Reset fixture restores the loaded input. Save all writes only workflow source files.</p>
-        <details><summary>Inspect fixture and action stubs</summary><pre id="fixture-preview"></pre></details>
-        <details><summary>Inspect complete decision packet input</summary><pre id="packets-preview"></pre></details>
-        <p id="simulation-blocked" class="notice" hidden>Fix the workflow validation errors in Source, or reset the workflow, before running simulation or exporting JSON.</p>
-        <section class="fixture-authoring" aria-label="Authored tests">
-          <h2>Test fixtures</h2><p class="secondary">Create or open a repository fixture, edit its JSON and expectations in Source, then run the draft. Save all writes fixture changes explicitly.</p>
-          <div class="controls"><label for="new-fixture-path">New fixture path</label><input id="new-fixture-path" value="test-fixture.json" spellcheck="false"><button id="create-fixture">Create test fixture</button><button id="open-test-fixture">Open test fixture</button></div>
-          <div class="controls"><label for="test-fixture">Fixture to test</label><select id="test-fixture"></select><button id="run-test">Run offline test</button></div>
-        </section>
-        <div id="simulation-result" aria-live="polite"></div>
-      </section>
-      <section id="trial-view" hidden aria-label="Read-only live trial">
-        <h2>Try this draft on a PR</h2>
-        <p class="notice">Read-only live analysis. Start reads GitHub evidence, reads local Git objects, then calls the selected provider for classification and review. A final GitHub read checks freshness.</p>
-        <p class="secondary">No repair, checks, push, review publication, Slack send or merge runs. The workflow is not saved or activated. Provider usage may be charged to your account.</p>
-        <p id="trial-current-draft" class="path secondary"></p>
-        <div class="trial-fields"><label>GitHub repository<input id="trial-repository" placeholder="reef-labs/paperboat" spellcheck="false" maxlength="256"></label><label>PR number<input id="trial-pr" type="number" min="1" max="2147483647" placeholder="42"></label></div>
-        <div class="controls"><button id="trial-load-profiles">Load provider settings</button><label for="trial-profile">Provider and model</label><select id="trial-profile"><option value="">Choose a provider profile</option></select></div>
-        <div class="controls"><button id="trial-source">Choose local Git source</button><p id="trial-source-path" class="path secondary"></p></div>
-        <p class="secondary">The local repository must contain the PR head, target base and common history. Prepare them with your normal Git tools. This trial never fetches or checks out files.</p>
-        <p id="trial-proposal" class="notice" hidden></p>
-        <div class="controls"><button id="trial-prepare">Prepare proposal</button><button id="trial-start" class="primary">Start read-only trial</button></div>
-        <p id="trial-error" class="notice danger" role="alert" hidden></p>
-        <p id="trial-empty" class="secondary">No retained trial for this workflow. Offline simulation remains available in Simulate.</p>
-        <section id="trial-results" aria-label="Retained live trial" hidden>
-          <label for="trial-history">Retained trial</label><select id="trial-history"></select>
-          <div id="trial-result"></div>
-          <div class="controls"><button id="trial-refresh">Refresh GitHub evidence</button><button id="trial-export">Save as offline fixture</button></div>
-          <p class="secondary">Refresh performs GitHub reads only. Fixture export writes a copy and provenance outside Git. The app retains the latest 10 private trials across workspaces.</p>
-          <p id="trial-exported" class="notice path" hidden></p>
-        </section>
-      </section>
-      <section id="conversation-view" hidden aria-label="Workflow conversation">
-        <h2>Discuss this workflow</h2>
-        <p class="secondary">Use your local CLI login. Sending a question contacts the selected model provider.</p>
-        <form id="provider-setup">
-          <div class="controls">
-            <label for="setup-provider">Provider</label>
-            <select id="setup-provider"><option value="">Choose a provider</option><option value="codex">Codex</option><option value="claude">Claude Code</option></select>
-            <label for="setup-model">Model</label>
-            <select id="setup-model" disabled><option value="">Choose a provider first</option></select>
-            <button id="setup-retry" type="button" hidden>Retry loading models</button>
-            <button id="setup-save" class="primary" type="submit" disabled>Save and use</button>
+      <section id="simulation" data-target="simulation" hidden>
+        <div class="simulation-controls" data-target="inputs">
+          <div class="mode-picker" role="group" aria-label="Simulation data">
+            <button id="tests-mode" aria-pressed="true">Test fixtures</button>
+            <button id="pr-mode" aria-pressed="false">Real PRs</button>
           </div>
-          <p class="secondary">Uses your existing CLI login. Settings are saved privately on this computer for next time.</p>
-          <p id="setup-status" role="status"></p>
-        </form>
-        <div class="conversation-setup controls">
-          <button id="conversation-load-profiles">Import settings file</button>
-          <label for="conversation-profile">Saved profiles</label>
-          <select id="conversation-profile"><option value="">Choose a saved profile</option></select>
-          <button id="conversation-use-profile">Use profile</button>
+          <button id="choose-input">Choose fixture</button>
+          <button id="simulate" class="primary" disabled>Simulate</button>
         </div>
-        <p id="conversation-selected-provider" class="secondary"></p>
-        <details class="conversation-context">
-          <summary>Context for the next question</summary>
-          <p id="conversation-context-summary"></p>
-          <label class="conversation-rule-label" for="conversation-rule">Rule to discuss</label>
-          <select id="conversation-rule"><option value="">Whole workflow</option></select>
-          <p class="secondary">The current workflow JSON is included. Choose its loaded Markdown references below.</p>
-          <div id="conversation-markdown"></div><p id="conversation-markdown-empty" class="secondary">No Markdown references are loaded.</p>
-          <label class="conversation-choice"><input id="conversation-simulation" type="checkbox" checked><span>Include the latest completed simulation</span></label>
-          <p id="conversation-simulation-detail" class="secondary"></p><label class="conversation-choice"><input id="conversation-live-trial" type="checkbox" checked><span>Include the latest finished live trial and its provenance</span></label>
+        <p id="input-summary" class="input-summary"></p>
+        <p id="input-note" class="secondary"></p>
+        <p id="input-error" class="notice danger" role="status" hidden></p>
+        <details id="input-details"><summary>Input details</summary><pre id="input-json"></pre>
+          <button id="choose-packets">Choose Slack packets</button><p id="packets-summary" class="secondary path"></p>
         </details>
-        <p id="conversation-omissions" class="secondary" hidden></p>
-        <p id="conversation-empty" class="conversation-empty">Ask why a rule behaves as it does, or discuss a simulation result.</p>
-        <div id="conversation-history" role="region" aria-label="Conversation history" tabindex="0"></div>
-        <div class="conversation-compose">
-          <label for="conversation-question">Your question</label>
-          <textarea id="conversation-question" rows="3" placeholder="Why is this rule waiting?" aria-describedby="conversation-compose-help"></textarea>
-          <div class="controls"><button id="conversation-send" class="primary" disabled>Send question</button><p id="conversation-compose-help" class="secondary">Ctrl/Cmd+Enter to send · 16 KiB maximum</p></div>
-        </div>
-        <p class="secondary conversation-history-help">The assistant can stage visible source and fixture edits and run offline tests. Save all remains explicit. It cannot start a live trial or send remote effects. Visible history lasts until you leave this workflow or close the app.</p>
+        <div id="result" data-target="result" hidden></div>
       </section>
-      <details class="authoring-receipts"><summary>Authoring operations</summary><p class="secondary">Applied edits remain here after cancellation or provider failure. Undo reverses the latest draft operation. Save, reload, discard and reset start a new undo history.</p><div id="authoring-activity" aria-live="polite"></div></details>
-      <details class="changes"><summary id="changes-title">Changes against saved source</summary><p id="changes-note" class="secondary"></p><ul id="semantic-changes"></ul></details>
-      <section class="validation" aria-label="Validation">
-        <div class="validation-heading"><h2 id="validation-title">Validation</h2><span id="revision" class="secondary"></span></div>
-        <ul id="diagnostics"></ul>
-        <p id="validation-ok" class="success">The captured workflow and referenced files are valid.</p>
-      </section>
+      <footer>Files refresh as your agent edits. Simulation runs locally and sends nothing.</footer>
     </section>
-    <p id="message" role="status" aria-live="polite"></p>
   </main>
-  <footer><span id="footer-mode">Local files · Offline simulation</span><span id="footer-detail">JSON and Markdown</span></footer>
-  <dialog id="confirmation" aria-labelledby="confirm-title" aria-describedby="confirm-detail">
-    <h2 id="confirm-title"></h2><p id="confirm-detail"></p><div id="confirm-actions" class="controls"></div>
-  </dialog>
-  <script src="renderer.js"></script>
+  <aside id="guidance" role="status" hidden><span id="guidance-text"></span><button id="dismiss-guidance" aria-label="Dismiss guidance">×</button></aside>
+  <svg id="guidance-arrow" aria-hidden="true" hidden><defs><marker id="arrow-tip" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z"></path></marker></defs><path id="arrow-line" marker-end="url(#arrow-tip)"></path></svg>
 </body>
 </html>

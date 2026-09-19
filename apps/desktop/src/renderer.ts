@@ -1,339 +1,258 @@
-import type { DocumentSnapshot, DocumentToken, EditorBridge, EditorResult, OpenKind } from './protocol.js';
-import { processView } from './process-view.ts';
-import { trialView } from './trial-view.ts';
-import type { TrialBridge } from './trial-protocol.js';
-import { conversationView } from './conversation-view.ts';
-import type { ConversationBridge } from './conversation-protocol.js';
+import type { CompanionCommand, CompanionResponse, CompanionState, Guidance } from '@repo-chap/companion';
+import type { Condition, ConditionTrace } from '@repo-chap/workflow';
+import type { CompanionBridge } from './protocol.js';
 
-declare global { interface Window { repoChap: EditorBridge; repoChapConversation: ConversationBridge; repoChapTrial: TrialBridge } }
+declare global { interface Window { repoChap: CompanionBridge } }
 const bridge = window.repoChap;
-const element = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
-const source = element<HTMLTextAreaElement>('source');
-let state: DocumentSnapshot | null = null;
-let selected = '';
-let queue = Promise.resolve();
-let queuedEdits = 0;
-let prompting = false;
-let view: 'source' | 'process' | 'simulation' | 'conversation' | 'trial' = 'source';
-const unsent = new Map<string, string>();
-const basename = (path: string): string => path.split('/').at(-1)!;
-function referenceName(path: string): string {
-  if (path === state!.workflowPath) return basename(path);
-  const base = state!.workflowPath.split('/').slice(0, -1);
-  const parts = path.split('/');
-  while (base.length && parts.length && base[0] === parts[0]) { base.shift(); parts.shift(); }
-  return [...base.map(() => '..'), ...parts].join('/');
+const element = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
+const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text = '', className = ''): HTMLElementTagNameMap[K] => {
+  const result = document.createElement(tag); result.textContent = text; result.className = className; return result;
+};
+let state: CompanionState | null = null;
+let busy = false, workflowKey = '', resultKey = '', guidanceId = '';
+let dismissedGuidanceId = '';
+let activeGuidance: Guidance | null = null;
+const labels: Record<string, string> = {
+  'facts.lifecycle': 'PR status', 'facts.draft': 'Draft PR', 'facts.evidenceComplete': 'Complete evidence', 'facts.young': 'New PR',
+  'facts.headDebouncing': 'Recent commits', 'facts.conflict': 'Merge conflict', 'facts.unaddressedReview': 'Review to address',
+  'facts.externalReviewPending': 'Reviewer working', 'memory.classificationCurrent': 'Classification current',
+  'memory.reviewCurrent': 'Review current', 'memory.packetCurrent': 'Handoff current', 'memory.repairSuppressed': 'Repair paused',
+};
+function conditionText(condition: Condition): string {
+  if ('field' in condition) {
+    const name = labels[condition.field] ?? condition.field;
+    if (typeof condition.value === 'boolean') return `${name}${(condition.op === 'eq') === condition.value ? '' : ' is false'}`;
+    return `${name} ${condition.op === 'eq' ? 'is' : 'is not'} ${condition.value}`;
+  }
+  if ('not' in condition) return `Not (${conditionText(condition.not)})`;
+  return ('all' in condition ? condition.all : condition.any).map(item => 'field' in item ? conditionText(item) : `(${conditionText(item)})`).join('all' in condition ? ' and ' : ' or ');
 }
-const token = (): DocumentToken => ({ sessionId: state!.sessionId, revision: state!.revision });
-const dirty = (): boolean => !!state?.files.some(file => file.dirty) || unsent.size > 0 || process.pending() > 0;
-function say(text: string, error = false): void {
-  const message = element('message');
-  message.textContent = text;
-  message.classList.toggle('danger', error);
+const actionLabels: Record<string, string> = {
+  'control.close': 'Finish', 'control.wait_signal': 'Wait for a change', 'control.wait_refresh': 'Refresh evidence',
+  'control.wait_debounce': 'Wait for commits to settle', 'control.wait_reviewer': 'Wait for reviewer',
+  'agent.resolve_conflict': 'Resolve conflict', 'agent.address_review': 'Address review', 'agent.classify': 'Classify PR', 'agent.review': 'Review PR',
+  'checks.validate_candidate': 'Test candidate', 'github.push_candidate': 'Push tested commit', 'github.resolve_eligible_threads': 'Resolve addressed threads',
+  'github.publish_review': 'Publish review', 'github.set_labels': 'Set labels', 'human.publish_packet': 'Hand off to a person',
+};
+function detailList(entries: [string, string][]): HTMLElement {
+  const list = node('dl');
+  for (const [label, value] of entries) list.append(node('dt', label), node('dd', value));
+  return list;
 }
-const process = processView(bridge, perform, () => state, message => { say(message); render(); });
-const conversation = conversationView(window.repoChapConversation, perform, () => state);
-bridge.onAuthoringRequest(id => {
-  void (async () => {
-    const captured = await perform(() => bridge.applyAuthoringRequest(id, token()));
-    if (captured) await bridge.confirmAuthoringDisplay(id);
-    else await bridge.rejectAuthoringRequest(id, [...process.pendingValues(), ...[...unsent].map(([field, value]) => ({ field, value }))]);
-  })();
-});
-
-const trial = trialView(window.repoChapTrial, perform, () => state);
-
-async function perform(operation: () => Promise<EditorResult>, message?: string, captureInspector = true): Promise<boolean> {
-  if ((prompting && captureInspector) || !state) return false;
-  if (captureInspector && !await process.flush()) return false;
-  const previous = document.activeElement as HTMLElement | null;
-  const focusId = previous?.id, focusKey = previous?.dataset.focus;
-  const wasPrompting = prompting;
-  setPrompting(true);
-  say('');
+async function perform(operation: () => Promise<CompanionResponse | null>): Promise<void> {
+  if (busy) return;
+  busy = true; element('error').hidden = true; renderControls();
   try {
-    return await enqueue(async () => {
-      if (unsent.size) { say('Correct or discard the unaccepted source text before continuing.', true); return false; }
-      const ok = receive(await operation(), true);
-      if (ok && message) say(message);
-      return ok;
-    });
-  } finally {
-    setPrompting(wasPrompting);
-    if (focusId) document.getElementById(focusId)?.focus();
-    else if (focusKey) [...document.querySelectorAll<HTMLElement>('[data-focus]')].find(item => item.dataset.focus === focusKey)?.focus();
-  }
+    const response = await operation();
+    if (response?.ok) render(response.state);
+    else if (response) { element('error').textContent = response.error; element('error').hidden = false; }
+  } catch (error) { element('error').textContent = error instanceof Error ? error.message : 'The desktop operation failed.'; element('error').hidden = false; }
+  finally { busy = false; renderControls(); }
 }
+function command(command: CompanionCommand): void { void perform(() => bridge.command(command)); }
+element('open-repository').onclick = () => { void perform(() => bridge.chooseRepository()); };
+element<HTMLSelectElement>('workflow-select').onchange = event => command({ kind: 'select', workflowPath: (event.target as HTMLSelectElement).value });
+element('overview-tab').onclick = () => command({ kind: 'show', view: 'overview' });
+element('simulation-tab').onclick = () => command({ kind: 'show', view: 'simulation' });
+element('tests-mode').onclick = () => command({ kind: 'show', mode: 'tests' });
+element('pr-mode').onclick = () => command({ kind: 'show', mode: 'pr' });
+element('choose-input').onclick = () => { void perform(() => bridge.chooseInput(state!.mode)); };
+element('choose-packets').onclick = () => { void perform(() => bridge.choosePackets()); };
+element('simulate').onclick = () => command({ kind: 'simulate' });
+function dismissGuidance(): void {
+  dismissedGuidanceId = activeGuidance?.id ?? '';
+  clearGuidance();
+  void bridge.command({ kind: 'clear' }).then(response => { if (response.ok) render(response.state); }).catch(() => {});
+}
+element('dismiss-guidance').onclick = dismissGuidance;
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && activeGuidance) dismissGuidance(); });
 
-function render(replaceSource = false): void {
-  element('welcome').hidden = !!state;
-  element('workspace').hidden = !state;
-  if (!state) { document.title = 'Repo Chap'; return; }
-  for (const name of ['source', 'process', 'simulation', 'conversation', 'trial'] as const) {
-    element(`${name}-view`).hidden = view !== name;
-    element(`${name}-tab`).setAttribute('aria-pressed', String(view === name));
+function renderControls(): void {
+  for (const id of ['open-repository', 'workflow-select', 'overview-tab', 'simulation-tab', 'tests-mode', 'pr-mode', 'choose-input', 'choose-packets']) element<HTMLButtonElement>(id).disabled = busy;
+  element<HTMLButtonElement>('simulate').disabled = busy || !state?.workflow || !state.input?.fixture || !!state.input.error || !!state.packetsError;
+}
+function render(next: CompanionState): void {
+  if (state && next.revision < state.revision) return;
+  const navigated = state?.view !== next.view || state?.workflowPath !== next.workflowPath || state?.repositoryRoot !== next.repositoryRoot;
+  state = next;
+  element('welcome').hidden = !!state.repositoryRoot;
+  element('empty').hidden = !state.repositoryRoot || !!state.workflowPath;
+  element('workspace').hidden = !state.workflowPath;
+  element('repository-name').textContent = state.repositoryRoot?.split('/').at(-1) ?? '';
+  element('repository-name').title = state.repositoryRoot ?? '';
+  element('workflow-title').textContent = state.workflow?.id ?? state.workflowPath?.split('/').at(-1) ?? '';
+  element('workflow-path').textContent = state.workflowPath ?? '';
+  const picker = element<HTMLSelectElement>('workflow-select');
+  const options = JSON.stringify(state.workflows);
+  if (picker.dataset.options !== options) {
+    picker.replaceChildren(...state.workflows.map(entry => { const option = node('option', `${entry.id ?? 'Workflow'} · ${entry.path}`); option.value = entry.path; return option; }));
+    picker.dataset.options = options;
   }
-  element('reload').hidden = view !== 'source';
-  element('discard').hidden = view !== 'source';
-  element<HTMLButtonElement>('undo').disabled = prompting || !state.undoCount;
-  const applied = state.authoringReceipts.filter(receipt => receipt.status === 'applied');
-  element('authoring-summary').hidden = !applied.length;
-  element('authoring-summary').textContent = `${applied.length} authoring operation(s) applied in this session: ${[...new Set(applied.flatMap(receipt => receipt.changedPaths))].join(', ')}. ${dirty() ? 'Unsaved drafts are present.' : 'All changes are saved.'} ${state.undoCount ? `Undo can reverse ${state.undoCount} draft operation(s).` : 'No draft operations are available to undo.'} See Authoring operations for historical receipts.`;
-  element('authoring-activity').replaceChildren(...state.authoringReceipts.toReversed().map(receipt => {
-    const item = document.createElement('p');
-    item.textContent = `${receipt.kind}: ${receipt.message} ${receipt.changedPaths.join(', ')}${receipt.display === 'unconfirmed' ? ' · Display unconfirmed' : ''} · Revision ${receipt.after.revision}`;
-    item.className = receipt.status === 'rejected' ? 'notice' : 'secondary'; return item;
+  picker.value = state.workflowPath ?? '';
+  for (const view of ['overview', 'simulation'] as const) {
+    element(view).hidden = state.view !== view;
+    if (state.view === view) element(`${view}-tab`).setAttribute('aria-current', 'page');
+    else element(`${view}-tab`).removeAttribute('aria-current');
+  }
+  element('validation-status').textContent = state.diagnostics.length ? 'Needs a fix' : 'Workflow valid';
+  element('validation-status').className = `secondary ${state.diagnostics.length ? 'danger' : 'success'}`;
+  element('discovery-warning').textContent = state.discoveryWarning ?? ''; element('discovery-warning').hidden = !state.discoveryWarning;
+  const diagnostics = element('diagnostics'); diagnostics.hidden = !state.diagnostics.length;
+  const list = node('ul');
+  for (const item of state.diagnostics) list.append(node('li', `${item.path}: ${item.message}`));
+  diagnostics.replaceChildren(node('p', 'Your agent can fix these files. The view will refresh when they are saved.', 'danger'), list);
+  element('workflow-content').hidden = !state.workflow;
+  element('recent-changes').hidden = !state.changedPaths.length;
+  element('recent-changes').textContent = `Updated ${state.changedPaths.join(', ')}`;
+  const key = JSON.stringify([state.workflowPath, state.workflow, state.files]);
+  if (key !== workflowKey) { workflowKey = key; renderWorkflow(); }
+  renderSimulation(); renderControls();
+  if (navigated) window.scrollTo({ top: 0, behavior: 'instant' });
+  renderGuidance(state.guidance);
+}
+function renderWorkflow(): void {
+  const workflow = state?.workflow;
+  if (!workflow) return;
+  const opened = new Set([...element('actions').querySelectorAll<HTMLDetailsElement>('details[open]')].map(item => item.dataset.target));
+  element('rules').replaceChildren(...workflow.rules.map(rule => {
+    const item = node('li'); item.dataset.target = `rule:${rule.id}`;
+    const title = node('div', '', 'rule-title'); title.append(node('strong', rule.id), node('span', `→ ${rule.action}`, 'rule-destination'));
+    item.append(title, node('p', conditionText(rule.when), 'rule-condition')); return item;
   }));
-  element<HTMLButtonElement>('reset').disabled = prompting || !dirty();
-  element<HTMLButtonElement>('export').disabled = prompting || queuedEdits > 0 || !!unsent.size || !!state.diagnostics.length || !!state.readOnlyReason;
-  if (!state.files.some(file => file.path === selected)) selected = state.workflowPath;
-  const file = state.files.find(file => file.path === selected)!;
-  element('workflow-name').textContent = basename(state.workflowPath);
-  element('repository-path').textContent = state.repositoryRoot;
-  element('read-only').hidden = !state.readOnlyReason;
-  element('read-only').textContent = state.readOnlyReason;
-  const dirtyFiles = state.files.filter(file => file.dirty || unsent.has(file.path)).length;
-  element('dirty-state').textContent = queuedEdits ? 'Validating draft…' : dirty() ? [dirtyFiles ? `${dirtyFiles} unsaved file(s)` : '', process.pending() ? `${process.pending()} unsaved action setting(s)` : ''].filter(Boolean).join(' · ') : 'All changes saved';
-  element<HTMLButtonElement>('save').disabled = prompting || !!state.readOnlyReason || !dirty() || !!state.diagnostics.length;
-  element<HTMLButtonElement>('discard').disabled = !file.dirty && !unsent.has(selected);
-  element<HTMLButtonElement>('reload').disabled = false;
-  element('source-label').textContent = selected;
-  element('file-state').textContent = state.readOnlyReason ? 'Read-only' : file.dirty || unsent.has(selected) ? 'Unsaved' : 'Saved';
-  const readOnly = prompting || !!state.readOnlyReason || !!file.error;
-  if (source.readOnly !== readOnly) source.readOnly = readOnly;
-  source.setAttribute('aria-busy', String(prompting));
-  if (replaceSource) source.value = unsent.get(selected) ?? file.text;
-  element('external').hidden = !file.external;
-  element('file-error').hidden = !file.error;
-  element('file-error').textContent = file.error;
-  const list = element('file-list');
-  const focusedFile = list.contains(document.activeElement) ? document.activeElement?.getAttribute('aria-label') : null;
-  const listKey = JSON.stringify([selected, state.files.map(item => [item.path, item.dirty, item.external, item.error, unsent.has(item.path)])]);
-  const orderedFiles = [...state.files].sort((a, b) => Number(b.path === state!.workflowPath) - Number(a.path === state!.workflowPath));
-  if (list.dataset.key !== listKey) list.replaceChildren(...orderedFiles.map(item => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.setAttribute('aria-current', item.path === selected ? 'page' : 'false');
-    button.setAttribute('aria-label', item.path);
-    button.title = item.path;
-    const title = document.createElement('span');
-    title.textContent = referenceName(item.path);
-    const detail = document.createElement('span');
-    detail.className = 'file-kind';
-    detail.textContent = item.error ? 'Cannot read' : item.external ? 'Changed on disk' : item.dirty || unsent.has(item.path) ? 'Unsaved' : item.path === state!.workflowPath ? 'Workflow' : item.kind === 'fixture' ? 'Test fixture' : 'Referenced file';
-    button.append(title, detail);
-    button.addEventListener('click', () => { selected = item.path; render(true); source.focus(); });
-    return button;
+  element('otherwise').textContent = `Otherwise → ${workflow.otherwise}`;
+  element('actions').replaceChildren(...Object.entries(workflow.actions).map(([id, action]) => {
+    const detail = node('details'); detail.dataset.target = `action:${id}`; detail.open = opened.has(detail.dataset.target);
+    const summary = node('summary', id); summary.append(node('span', actionLabels[action.uses] ?? action.uses, 'secondary'));
+    const content = node('div', '', 'action-details');
+    const entries: [string, string][] = [['On success', action.onSuccess], ['On failure', action.onFailure]];
+    if (action.prompt) entries.push(['Prompt', action.prompt]);
+    if (action.contextFiles?.length) entries.push(['Context', action.contextFiles.join(', ')]);
+    if (action.capabilities.length) entries.push(['Permissions', action.capabilities.join(', ')]);
+    content.append(detailList(entries)); detail.append(summary, content); return detail;
   }));
-  list.dataset.key = listKey;
-  if (focusedFile) [...list.querySelectorAll('button')].find(button => button.getAttribute('aria-label') === focusedFile)?.focus();
-  element('validation-title').textContent = state.diagnostics.length ? `${state.diagnostics.length} validation error(s)` : 'Validation passed';
-  element('revision').textContent = `Document revision ${state.revision}`;
-  element('validation-ok').hidden = !!state.diagnostics.length;
-  element('diagnostics').replaceChildren(...state.diagnostics.map(diagnostic => {
-    const li = document.createElement('li');
-    const button = document.createElement('button');
-    button.textContent = diagnostic.file;
-    button.addEventListener('click', () => { selected = diagnostic.file; view = 'source'; render(true); source.focus(); });
-    const text = document.createElement('span');
-    text.textContent = `${diagnostic.path === diagnostic.file ? '' : `${diagnostic.path}: `}${diagnostic.message}`;
-    li.append(button, text);
-    return li;
-  }));
-  element('footer-detail').textContent = state.readOnlyReason ? 'Read-only source' : 'Save explicitly · Ctrl/Cmd+S';
-  element('footer-mode').textContent = view === 'trial' ? 'Local files · Read-only live trial' : view === 'conversation' ? 'Local files · CLI conversation' : 'Local files · Offline simulation';
-  document.title = `${dirty() ? '• ' : ''}${basename(state.workflowPath)} · Repo Chap`;
-  process.render(state, prompting || queuedEdits > 0 || !!unsent.size);
-  conversation.render(state, prompting, process.pending());
-  trial.render(state, prompting, process.pending() > 0 || queuedEdits > 0 || !!unsent.size);
+  element('settings').replaceChildren(detailList([
+    ['New PR delay', `${workflow.settings.newPrDelaySeconds}s`], ['Commit debounce', `${workflow.settings.headDebounceSeconds}s`],
+    ['Reviewer recheck', `${workflow.settings.reviewWaitSeconds}s`], ['Reviewer deadline', `${workflow.settings.reviewDeadlineSeconds}s`],
+    ['Attempts per head', String(workflow.limits.maxAttemptsPerHead)], ['Repairs per lifecycle', String(workflow.limits.maxRepairsPerLifecycle)],
+    ['Agent actions per wake', String(workflow.limits.maxAgentActionsPerWake)], ['Attempt deadline', `${workflow.limits.maxAttemptSeconds}s`],
+    ['Daily cost units', String(workflow.limits.maxDailyCostUnits)], ['Merge', 'A person merges'],
+  ]));
+  element('files').replaceChildren(...state!.files.map(file => node('li', file.path, 'path')));
+}
+function traceItem(trace: ConditionTrace): HTMLElement {
+  const item = node('li', `${trace.value}: ${trace.reason}`);
+  if (trace.children) { const list = node('ul'); list.append(...trace.children.map(traceItem)); item.append(list); }
+  return item;
+}
+function renderSimulation(): void {
+  if (!state) return;
+  const input = state.input;
+  element('tests-mode').setAttribute('aria-pressed', String(state.mode === 'tests'));
+  element('pr-mode').setAttribute('aria-pressed', String(state.mode === 'pr'));
+  element('choose-input').textContent = state.mode === 'tests' ? 'Choose fixture' : 'Choose capture';
+  element('input-summary').textContent = input?.capture ? `${input.capture.repository} #${input.capture.pr} · ${input.capture.title}` : input?.path.split('/').at(-1) ?? (state.mode === 'tests' ? 'Choose a test fixture to try this workflow.' : 'Choose a PR capture made by your agent.');
+  element('input-note').textContent = state.mode === 'tests' ? 'Saved facts, stubbed action results, and a fixed clock.' : input?.capture
+    ? `Captured ${input.fixture!.now} · ${input.capture.status} evidence · Head ${input.capture.headSha?.slice(0, 12) ?? 'unknown'}. Current GitHub state has not been checked.${input.capture.packageDigest !== state.packageDigest ? ' This capture was made with an earlier workflow.' : ''}`
+    : 'Your agent can capture a PR with repo-chap inspect. Replaying a capture makes no live requests.';
+  element('input-error').textContent = input?.error ?? state.packetsError ?? ''; element('input-error').hidden = !input?.error && !state.packetsError;
+  element('input-details').hidden = !input;
+  element('input-json').textContent = input?.fixture ? JSON.stringify(input.fixture, null, 2) : '';
+  element('packets-summary').textContent = state.packetsPath ?? '';
+  const key = JSON.stringify([state.workflowPath, state.mode, state.simulation, state.simulationCurrent]);
+  if (key === resultKey) return;
+  resultKey = key;
+  const area = element('result'), simulation = state.simulation;
+  area.hidden = !simulation; area.replaceChildren();
+  if (!simulation) return;
+  const result = simulation.result;
+  if (!state.simulationCurrent) area.append(node('p', 'Files changed. Simulate again to test the current workflow and input.', 'notice'));
+  const title = simulation.comparison ? `Test ${simulation.comparison.passed ? 'passed' : 'failed'}` : `Simulation ${result.status.replaceAll('_', ' ')}`;
+  area.append(node('h2', state.simulationCurrent ? title : `Previous ${title.toLowerCase()}`), node('p', result.reason));
+  if (result.nextWakeAt) area.append(node('p', `Next wake ${result.nextWakeAt}`, 'secondary'));
+  if (simulation.comparison) {
+    const table = node('table'); table.setAttribute('aria-label', 'Expected and actual outcomes');
+    const header = node('thead'), row = node('tr');
+    for (const title of ['Check', 'Expected', 'Actual', 'Result']) row.append(node('th', title));
+    header.append(row); table.append(header);
+    const body = node('tbody');
+    for (const check of simulation.comparison.checks) {
+      const row = node('tr'); row.append(node('td', check.field), node('td', JSON.stringify(check.expected)), node('td', JSON.stringify(check.actual)), node('td', check.passed ? 'Pass' : 'Fail', check.passed ? 'success' : 'danger')); body.append(row);
+    }
+    table.append(body); area.append(table);
+  }
+  area.append(node('h3', 'What would happen'));
+  const trace = node('ol', '', 'trace');
+  for (const decision of result.decisions) {
+    const item = node('li', `${decision.ruleId ?? 'Otherwise'} → ${decision.actionId}`);
+    const detail = node('details'); detail.append(node('summary', 'Why this rule'));
+    const rules = node('ul');
+    for (const rule of decision.rules) {
+      const reason = node('li', `${rule.id}${rule.selected ? ' · selected' : ''}`), conditions = node('ul'); conditions.append(traceItem(rule.condition)); reason.append(conditions); rules.append(reason);
+    }
+    detail.append(rules); item.append(detail); trace.append(item);
+  }
+  area.append(trace);
+  if (result.actions.length) {
+    const actions = node('ul', '', 'effects');
+    for (const action of result.actions) actions.append(node('li', `${action.actionId} · ${action.status}. ${action.reason}`));
+    area.append(actions);
+  }
+  if (result.proposedEffects.length) {
+    area.append(node('h3', 'Proposed effects'));
+    const effects = node('ul', '', 'effects');
+    for (const effect of result.proposedEffects) effects.append(node('li', `${actionLabels[effect.uses] ?? effect.uses}${effect.outcome ? ` · ${effect.outcome}` : ''}. ${effect.reason}`));
+    area.append(effects);
+  }
+  if (simulation.previewError) area.append(node('p', `Slack preview: ${simulation.previewError}`, 'notice'));
+  for (const handoff of simulation.handoffs) {
+    area.append(node('h3', 'Slack preview'), node('p', handoff.preview.route.explanation), node('pre', handoff.preview.message.text));
+  }
+  const record = node('details'); record.append(node('summary', 'Simulation record'), node('pre', JSON.stringify(simulation, null, 2))); area.append(record);
 }
 
-function setPrompting(value: boolean): void { prompting = value; render(); }
-
-function receive(result: EditorResult, replaceSource = false): boolean {
-  if (result.snapshot?.sessionId !== state?.sessionId) { unsent.clear(); process.discardDrafts(); selected = result.snapshot?.workflowPath ?? ''; replaceSource = true; }
-  state = result.snapshot;
-  render(replaceSource);
-  if (result.authoringOperationId) void bridge.confirmAuthoringOperation(result.authoringOperationId);
-  if (result.error) say(result.error, true);
-  return !result.error && !result.cancelled;
+function targetElement(target: string): HTMLElement | undefined { return [...document.querySelectorAll<HTMLElement>('[data-target]')].find(item => item.dataset.target === target); }
+function guidanceAnchor(target: HTMLElement): HTMLElement {
+  return target instanceof HTMLDetailsElement ? target.querySelector('summary')! : target.offsetHeight > innerHeight * .6 ? target.querySelector<HTMLElement>('h1,h2,h3') ?? target : target;
 }
-
-function enqueue<T>(operation: () => Promise<T>): Promise<T> {
-  const next = queue.then(operation);
-  queue = next.then(() => {}, error => { say(error instanceof Error ? error.message : 'The operation failed. Your text has been kept.', true); });
-  return next;
+function clearGuidance(): void {
+  document.querySelectorAll('.agent-target').forEach(item => item.classList.remove('agent-target'));
+  element('guidance').hidden = true; document.getElementById('guidance-arrow')!.setAttribute('hidden', ''); activeGuidance = null;
 }
-
-source.addEventListener('input', () => {
-  const path = selected, text = source.value;
-  if (text === (unsent.get(path) ?? state?.files.find(file => file.path === path)?.text)) return;
-  say('');
-  unsent.set(path, text);
-  queuedEdits++;
-  render();
-  void enqueue(async () => {
-    const result = await bridge.edit(token(), path, text);
-    queuedEdits--;
-    if (!result.error && unsent.get(path) === text) unsent.delete(path);
-    receive(result);
-  });
-});
-
-async function confirm(title: string, detail: string, choices: { id: string; label: string; style?: string; disabled?: boolean }[]): Promise<string> {
-  const dialog = element<HTMLDialogElement>('confirmation');
-  const previous = document.activeElement as HTMLElement | null;
-  element('confirm-title').textContent = title;
-  element('confirm-detail').textContent = detail;
-  return new Promise(resolve => {
-    const finish = (choice: string): void => { dialog.close(); dialog.oncancel = null; previous?.focus(); resolve(choice); };
-    element('confirm-actions').replaceChildren(...choices.map(choice => {
-      const button = document.createElement('button');
-      button.textContent = choice.label;
-      button.className = choice.style ?? '';
-      button.disabled = choice.disabled ?? false;
-      if (choice.id === 'cancel') button.autofocus = true;
-      button.onclick = () => finish(choice.id);
-      return button;
-    }));
-    dialog.oncancel = event => { event.preventDefault(); finish('cancel'); };
-    dialog.showModal();
-  });
+function renderGuidance(guidance: Guidance | null): void {
+  const fresh = guidance?.id !== guidanceId;
+  clearGuidance();
+  if (!guidance || guidance.expiresAt <= Date.now() || guidance.id === dismissedGuidanceId) { guidanceId = ''; return; }
+  const target = targetElement(guidance.target);
+  if (!target) return;
+  activeGuidance = guidance; guidanceId = guidance.id;
+  if (target instanceof HTMLDetailsElement) target.open = true;
+  for (let parent = target.parentElement; parent; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true;
+  target.classList.add('agent-target');
+  if (fresh) {
+    const anchor = guidanceAnchor(target); anchor.tabIndex = -1;
+    anchor.scrollIntoView({ block: 'center', behavior: 'instant' }); anchor.focus({ preventScroll: true });
+  }
+  if (guidance.text) { element('guidance-text').textContent = guidance.text; element('guidance').hidden = false; }
+  positionGuidance();
 }
-
-async function save(): Promise<boolean> {
-  const focused = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
-  const focusId = focused?.id, selectionStart = focused?.selectionStart, selectionEnd = focused?.selectionEnd;
-  const wasPrompting = prompting;
-  setPrompting(true);
-  try {
-    await queue;
-    if (!state || !await process.flush()) return false;
-    if (unsent.size) { say('Some draft text could not be accepted. Correct it or discard it before saving.', true); return false; }
-    const ok = await enqueue(async () => receive(await bridge.save(token())));
-    if (ok) say('Saved all changed files.');
-    return ok;
-  } finally {
-    setPrompting(wasPrompting);
-    const field = focusId ? document.getElementById(focusId) : null;
-    field?.focus();
-    if (selectionStart != null && selectionEnd != null && (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) field.setSelectionRange(selectionStart, selectionEnd);
+function positionGuidance(): void {
+  if (!activeGuidance) return;
+  const target = targetElement(activeGuidance.target);
+  if (!target) { clearGuidance(); return; }
+  const rect = guidanceAnchor(target).getBoundingClientRect(), bubble = element('guidance');
+  if (!activeGuidance.text) return;
+  const left = Math.max(16, Math.min(innerWidth - bubble.offsetWidth - 16, rect.left));
+  const below = rect.bottom + bubble.offsetHeight + 55 < innerHeight;
+  const top = Math.max(16, Math.min(innerHeight - bubble.offsetHeight - 16, below ? rect.bottom + 44 : rect.top - bubble.offsetHeight - 44));
+  bubble.style.left = `${left}px`; bubble.style.top = `${top}px`;
+  const arrow = document.getElementById('guidance-arrow')!;
+  if (activeGuidance.style === 'arrow') {
+    arrow.removeAttribute('hidden');
+    const x = Math.max(24, Math.min(innerWidth - 24, rect.left + Math.min(rect.width / 2, 100)));
+    document.getElementById('arrow-line')!.setAttribute('d', `M ${left + Math.min(bubble.offsetWidth / 2, 100)} ${below ? top : top + bubble.offsetHeight} L ${x} ${below ? rect.bottom + 10 : rect.top - 10}`);
   }
 }
-
-async function leave(action: 'open' | 'close'): Promise<'continue' | 'discard' | 'cancel'> {
-  await queue;
-  let choice: 'continue' | 'discard' = 'continue';
-  if (dirty()) {
-    const paths = [...state!.files.filter(file => file.dirty || unsent.has(file.path)).map(file => file.path), ...(process.pending() ? [`Action inspector: ${process.pending()} unsaved setting(s)`] : [])].join('\n');
-    const result = await confirm('Keep your unsaved changes?', `These files have unsaved changes:\n${paths}`, [
-      { id: 'save', label: `Save all and ${action}`, style: 'primary', disabled: !!state!.diagnostics.length || !!state!.readOnlyReason || !!unsent.size },
-      { id: 'discard', label: `Discard and ${action}`, style: 'danger' },
-      { id: 'cancel', label: 'Cancel' },
-    ]);
-    if (result === 'save') { if (!await save()) return 'cancel'; }
-    else if (result === 'discard') choice = 'discard';
-    else return 'cancel';
-  }
-  if (conversation.running() && await confirm('Stop the running conversation?', `The current answer will stop when you ${action}. Visible conversation history is cleared when you leave this workflow.`, [{ id: 'stop', label: `Stop and ${action}` }, { id: 'cancel', label: 'Cancel' }]) !== 'stop') return 'cancel';
-  if (trial.running() && await confirm('Stop the running live trial?', `Active reads and provider processes will stop when you ${action}. Private trial evidence stays retained.`, [{ id: 'stop', label: `Stop and ${action}` }, { id: 'cancel', label: 'Cancel' }]) !== 'stop') return 'cancel';
-  return choice;
-}
-
-async function openWorkflow(kind: OpenKind): Promise<void> {
-  if (prompting) return;
-  setPrompting(true);
-  try {
-    const choice = await leave('open');
-    if (choice === 'cancel') return;
-    await enqueue(async () => {
-      const result = await bridge.open(kind, state ? token() : null, choice === 'discard');
-      if (receive(result, true)) {
-        if (kind === 'create') { view = 'source'; render(true); source.focus(); }
-        say(kind === 'create' ? 'New workflow draft. Save all creates .repo-chap/workflow.json.' : 'Workflow opened.');
-      } else if (kind === 'create') element('create-workflow').focus();
-    });
-  } finally { setPrompting(false); }
-}
-element('create-workflow').onclick = () => { void openWorkflow('create'); };
-element('open-workflow').onclick = () => { void openWorkflow('workflow'); };
-element('open-repository').onclick = () => { void openWorkflow('repository'); };
-element('create-fixture').onclick = () => {
-  const path = element<HTMLInputElement>('new-fixture-path').value;
-  const text = JSON.stringify({ schemaVersion: 1, now: '2026-05-01T12:00:00Z', observations: [{ facts: { lifecycle: 'open', draft: true } }], expected: { status: 'waiting', selectedRuleIds: [], proposedEffects: [] } }, null, 2) + '\n';
-  void (async () => {
-    if (await perform(() => bridge.author({ operationId: crypto.randomUUID(), expected: token(), action: { kind: 'createFixture', path, text } }), 'Fixture staged. Edit its inputs and explicit expectations, then run the offline test.')) { selected = path; view = 'source'; render(true); source.focus(); }
-  })();
-};
-element('undo').onclick = () => { void perform(() => bridge.undo(token()), 'Draft operation undone. Save all remains explicit.'); };
-element('save').onclick = () => { void save(); };
-for (const name of ['source', 'process', 'simulation', 'conversation', 'trial'] as const) element(`${name}-tab`).onclick = () => { void (async () => { if (name !== view && !await process.flush()) return; view = name; render(true); })(); };
-element('export').onclick = () => { void perform(() => bridge.exportWorkflow(token()), 'Workflow JSON copy exported. Referenced files were not copied; keep their relative paths when using it.'); };
-element('reset').onclick = () => {
-  void (async () => {
-    if (prompting || !state) return;
-    setPrompting(true);
-    try {
-      await queue;
-      if (await confirm(state!.isNewWorkflow ? 'Discard the new workflow?' : 'Reset all workflow drafts?', state!.isNewWorkflow ? 'Discard this new workflow and all unsaved file edits, stop any conversation or live trial, and return to the welcome screen. Existing files stay unchanged.' : 'Discard unapplied action settings and restore every workflow source file to its last loaded or saved text. Temporary simulation inputs and current disk changes are kept.', [{ id: 'reset', label: 'Reset workflow', style: 'danger' }, { id: 'cancel', label: 'Cancel' }]) !== 'reset') return;
-      await enqueue(async () => { const result = await bridge.reset(token()); if (!result.error) { unsent.clear(); process.discardDrafts(); } if (receive(result, true)) { say(state ? 'Workflow drafts restored to saved source.' : 'New workflow discarded.'); if (!state) element('create-workflow').focus(); } });
-    } finally { setPrompting(false); }
-  })();
-};
-element('reload').onclick = () => {
-  void (async () => {
-    if (prompting || !state) return;
-    setPrompting(true);
-    try {
-      await queue;
-      const path = selected;
-      const file = state!.files.find(file => file.path === path)!;
-      if ((file.dirty || unsent.has(path)) && await confirm('Reload file from disk?', `This replaces your unsaved changes to ${path} with the current disk version.`, [{ id: 'reload', label: 'Reload from disk', style: 'danger' }, { id: 'cancel', label: 'Cancel' }]) !== 'reload') return;
-      await enqueue(async () => {
-        say('Reloading file…');
-        const result = await bridge.reload(token(), path);
-        if (!result.error) unsent.delete(path);
-        if (receive(result, true)) say('File reloaded from disk. Other drafts have been kept.');
-      });
-    } finally { setPrompting(false); }
-  })();
-};
-element('discard').onclick = () => {
-  void (async () => {
-    if (prompting || !state) return;
-    setPrompting(true);
-    try {
-      await queue;
-      const path = selected;
-      const discardsWorkflow = state!.isNewWorkflow && path === state!.workflowPath;
-      if (await confirm(discardsWorkflow ? 'Discard the new workflow?' : 'Discard changes to this file?', discardsWorkflow ? 'Discard this new workflow and all unsaved file edits, stop any conversation or live trial, and return to the welcome screen. Existing files stay unchanged.' : `This restores the last loaded or saved text of ${path}. External disk changes are loaded only when you choose Reload file.`, [{ id: 'discard', label: 'Discard changes', style: 'danger' }, { id: 'cancel', label: 'Cancel' }]) !== 'discard') return;
-      await enqueue(async () => {
-        say('Discarding changes…');
-        const result = await bridge.discard(token(), path);
-        if (!result.error) unsent.delete(path);
-        if (receive(result, true)) { say(state ? 'Changes to this file discarded.' : 'New workflow discarded.'); if (!state) element('create-workflow').focus(); }
-      });
-    } finally { setPrompting(false); }
-  })();
-};
-bridge.onCloseRequested(() => {
-  void (async () => {
-    if (prompting) return;
-    setPrompting(true);
-    try {
-      const choice = await leave('close');
-      if (choice === 'cancel') return;
-      await enqueue(async () => receive(await bridge.close(state ? token() : null, choice === 'discard')));
-    } finally { setPrompting(false); }
-  })();
-});
-document.addEventListener('keydown', event => {
-  if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 's') { event.preventDefault(); if (!prompting) void save(); }
-  if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'o') { event.preventDefault(); void openWorkflow('workflow'); }
-});
-const checkExternal = (): void => {
-  if (state && !prompting && !queuedEdits) void enqueue(async () => { receive(await bridge.checkExternal()); });
-};
-window.addEventListener('focus', checkExternal);
-setInterval(checkExternal, 3000);
-void enqueue(async () => { receive(await bridge.current(), true); });
+window.addEventListener('resize', positionGuidance); window.addEventListener('scroll', positionGuidance, true);
+setInterval(() => { if (activeGuidance && activeGuidance.expiresAt <= Date.now()) clearGuidance(); }, 250);
+bridge.onChange(render);
+void bridge.current().then(render).catch(error => { element('error').textContent = String(error); element('error').hidden = false; });

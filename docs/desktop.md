@@ -1,127 +1,135 @@
-# Local workflow editor
+# Workflow companion
 
-Repo Chap's Electron app edits a repository's workflow JSON and its explicit
-prompt, output-contract and context-file references. An existing `review.md`
-appears when the workflow references it. Markdown links remain text.
-The [Discuss view](desktop-conversation.md) uses an explicitly selected local
-Codex or Claude profile to answer questions about captured drafts and actual
-simulation results.
+Run your normal agent in the repository you want to configure. Install the
+`repo-chap-workflows` skill with `repo-chap skill install` and use it there.
+The agent edits JSON, Markdown, and fictional fixtures directly. Electron reads
+those files and shows the current workflow and simulation results.
 
-Use Node 24 and the pinned pnpm through Corepack:
+## Start the app
+
+Use Node 24 and the pinned pnpm through Corepack for development:
 
 ```sh
 corepack pnpm install --frozen-lockfile
 corepack pnpm desktop
 ```
 
-Choose **Create workflow** and select a repository directory to start a valid
-unsaved draft at `.repo-chap/workflow.json`. The starter stops processing closed or merged PRs and otherwise waits for a
-signal. It requests no capabilities and references no files.
-Source, Process, Simulate and Discuss are available immediately. Creation and
-editing write nothing to the repository. **Save all** creates the metadata
-directory and workflow file explicitly. Discarding the new workflow returns to
-the welcome screen; cancelling a picker keeps the current draft.
-
-For existing files, choose **Open repository**, select the repository directory, then choose its
-workflow JSON. **Open workflow** selects a JSON file directly and uses its
-nearest Git repository as the root. For a plain directory, that shortcut uses
-the JSON file's directory. Use Open repository when references need a wider
-plain-directory root.
-
-To launch a known local file during development:
+Open repository discovers workflows and shows a selector with names and relative
+paths. It honors Git ignores. Discovery checks up to 2000 JSON files; the CLI can
+open another path explicitly. A repository without a workflow stays open and
+notices when the agent creates one. Unsupported or invalid files show validation
+diagnostics without rewriting them.
 
 ```sh
-corepack pnpm build
-corepack pnpm --filter @repo-chap/desktop start --workflow /path/to/repository/workflow.json --repo-root /path/to/repository
+repo-chap desktop open --repo-root /path/to/repository --workflow .repo-chap/workflow.json
+repo-chap desktop status --repo-root /path/to/repository --json
 ```
 
-The renderer has no Node or filesystem access. The main process owns the open
-document session, native pickers, validation and file writes. A sandboxed preload
-exposes typed editor and conversation operations. Local fonts ship with the app. Opening,
-editing and saving never start providers, fetch Markdown links, or connect to
-the daemon. The app blocks remote navigation and renderer network requests.
+From the source checkout, a known repository can be opened at startup:
 
-## Saving and recovery
+```sh
+corepack pnpm --filter @repo-chap/desktop start --repo-root /path/to/repository --workflow /path/to/repository/.repo-chap/workflow.json
+```
 
-Switching files retains each draft. Removing a reference retains its unsaved
-buffer until that draft is saved or discarded. Save all, or Ctrl/Cmd+S, validates the captured
-JSON and referenced draft text with `@repo-chap/workflow` before writing. The app
-saves exact source text. It does not regenerate IDs, remove fields, format JSON,
-or convert Markdown. Unknown data inside `layout` is valid and stays intact.
-Other unknown runtime fields remain visible with validation errors. Unsupported
-workflow versions and actions open read-only. Nothing is rewritten to make them
-look supported.
+The app restores the last selected repository and workflow after restart. It
+reloads files from disk and does not retain unsaved editing buffers. Existing
+workflow formats, CLI validation, daemon activation, and runtime limits keep
+their existing behavior. Earlier private conversation or trial files are left
+in app data; the companion does not load them.
 
-Each document session has an opaque `sessionId` and a monotonically increasing
-`revision`. Edits, reloads, discards and saves require the current token. A stale
-request fails without replacing the newer draft. The snapshot contains source
-text, dirty and external-change states, file-specific diagnostics, and the
-execution package digest when valid. Later editor operations can use that same
-token without granting access to arbitrary files.
+## Understand and test a workflow
 
-The app checks disk bytes and resolved paths on focus, periodically while open,
-and before saving. An external change blocks the save. Reload file reads the
-current disk version; it asks before replacing a dirty draft. Discard changes
-restores the last loaded or saved text for the selected file. It does not accept
-external disk changes. Cancel leaves the draft in place. Opening another workflow
-and closing the window offer save, discard and cancel. Cancelling a native file
-picker retains the previous drafts even after choosing Discard and open.
+Overview shows rules in priority order, followed by their actions. Expand an
+action for its continuations, prompt, and permissions. Timing, limits, and file
+paths remain in disclosures. The app polls files every 1.5 seconds and refreshes
+before CLI commands. Invalid edits remove the current graph and show diagnostics;
+fixing the files restores it. The app never writes workflow source.
 
-The first workflow save checks that the repository and metadata directory still
-refer to the original directories and that the workflow destination is absent.
-A conflicting file or redirected path rejects the save without overwriting it.
-If setup or staging fails, the draft stays unsaved. An empty metadata directory
-created by that attempt is removed only if it still refers to that same directory.
-A pre-existing or nonempty directory is kept.
+Simulate has separate Test fixtures and Real PRs selections. Choose a fixture
+or a captured PR directory, then Simulate. Results show the stop reason, selected
+rules, rejected earlier rules, proposed effects, and expectation comparisons.
+Input details contains the fixed clock, observations, and action stubs. Optional
+Slack packets produce the same local preview as the CLI.
 
-Saving stages files beside their destinations, then replaces existing files by
-rename. New files are published atomically without replacing existing content.
-The workflow JSON is written last. A save across several files is not a filesystem
-transaction. If a file changes or an I/O operation fails after an earlier file
-was saved, the error reports the saved count and keeps the remaining drafts dirty.
-Temporary save files are cleaned up after handled failures. A process crash can
-leave a temporary `.repo-chap-*.tmp` file, which is never loaded as workflow input.
-Unsaved buffers live in memory; the app does not promise crash recovery for them.
-Electron profile data stays in its normal user-data directory, outside the
-managed repository. `REPO_CHAP_DESKTOP_DATA` can select an isolated profile.
+```sh
+repo-chap desktop simulate --fixture .repo-chap/tests/closed.json --json
+repo-chap desktop simulate --packets /private/packets.json --json
+```
 
-## Development packages
+Results retain their tested workflow and input digests. Changed or unreadable
+source, fixtures, or packets mark prior results stale. A changed test expectation
+also requires a new run. A failed expectation is visible in `comparison.passed`;
+a successful command only means the simulation completed.
 
-Build an unpacked Linux application or unsigned macOS application bundle into a
-directory outside the checkout:
+For real PRs, the agent first captures evidence using the existing CLI:
+
+```sh
+repo-chap inspect .repo-chap/workflow.json --repo willow-labs/sample-project --pr 42 --capture-dir /private/repo-chap-captures --json
+repo-chap desktop simulate --capture /private/repo-chap-captures/inspection-example --json
+```
+
+Use the inspection directory returned by `inspect`. The app verifies its paired
+`evidence.json` and `fixture.json`. The display identifies the captured head,
+time, and evidence coverage, and says that current GitHub state has not been
+checked. Replaying against an edited workflow reuses the saved observation and
+identifies its earlier workflow version. A missing model result stays visibly
+`needs_result`. It is not evidence of a successful review.
+
+All desktop simulation is offline. Live reads, provider analysis, local repair,
+apply, and daemon operations run through their existing CLI commands. The user's
+normal agent owns its model, login, repository instructions, and tools.
+
+## Agent navigation and explanations
+
+The CLI controls the running app through a Unix socket in
+`~/.repo-chap/desktop/control.sock`. Its directory is user-owned, mode 0700, and
+outside Git. There is no TCP listener or MCP setup. To run another instance,
+set `REPO_CHAP_DESKTOP_CONTROL` to a separate private directory in both the app
+and agent environment. `REPO_CHAP_DESKTOP_DATA` selects a separate Electron
+profile outside Git.
+
+```sh
+repo-chap desktop select --workflow .repo-chap/other.workflow.json
+repo-chap desktop show --view simulation --mode tests
+repo-chap desktop show --target action:review
+repo-chap desktop highlight --target rule:closed --style arrow --text 'Closed PRs stop here.' --seconds 20
+repo-chap desktop clear
+```
+
+Status returns available target names. Highlighting navigates to the target,
+opens its disclosure, and renders plain text beside it. A single annotation is
+visible, lasts 1 to 120 seconds, and can be dismissed with Escape or its close
+control. No annotation or navigation command changes source files.
+
+Commands use the current Git root by default. `--repo-root` chooses another root,
+and `--workflow` guards commands against a changed workflow selection. `open`
+and `select` deliberately change the selection. Wrong-repository commands fail
+before changing the view. On a timeout or disconnect, inspect status before
+repeating the command. Errors use exit 8; usage errors use exit 64. See
+`repo-chap desktop --help` for the full command list.
+
+## Development packages and checks
+
+Build an unpacked Linux application or unsigned macOS bundle outside Git:
 
 ```sh
 corepack pnpm desktop:package --out /tmp/repo-chap-packages --platform linux --arch x64
 corepack pnpm desktop:package --out /tmp/repo-chap-packages --platform darwin --arch arm64
 ```
 
-Both platforms accept `x64` and `arm64`. Omitting platform and architecture uses
-the build host. The output includes the Electron runtime and bundled JavaScript;
-the person launching it does not need Node, pnpm or a running development server.
-Launch `Repo Chap-linux-x64/repo-chap-desktop` on Linux. On macOS, open
-`Repo Chap-darwin-arm64/Repo Chap.app`. These are local development packages,
-without signing, notarization, installers or automatic updates.
-
-Linux needs the desktop libraries required by Electron. CI can use an X display
-provided by Xvfb. macOS execution and installation on both supported OS families
-remain human pilot checks; cross-packaging a macOS bundle does not prove it runs
-on macOS.
+Both platforms accept `x64` and `arm64`. The package includes Electron, fonts,
+and JavaScript. Linux launches `Repo Chap-linux-x64/repo-chap-desktop`; macOS opens
+`Repo Chap-darwin-arm64/Repo Chap.app`. These are development packages without
+signing, notarization, or automatic updates. The CLI installs separately.
 
 ```sh
-corepack pnpm typecheck
-corepack pnpm test
+corepack pnpm check
 REPO_CHAP_DESKTOP_PROOF=/tmp/repo-chap-proof xvfb-run -a corepack pnpm test:desktop
 ```
 
-Set `REPO_CHAP_DESKTOP_EXECUTABLE` to a packaged Linux binary's absolute path to
-run the same UI checks against that package. Playwright launches Electron with
-its test sandbox flags; these checks prove editor behavior and renderer isolation,
-not host sandbox enforcement. Test a normal application launch on each target OS
-during the human pilot.
-
-The Electron checks exercise actual main/preload/renderer behavior with fictional
-local repositories. Native picker responses are supplied by the test while the
-app's open operation still loads real files. Proof includes source editing,
-validation failure, external-change recovery, close cancellation, narrow layouts,
-keyboard focus, original screenshots, a short recording and a labeled comparison
-with the approved presentation. All generated evidence stays outside Git.
+The tests use fictional repositories, actual main/preload/renderer code, and
+external CLI commands. They cover workflow switching, external edits, invalid
+source and recovery, stale results, captured PRs, arrows and expiry, keyboard
+navigation, narrow layouts, and restart. Set `REPO_CHAP_DESKTOP_EXECUTABLE` to a
+packaged Linux binary to run the same checks against it. Evidence stays outside
+Git. macOS execution remains a human pilot check.

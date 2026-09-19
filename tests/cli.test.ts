@@ -59,5 +59,23 @@ test('packed and installed repo-chap runs independently of workspace dependencie
     }
     const manifest = JSON.parse(await readFile(join(temporary, 'node_modules/repo-chap/package.json'), 'utf8'));
     assert.equal(manifest.dependencies, undefined);
+    const skills = join(temporary, 'global-skills');
+    const skillInstall = spawnSync(installed, ['skill', 'install', '--directory', skills], { cwd: temporary, encoding: 'utf8', env: environment });
+    assert.equal(skillInstall.status, 0, skillInstall.stderr);
+    const skill = join(skills, 'repo-chap-workflows');
+    const starter = join(skill, 'assets/workflow.json'), closed = join(skill, 'assets/closed.json');
+    const skillReplay = spawnSync(installed, ['replay', starter, '--repo-root', skill, '--fixture', closed, '--json'], { cwd: temporary, encoding: 'utf8', env: environment });
+    assert.equal(skillReplay.status, 0, skillReplay.stderr);
+    assert.equal(JSON.parse(skillReplay.stdout).comparison.passed, true);
+    const customized = '# A local skill change\n'; await writeFile(join(skill, 'SKILL.md'), customized);
+    const repeated = spawnSync(installed, ['skill', 'install', '--directory', skills], { cwd: temporary, encoding: 'utf8', env: environment });
+    assert.equal(repeated.status, 64); assert.equal(await readFile(join(skill, 'SKILL.md'), 'utf8'), customized);
+    const replace = spawnSync(installed, ['skill', 'install', '--directory', skills, '--replace'], { cwd: temporary, encoding: 'utf8', env: environment });
+    assert.equal(replace.status, 0, replace.stderr);
+    assert.notEqual(await readFile(join(skill, 'SKILL.md'), 'utf8'), customized);
+    for (const name of ['workflow', 'fixture', 'results']) {
+      const schema = spawnSync(installed, ['schema', name], { cwd: temporary, encoding: 'utf8', env: environment });
+      assert.equal(schema.status, 0, schema.stderr); assert.equal(JSON.parse(schema.stdout).$schema, 'https://json-schema.org/draft/2020-12/schema');
+    }
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });

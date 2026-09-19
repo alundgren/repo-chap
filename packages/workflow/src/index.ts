@@ -9,3 +9,6 @@ export { parseFixture, replay } from './replay.js';
 export { compareReplay } from './replay-expectations.js';
 
 export { controlDecision, type ControlDecision } from './control.js';
+export { default as workflowSchema } from './workflow.schema.json' with { type: 'json' };
+export { default as fixtureSchema } from './fixture.schema.json' with { type: 'json' };
+export { default as resultSchemas } from './builtin-results.schema.json' with { type: 'json' };

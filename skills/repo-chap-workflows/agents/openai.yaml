@@ -1,0 +1,4 @@
+interface:
+  display_name: "Repo Chap workflows"
+  short_description: "Edit workflows and steer the visual companion"
+  default_prompt: "Use $repo-chap-workflows to update and test the workflow in this repository."

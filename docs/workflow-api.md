@@ -2,7 +2,7 @@
 
 `@repo-chap/workflow` owns loading, validation, package digests, rule evaluation,
 and offline replay. `apps/cli` bundles it into an installable `repo-chap` command.
-The editor and daemon should import this package instead of copying its rules.
+The desktop companion and daemon import this package instead of copying its rules.
 The runtime schemas are `packages/workflow/src/workflow.schema.json` and
 `packages/workflow/src/fixture.schema.json`. The older schemas under
 `docs/pr-workflows` remain illustrative action contracts and design inputs.
@@ -52,8 +52,8 @@ format; offline replay remains credential-free and accepts the fixture directly.
 `loadWorkflow(path, { repositoryRoot, maximumCapabilities })` reads local UTF-8
 files and rechecks them before returning. `buildPackage(workflowPath, sourceFiles,
 { maximumCapabilities })` accepts a map of repository-relative paths to text.
-The daemon can supply files from one immutable Git revision; the editor can
-supply a captured document revision. Those callers own revision consistency.
+The daemon can supply files from one immutable Git revision; other callers can
+supply captured source text. Those callers own revision consistency.
 Neither function fetches files or follows Markdown links.
 
 Paths in `prompt`, `outputSchema`, and `contextFiles` resolve relative to the
@@ -208,6 +208,17 @@ execution or workflow quality beyond those expectations.
 CLI `replay --json` adds `comparison` only when the fixture declares expectations.
 Human output prints each comparison. Exit 0 continues to mean completed replay,
 including a failed expectation; consumers must check `comparison.passed` for test
-success. Desktop authored tests require expectations and use this exact function.
-See [desktop authoring](desktop-authoring.md) for unsaved fixture buffers and
-revision-bound evidence.
+success. Desktop tests use the same comparison when a fixture declares expectations.
+See [the desktop companion](desktop.md) for file refresh and simulation freshness.
+
+## Agent authoring and desktop control
+
+`repo-chap skill install` installs the bundled workflow skill globally.
+`repo-chap schema workflow|fixture|results` prints the installed contracts so an
+agent can author workflows from another checkout. The CLI package contains the
+skill, starter files, and schemas; the Repo Chap source checkout is not required.
+
+`repo-chap desktop --help` lists local navigation, selection, simulation, and
+annotation commands. JSON responses contain a version and explicit success or
+failure. Desktop failures exit 8; invalid command arguments exit 64. Replay
+completion still requires checking expectation comparisons for test success.

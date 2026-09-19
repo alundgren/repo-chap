@@ -1,259 +1,51 @@
 # UX notes for Repo Chap
 
-The offline investigation presentation explains PR automation and includes an
-editor concept. The Electron app now opens and edits local workflow source and
-referenced files. Its current task is source authoring on macOS/Linux laptops.
+The desktop helps someone understand and test a workflow while their normal
+agent edits the repository. Overview and Simulate are the two main views.
+Workflow editing, provider setup, and conversation happen in the user's agent.
+The original presentation remains an earlier editor concept.
 
-The presentation uses warm paper, IBM Plex Sans for reading, and IBM Plex Mono
-for source and identifiers. Font assets and their licence are local. Body text
-is 16px, supporting text 13.5px, and headings scale with viewport size. Regular
-and semibold are the only reading weights.
+## Desktop companion
 
-| Existing presentation role | Value |
-| --- | --- |
-| Background | #F2EADE |
-| Surface | #EADFCD |
-| Raised selection | #E0D2BD |
-| Text | #604939 |
-| Accent | #784F26 |
-| Links and focus | #3D5D71 |
+Use the existing warm-paper palette and bundled IBM Plex Sans and Mono. Body
+text is 16px, secondary text 13.5px, section titles 22px, and the workflow title
+28px to 36px. Regular and semibold are the only weights. Primary text is #604939
+on #F2EADE; selected controls use #E0D2BD, fields #F9F6F0, and focus #3D5D71.
 
-Components are slide navigation, reading view, action inspector, JSON editor,
-staged-change status, scenario controls, decision trace, reset, and export.
-The narrow layout places the inspector below the process. Architecture drawings
-scroll within their region. This is intentional so diagram labels stay readable.
-Semantic tokens in presentation.template.html bind the current roles.
+The header has Open repository. The workflow picker shows names and relative
+paths, including multiple files with the same workflow ID. A native select is
+intentional for long labels and keyboard operation. New workflows appear as the
+agent saves them. An empty repository explains that the agent creates the file.
 
-The presentation browser check verifies navigation, editing, invalid input,
-reset, export, offline operation, and laptop/narrow layouts. Generated evidence
-stays outside Git.
+Overview gives rule order the most room. Each rule shows its condition and action.
+Action details expand to show continuations and referenced prompts. Timing,
+limits, and files stay in disclosures. Recent changed paths and validation status
+provide feedback without a second editor or save operation. Invalid files replace
+the workflow view with diagnostics and recover on the next successful read.
 
-## Desktop source editor
+Simulate separates Test fixtures and Real PRs. Each retains its own selected input
+and latest result. The main controls choose input and run simulation. Raw fixture
+JSON and optional Slack packets live in Input details. Results lead with their
+stop reason or expectation comparison, followed by the chosen path and proposed
+effects. Rule reasoning and the full record remain expandable.
 
-The desktop uses the presentation's warm-paper roles and locally bundled IBM
-Plex Sans and Mono, with 16px reading and source text, 13.5px supporting text,
-17px section labels and a 28px to 36px workflow title. Regular and semibold are
-the only weights. Fields use #F9F6F0, borders #C1AF9A, successful validation
-#3D6034 and destructive actions #8F3A2D. Keyboard focus uses the link color.
+Real PRs always identify capture time, collection status, and observed head.
+They explicitly state that current GitHub state has not been checked. Editing a
+workflow does not require fetching that observation again. The capture's original
+workflow version stays identifiable, and changed inputs mark prior results stale.
+Invalid or missing source/input disables simulation until the agent fixes it.
 
-The app header opens a repository or workflow. A file list names the workflow
-and every explicit reference, including output contracts; workflow-relative paths distinguish
-files with the same basename. The source pane edits the selected file. Switching
-files retains drafts. A single Save all action validates and writes the captured
-drafts together. Validation errors name the affected file and JSON path, with
-keyboard-accessible links back to the source. Validation uses the shared runtime
-package, so the desktop does not maintain its own acceptance rules.
+An agent can navigate to named sections, rules, and actions, highlight a target,
+and place a short explanation with an arrow. Guidance opens relevant disclosures,
+scrolls the target into view, and expires after a bounded interval. Escape or the
+close control dismisses it. Text is plain text, never rendered HTML. Only one
+annotation is visible at a time; it does not become a permanent panel.
 
-The source editor keeps the approved presentation's toolbar, light source field,
-status placement, spacing and typography. It adds a file list because real
-authoring includes Markdown and output contracts. The source text is 16px rather
-than the presentation's 13.5px because it is the primary working content.
-
-The file list scrolls within its own region and keeps the workflow first. At
-widths below 600px it moves above the source. Paths wrap, controls wrap, and only source lines scroll
-horizontally. The page does not require horizontal scrolling. A skip link and
-visible focus support keyboard use; Tab leaves the source field normally.
-
-Unsaved counts, per-file draft markers, external-change notices and read-only
-unsupported-format notices stay visible. Reload replaces the selected buffer
-with disk text after confirmation. Discard restores its last loaded or saved
-text. Close and open protection offers save, discard and cancel, with Cancel
-focused initially. Escape cancels confirmations and returns focus to the prior
-control. A cancelled file picker keeps existing drafts. Save failures retain
-drafts and report partial saves when necessary. No force-overwrite control is
-provided; an external edit must be explicitly reloaded before saving.
-Source input is temporarily read-only while reload, discard, open or close is
-pending. Reload and discard show progress until the replacement finishes, then
-editing resumes. Schema errors select their referenced source file, including
-references with JSON Pointer fragments.
-
-The app displays plain source for JSON and Markdown. It does not render Markdown
-HTML or follow links. Discuss adds a provider conversation; explicit live analysis has its own Live trial view.
-
-## Desktop process editing and simulation
-
-Process, Source and Simulate are separate task views over the same captured
-document. Source remains the initial view when opening a file. Process uses an
-ordered list with keyboard-accessible up/down controls because array priority
-determines execution. The presentation's action inspector sits beside it on a
-laptop and below it on narrow windows. This replaces the concept's action grid
-with actual rules and their conditions. A bounded list keeps the inspector in
-reach, and reorder restores focus to the moved rule's control.
-
-The inspector edits success/failure continuations, existing prompt references,
-context paths and the timing settings used by reviewer/debounce waits. Native
-select controls keep long action IDs usable with the keyboard without a custom
-combobox. Visual edits preserve IDs and unknown values while formatting workflow
-JSON with two spaces. Shared validation reports invalid references and action
-paths. Source remains available to repair them; Reset workflow restores every
-source draft to its last loaded or saved text after confirmation.
-
-Typed inspector values become visible unsaved settings immediately. They stay
-editable while incomplete. Apply settings captures them into workflow source;
-Discard settings abandons only unapplied values. Save all, export, simulation,
-and changing views or inspected actions capture accepted values first. An empty
-numeric field stays visible with an error until corrected or discarded. Save
-preserves field focus and the text selection so typing can continue after the
-keyboard shortcut. Open, close and reset confirmations include unapplied
-settings; Cancel retains them.
-
-Changes against saved source compare execution fields, ordered rule IDs and
-referenced text. Layout and JSON formatting are excluded. Export JSON explicitly
-writes a workflow-only copy and names that referenced files were not copied.
-It cannot overwrite an open source file. Save all remains the way to update
-source files. Invalid source disables both simulation and export.
-
-Simulate loads an explicitly chosen local fixture and optional complete decision
-packet JSON. Fake time can change temporarily and Reset fixture restores the
-loaded input. The input JSON, including ordered action stubs, is inspectable.
-These inputs are not saved by Save all and are not added to the repository.
-The separate Test fixtures controls now create and open repository fixture documents for source editing and explicit saving. Temporary captured inputs keep their existing behavior.
-
-The result leads with its stop reason and wake time, then shows selected and
-rejected earlier rules, unknown conditions, proposed effects and consumed fixture
-counters. A tested document revision and package digest identify the result.
-Changed execution content or fixture/packet bytes mark it stale. Saving or
-formatting the same execution content leaves it current; layout does not affect
-execution. A stale result stays visible beside its warning for comparison.
-
-Slack content follows the shared renderer's resolved route and bounded sections.
-The current captured workflow supplies Slack configuration; an explicit packet
-supplies author, findings and repository context. Missing or ambiguous packet
-context shows an error beside the trace. Missing member mappings show the shared
-default-channel fallback. Long content keeps omission notices and an expandable
-complete packet. Evidence URLs display as selectable text because the offline
-window does not navigate to remote sites. Preview wording states that nothing
-was sent. Warm-paper roles and local Plex fonts match the source editor.
-
-## Desktop workflow conversation
-
-Discuss is a fourth task view beside Process, Source and Simulate. It contains
-provider setup, context choices, attributed conversation history and a question
-field. Provider settings come from an explicitly chosen private JSON file.
-The person selects a named profile whose provider, model and optional effort
-remain visible. Loading settings or choosing a profile makes no model call.
-Codex rejects ambient global AGENTS and configured base instructions before
-dispatch and explains recovery
-through a separate instruction-free provider home with native login. The app
-does not alter global files or copy credentials. A native operation or failed
-transcript verification keeps useful answer text, displays the failure and
-requires Fresh session; a displayed provider ID alone never grants reuse.
-Send starts the selected CLI; no substitute model or implicit test runs.
-
-Cancel turn, Fresh session and provider input stay above the task views. They
-remain keyboard-accessible when an unfinished inspector field prevents changing
-views or a file operation is pending. They do not flush or discard document
-input. Send uses the editor's normal pending-input capture and queue. Rejected
-raw fields stay visible, accepted fields enter the draft, and a blocked capture
-keeps the question. Ctrl/Cmd+Enter sends; plain Enter inserts a new line.
-
-Context choices expose the selected rule, loaded Markdown references and latest
-completed simulation. The current document revision and the simulation's tested
-revision are separate. Current/stale labels describe execution identity; sending
-a question does not rerun the test. Invalid source can be discussed for repair.
-Oversized context produces a visible correction before provider dispatch and
-keeps the question. Workflow and test evidence are never silently shortened.
-
-Answers render as plain text with provider/model attribution and expandable
-context/session details. The history has its own scroll region and follows new
-text only when the person is already near its end. Coalesced updates retain
-input focus and expanded details. Visible answer/history limits name shortened
-or omitted text. Provider questions use native radio buttons, checkboxes and
-text fields, with an explicit Send reply action and inline errors.
-
-Cancellation and failures retain partial answers and expose fresh-session
-recovery. Fresh session leaves earlier messages visible but excludes them from
-future provider context. Provider changes start a separate native session and
-show which earlier turns were attached or omitted as a conversational excerpt.
-Source and actual test evidence determine facts; the excerpt is earlier dialogue.
-Visible history lasts only while this workflow stays open. It is not restored
-after close or restart, even if the provider retains its own private transcript.
-
-Leaving a workspace first protects source drafts, then asks to stop an active
-turn. Cancel retains both drafts and the running conversation. An accepted
-transition waits for owned process cleanup before replacing the document.
-These controls keep the existing warm-paper palette and local Plex fonts.
-Discussion is at most 1000px wide; profile controls and the composer stack on
-narrow windows, paths and answers wrap, and the page needs no horizontal scroll.
-
-## Desktop authoring operations
-
-Discuss now permits typed source, Markdown and fixture edits and actual offline
-fixture tests. Save all remains explicit. A compact status above the task views
-names files changed by authoring operations, including after cancellation or
-provider failure. It separately reports current unsaved drafts and whether Undo
-is available. The expandable Authoring operations list retains host receipts
-and distinguishes unconfirmed display from a rejected or applied mutation.
-Assistant prose remains plain text and cannot run an operation.
-
-Undo draft operation sits beside Save all and restores one accepted operation,
-including multi-file changes. The receipt disclosure explains its session limits
-and reset on Save, Reload, Discard or Reset. Broken JSON stays in Source with
-shared diagnostics and a working Undo action. Source file buttons distinguish
-Test fixture from Referenced file while keeping the same unsaved markers.
-
-Simulate keeps temporary captured inputs and adds a separate Test fixtures task.
-Create opens the new unsaved JSON in Source. Open test fixture chooses an explicit
-repository file. Run offline test shows actual pass/fail before the existing
-rule trace, followed by a four-column expected/actual table. On narrow windows
-its cells wrap so none of the compared values is hidden. The existing local
-palette, type, keyboard focus and source editing controls apply unchanged.
-
-Each tool operation captures ongoing human input. An incomplete inspector field
-stays focused and visible if capture rejects; accepted earlier fields are kept.
-The conversation controls remain reachable while capture is blocked. A test or
-edit completion never changes the task view or steals the person's selection.
-
-## Desktop live trials
-
-Live trial is a separate task view beside Process, Source, Simulate and Discuss.
-The form shows the current unsaved draft revision, repository/PR, named provider
-and model, local Git source, and required live calls before Start. Prepare proposal
-shows an unstarted proposal without contacting GitHub or a provider. Only Start
-begins classification and review. The call summary says that the selected provider
-may charge usage. Source saving and daemon activation are separate operations.
-Both assistants can populate an unstarted proposal after capturing pending human
-input. The form labels it as prepared only and shows the chosen profile, source
-and draft revision. Preparation failures preserve input and explain the rejection;
-the assistant cannot press Start. Profiles loaded in Discuss are available when
-the prepared proposal appears in Live trial.
-Reloading settings in either view updates both selectors. A same-named provider,
-model or effort change is visible before another Start. Changed or removed
-settings clear the prepared proposal; an outdated Start rejects before calls and
-asks the person to review the refreshed selection. Retained findings keep their
-original provider identity.
-
-If Codex's native settings include unsupported ambient instructions, the retained
-blocked result explains the instruction-free `CODEX_HOME` and normal login needed
-before another run. It says that analysis inputs were not sent. The draft and
-selection stay available; fixing the local setup requires another explicit Start.
-
-The result leads with completion status and the analysis decision. Actual findings
-and missing evidence precede detailed identities. Tested head, target base and
-comparison base have separate labels. Actual token counts and estimates have
-separate wording. A result matches remote evidence only at its visible last-check
-time. Refresh reads GitHub again without calling a model, marks changed evidence
-stale, and marks an unavailable check unknown. There is no background refresh.
-This keeps remote activity explicit while preserving useful retained findings.
-
-Cancel trial stays above task views and works while document input or a picker is
-pending. Editing selected inputs or pending source/inspector text stops active
-work. A rejected inspector field stays visible. Opening or closing first protects
-source drafts, then offers to stop active trial work. Private records survive that
-transition, conversation cleanup and restart. Unfinished records never resume
-implicitly. History names each retained trial and keeps at most ten across
-workspaces.
-
-Save as offline fixture requires an explicit private directory outside Git and
-writes a separate provenance file. Discuss can include the latest finished trial
-with its actual analysis and tested/last-checked identity. Oversized conversation
-context rejects before dispatch; it does not silently shorten trial findings.
-
-The view reuses the approved presentation's warm-paper roles, local Plex fonts,
-form controls and focus treatment. Repository and PR fields share a row on a
-laptop and stack on narrow windows. Findings wrap, identifiers wrap, and retained
-JSON scrolls inside a bounded disclosure. Native selects preserve keyboard
-operation for long profile and history labels.
+At narrow widths the action details move below the rule list. Long paths and
+conditions wrap, keyboard focus stays visible, and only bounded JSON blocks
+scroll. The last repository and workflow return after restart; simulations are
+rerun explicitly against files on disk. Screenshots and browser evidence remain
+outside Git.
 
 ## Offline CLI
 
@@ -493,16 +285,3 @@ commands. Status distinguishes the installation recovery pause from repository
 pause and source activation hold, and separates unresolved logical effects from
 historical unknown attempts. `--keep-unknown` explains that unrelated work may
 resume without granting a resend. No desktop control is added.
-
-## Desktop provider setup
-
-Discuss starts with a provider and model picker and a Save and use action.
-Codex choices come from its installed local catalog; Claude offers CLI model
-aliases. Loading choices makes no model request. A missing CLI explains the
-terminal installation/login step and offers Retry loading models.
-
-Saving writes private application settings outside Git and immediately selects
-the profile for discussion. Settings return after restart. Existing profiles
-remain selectable, and Import settings file supports advanced configuration.
-A failed save preserves the prior settings and conversation. No workflow source
-or credentials are written by provider setup.

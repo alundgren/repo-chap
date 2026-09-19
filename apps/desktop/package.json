@@ -10,7 +10,7 @@
     "package": "node package.mjs"
   },
   "devDependencies": {
-    "@repo-chap/providers": "workspace:*",
+    "@repo-chap/companion": "workspace:*",
     "@repo-chap/github": "workspace:*",
     "@repo-chap/slack": "workspace:*",
     "@repo-chap/workflow": "workspace:*",

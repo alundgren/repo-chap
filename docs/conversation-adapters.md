@@ -1,5 +1,9 @@
 # Local conversation adapters
 
+This retained library documents the former embedded authoring integration. The
+current desktop does not import or run it. Workflow authoring uses the user's
+normal agent and [the companion CLI](desktop.md).
+
 `@repo-chap/providers` exports `runConversationTurn`. The desktop host supplies an
 immutable context string, a question, a private working directory, a configured
 provider profile, registered local tools and an input callback. The renderer
