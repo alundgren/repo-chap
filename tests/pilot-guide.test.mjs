@@ -214,3 +214,40 @@ echo "\${FAKE_REMOTE:-https://github.com/example-team/pilot-test.git}"
   assert.equal(await readFile(calls, 'utf8'), 'mutation\n');
   for (const match of plan.matchAll(/```bash\n([\s\S]*?)```/g)) await command('bash', ['-n'], { input: match[1] });
 });
+
+test('fixture guard resolves separate, multiple and rewritten Git push destinations', async t => {
+  const f = await fixture(t);
+  const directory = await generateFixtures(f.store, f.run);
+  const plan = await readFile(join(directory, 'fixture-plan.md'), 'utf8');
+  const block = plan.split('```bash\n')[1].split('```')[0];
+  const guard = block.slice(0, block.indexOf('test ! -e'));
+  const bin = join(f.root, 'gh-bin'); await mkdir(bin, { mode: 0o700 });
+  const calls = join(f.root, 'remote-mutations');
+  await writeFile(join(bin, 'gh'), `#!/bin/sh
+case "$*" in
+  *".id"*) echo 17 ;;
+  *".private"*) echo true ;;
+  *) echo mutation >> "$CALLS" ;;
+esac
+`, { mode: 0o700 });
+  const approved = 'https://github.com/example-team/pilot-test.git';
+  const foreign = 'https://github.com/example-team/another.git';
+  const env = { PATH: `${bin}:${process.env.PATH}`, CALLS: calls, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' };
+  const cases = [
+    [['remote.origin.pushurl', foreign]],
+    [['remote.origin.pushurl', approved], ['remote.origin.pushurl', foreign]],
+    [[`url.${foreign}.pushInsteadOf`, approved]],
+    [['remote.origin.pushurl', approved], ['remote.origin.pushurl', approved]],
+  ];
+  for (const [index, settings] of cases.entries()) {
+    const cwd = join(f.root, `repo-${index}`); await mkdir(cwd, { mode: 0o700 });
+    await command('git', ['init'], { cwd, env });
+    await command('git', ['remote', 'add', 'origin', approved], { cwd, env });
+    for (const [key, value] of settings) await command('git', ['config', '--add', key, value], { cwd, env });
+    assert.equal((await command('git', ['remote', 'get-url', 'origin'], { cwd, env })).trim(), approved);
+    await assert.rejects(command('bash', ['-c', guard + '\nmutate gh label create "$prefix" --repo "$repo"'], {
+      cwd, env, input: `approve ${f.run.id}\n`,
+    }));
+    await assert.rejects(readFile(calls), { code: 'ENOENT' });
+  }
+});

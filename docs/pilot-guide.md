@@ -88,7 +88,8 @@ workflow, a reproducible greeting check and CI replay JSON under the external
 run directory. Read the generated plan before acting. It gives exact Bash
 commands, fixed repository and run values, unique branches and label, a preview
 and typed confirmation **for each remote mutation**, and cleanup commands.
-The wrapper rechecks repository ID, privacy and clone remote before executing.
+The wrapper rechecks repository ID, privacy, clone remote and every resolved
+push URL before executing.
 Never remove these checks or approve unseen commands. A shell session stopped
 mid-plan resumes at the first uncompleted command after read-only inspection.
 Unknown push/PR-create responses require reconciliation before retrying.
@@ -155,25 +156,66 @@ Use the verified tailnet diagnostic account only with operator permission.
 In a permitted shell, run service operations as `repo-chap` using
 `/opt/repo-chap/current/repo-chap`; state is `/var/lib/repo-chap`.
 
-1. Record `daemon status` and `daemon inspect RUN --json` for waiting work.
-   Restart `repo-chap.service`. Verify the same run resumes with its prior
-   attempts, reservations, repair budget and next wake.
-2. Record `daemon versions --repo OWNER/REPO`. Preview/approve an invalid JSON
-   update to the watched run branch. Verify rejected version diagnostics and
-   continued use of the last valid digest. Restore valid JSON through another
-   confirmed push.
-3. Run `daemon rollback VERSION --repo OWNER/REPO`. Confirm the selected version
-   stays active through another poll. Use `daemon resume-auto` only when ready
-   to release the hold. Running jobs retain their pinned package.
-4. Stop the service. Use `daemon backup /var/lib/repo-chap-home/backups/pilot
-   --state-dir /var/lib/repo-chap --config /etc/repo-chap/installation.json` as
-   the service account. Restore to a **new** private directory with `daemon
-   restore`, preserving the original state separately. Follow the exact
-   ownership, move and service steps in [backup/restore](daemon-operations.md#coherent-backup).
-5. Start against restored state; verify it is paused. Run `daemon reconcile`,
-   inspect status/inbox and preserved charges. Resolve unknown effects before
-   an explicitly approved `daemon resume-restored`. Do not resend an unknown
-   Slack delivery just to make the guide pass.
+The following commands run inside the permitted VM shell. Define this helper
+so each daemon command uses the service account and explicit state directory:
+
+```sh
+chap() {
+  sudo -u repo-chap -H /opt/repo-chap/current/repo-chap daemon "$@" --state-dir /var/lib/repo-chap
+}
+chap status
+chap inspect RUN --json
+sudo systemctl restart repo-chap.service
+chap status
+chap inspect RUN --json
+```
+
+Replace `RUN` with the daemon run ID, which differs from the infrastructure run
+ID. Verify the waiting run resumes with its previous attempts, reservations,
+repair budget and next wake. Record versions before previewing and approving
+an invalid JSON push to the watched run branch:
+
+```sh
+chap versions --repo OWNER/REPO
+```
+
+Verify rejection diagnostics and continued use of the last valid digest.
+Restore valid JSON through another confirmed push. Replace `VERSION` with a
+recorded valid version, then test rollback and a subsequent poll:
+
+```sh
+chap rollback VERSION --repo OWNER/REPO
+chap versions --repo OWNER/REPO
+# After confirming the rollback hold, explicitly release it:
+chap resume-auto --repo OWNER/REPO
+```
+
+Running jobs keep their pinned package. For backup, create a private parent
+and stop the service first:
+
+```sh
+sudo install -d -m 0700 -o repo-chap -g repo-chap /var/lib/repo-chap-home/backups
+sudo systemctl stop repo-chap.service
+chap backup /var/lib/repo-chap-home/backups/pilot --config /etc/repo-chap/installation.json
+sudo -u repo-chap -H /opt/repo-chap/current/repo-chap daemon restore /var/lib/repo-chap-home/backups/pilot --state-dir /var/lib/repo-chap-home/restored
+```
+
+Both destination directories must be new. Follow the ownership, preserved
+original state and directory replacement steps in
+[backup/restore](daemon-operations.md#coherent-backup) while the service is stopped.
+After placing the restored state at `/var/lib/repo-chap`, start and verify the
+restored pause and preserved charges:
+
+```sh
+sudo systemctl start repo-chap.service
+chap reconcile
+chap status
+chap inbox
+# Only after inspecting and resolving unknown effects, explicitly approve:
+chap resume-restored
+```
+
+Do not resend an unknown Slack delivery just to make the guide pass.
 
 ## Failure, diagnostic permission and cleanup
 

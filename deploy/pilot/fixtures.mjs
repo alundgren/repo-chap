@@ -27,6 +27,7 @@ mutate() {
   test "$(gh api "repos/$repo" --jq '.id')" = ${quote(String(run.repositoryId))} || return 1
   test "$(gh api "repos/$repo" --jq '.private')" = true || return 1
   test "$(git remote get-url origin)" = "https://github.com/$repo.git" || return 1
+  test "$(git remote get-url --push --all origin)" = "https://github.com/$repo.git" || return 1
   "$@"
 }
 `;
