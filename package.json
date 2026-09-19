@@ -13,13 +13,16 @@
     "browser:install": "vp exec playwright install chromium webkit",
     "build": "vp run @repo-chap/workflow#build && vp run @repo-chap/slack#build && vp run @repo-chap/companion#build && vp run @repo-chap/github#build && vp run @repo-chap/providers#build && vp run @repo-chap/execution#build && vp run @repo-chap/runtime#build && vp run @repo-chap/daemon#build && vp run repo-chap#build && vp run @repo-chap/desktop#build",
     "typecheck": "vp run build && vp exec tsc --noEmit --allowImportingTsExtensions",
-    "test": "vp run build && vp exec node --test --test-reporter=dot tests/*.test.ts",
+    "test": "vp run build && vp exec node --test --test-reporter=dot tests/*.test.ts tests/*.test.mjs",
     "check": "vp run typecheck && vp run test",
     "desktop": "vp run build && vp run @repo-chap/desktop#start",
     "desktop:package": "vp run build && vp run @repo-chap/desktop#package",
     "test:desktop": "vp run build && vp exec node --test --test-reporter=dot tests/desktop*.electron.ts",
     "test:systemd": "vp run build && vp exec bash deploy/smoke-systemd.sh",
-    "docs:validate": "vp exec node docs/pr-workflows/validate.ts"
+    "docs:validate": "vp exec node docs/pr-workflows/validate.ts",
+    "pilot": "vp exec node deploy/pilot/pilot.mjs",
+    "test:pilot": "vp run build && vp exec node --test --test-reporter=dot tests/pilot.test.mjs",
+    "test:pilot:integration": "vp run build && vp exec node deploy/pilot/integration.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",

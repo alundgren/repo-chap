@@ -10,3 +10,10 @@ playwright-report/
 *.pem
 *.sqlite
 *.sqlite-*
+
+# Pilot runtime files must also remain outside every checkout.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
