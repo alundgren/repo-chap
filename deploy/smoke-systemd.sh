@@ -17,7 +17,7 @@ cleanup() {
 }
 trap cleanup EXIT
 test -f "$root/apps/cli/dist/cli.js"
-docker build -f "$root/deploy/smoke.Dockerfile" -t "$image" "$root/deploy" > "$logs/build.log" 2>&1
+docker build --build-arg NODE_VERSION="$(cat "$root/.node-version")" -f "$root/deploy/smoke.Dockerfile" -t "$image" "$root/deploy" > "$logs/build.log" 2>&1
 docker run -d --name "$name" --privileged --cgroupns=private --network none --memory 768m --pids-limit 512 --tmpfs /run --tmpfs /run/lock "$image" > "$logs/container-id"
 docker cp "$root/deploy" "$name:/opt/install"
 docker cp "$root/apps/cli/dist/cli.js" "$name:/opt/cli.js"
@@ -32,7 +32,7 @@ for attempt in $(seq 1 60); do
 done
 bash /opt/install/install.sh /opt/cli.js fictional-v1 /usr/local/bin/node
 bash /opt/install/install.sh /opt/cli.js fictional-v1 /usr/local/bin/node
-node /opt/setup.mjs /etc/repo-chap /var/lib/repo-chap-home/provider
+vp node /opt/setup.mjs /etc/repo-chap /var/lib/repo-chap-home/provider
 chown -R repo-chap:repo-chap /etc/repo-chap /var/lib/repo-chap-home
 mkdir -p /etc/systemd/system/repo-chap.service.d /etc/systemd/system/repo-chap-diagnostics.service.d
 printf '[Service]\nEnvironment=NODE_OPTIONS=--import=/opt/preload.mjs\n' > /etc/systemd/system/repo-chap.service.d/fixture.conf
@@ -44,16 +44,16 @@ for attempt in $(seq 1 30); do
   if cli daemon status --state-dir /var/lib/repo-chap --json > /tmp/status.json; then break; fi
   sleep 1
 done
-node -e 'const s=require("/tmp/status.json");if(!s.ok||s.result.recovery.paused)process.exit(1)'
+vp node -e 'const s=require("/tmp/status.json");if(!s.ok||s.result.recovery.paused)process.exit(1)'
 test "$(systemctl show -p User --value repo-chap.service)" = repo-chap
 test "$(stat -c %a /var/lib/repo-chap/control.sock)" = 600
 test "$(stat -c %a /var/lib/repo-chap/runtime.sqlite)" = 600
 test "$(stat -c %a /etc/repo-chap)" = 700
 cli daemon register /etc/repo-chap/workflow.json --repo-root /etc/repo-chap --repo reef-labs/paperboat --profile pilot --state-dir /var/lib/repo-chap --json > /tmp/register.json
-node -e 'if(!require("/tmp/register.json").ok)process.exit(1)'
+vp node -e 'if(!require("/tmp/register.json").ok)process.exit(1)'
 cli daemon pause --repo reef-labs/paperboat --state-dir /var/lib/repo-chap
 cli daemon diagnose --state-dir /var/lib/repo-chap --config /etc/repo-chap/installation.json --json > /tmp/diagnostics.json
-node -e 'const d=require("/tmp/diagnostics.json");if(!d.ok||d.account.uid===0)process.exit(1);console.log(JSON.stringify(d))'
+vp node -e 'const d=require("/tmp/diagnostics.json");if(!d.ok||d.account.uid===0)process.exit(1);console.log(JSON.stringify(d))'
 systemctl start repo-chap-diagnostics.service
 test "$(systemctl show -p ExecMainStatus --value repo-chap-diagnostics.service)" = 0
 test -z "$(ss -H -lntup)"
@@ -68,7 +68,7 @@ for attempt in $(seq 1 30); do
   if cli daemon status --state-dir /var/lib/repo-chap --json > /tmp/restored.json; then break; fi
   sleep 1
 done
-node -e 'const s=require("/tmp/restored.json").result;if(!s.recovery.paused||!s.repositories[0].paused||s.limits.repositoryCostUnits!==5)process.exit(1)'
+vp node -e 'const s=require("/tmp/restored.json").result;if(!s.recovery.paused||!s.repositories[0].paused||s.limits.repositoryCostUnits!==5)process.exit(1)'
 cli daemon reconcile --state-dir /var/lib/repo-chap
 cli daemon resume-restored --state-dir /var/lib/repo-chap
 systemctl restart repo-chap.service
@@ -76,7 +76,7 @@ for attempt in $(seq 1 30); do
   if cli daemon status --state-dir /var/lib/repo-chap --json > /tmp/restarted.json; then break; fi
   sleep 1
 done
-node -e 'const s=require("/tmp/restarted.json").result;if(s.recovery.paused||!s.repositories[0].paused||s.limits.repositoryCostUnits!==5)process.exit(1)'
+vp node -e 'const s=require("/tmp/restarted.json").result;if(s.recovery.paused||!s.repositories[0].paused||s.limits.repositoryCostUnits!==5)process.exit(1)'
 test -z "$(ss -H -lntup)"
 systemctl stop repo-chap.service
 test ! -S /var/lib/repo-chap/control.sock

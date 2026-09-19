@@ -40,8 +40,8 @@ job's policy digest. A policy needs at least one required command.
   "requiredChecks": [
     {
       "id": "tests",
-      "executable": "corepack",
-      "args": ["pnpm", "test"],
+      "executable": "vp",
+      "args": ["run", "test"],
       "timeoutMs": 120000,
       "maxOutputBytes": 1048576
     }
@@ -164,7 +164,7 @@ verified result, prints its patch and required-check logs, and restores the
 candidate to an empty private directory. All paths below are local examples.
 
 ```sh
-corepack pnpm exec node --input-type=module - \
+vp node --input-type=module - \
   /private/trials/repairs /private/trials/repair-result.json \
   /private/trials/restored-candidate <<'JS'
 import { readFile } from 'node:fs/promises';

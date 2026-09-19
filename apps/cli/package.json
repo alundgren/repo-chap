@@ -12,7 +12,7 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "build": "node build.mjs"
+    "build": "vp exec node build.mjs"
   },
   "devDependencies": {
     "@repo-chap/companion": "workspace:*",

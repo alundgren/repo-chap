@@ -10,7 +10,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "vp exec tsc -p tsconfig.json"
   },
   "dependencies": {
     "ajv": "^8.20.0",

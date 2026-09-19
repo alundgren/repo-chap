@@ -34,8 +34,8 @@ individual tool prompts:
     "excludedPaths": ["src/generated"],
     "requiredChecks": [{
       "id": "tests",
-      "executable": "corepack",
-      "args": ["pnpm", "test"],
+      "executable": "vp",
+      "args": ["run", "test"],
       "timeoutMs": 120000,
       "maxOutputBytes": 1048576
     }]

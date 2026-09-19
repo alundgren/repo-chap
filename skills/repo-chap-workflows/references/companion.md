@@ -51,7 +51,7 @@ as `needs_result`; do not invent them to make a real PR appear reviewed.
 
 If the app is closed, keep editing and use CLI validation/replay. Explain that
 the visual companion needs to be started when it would help the user. Installed
-users open Repo Chap normally; developers run `corepack pnpm desktop` in the
+users open Repo Chap normally; developers run `vp run desktop` in the
 Repo Chap checkout. A timeout or disconnect does not confirm whether the view
 changed. Read status before repeating a command.
 

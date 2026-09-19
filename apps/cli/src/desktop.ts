@@ -20,7 +20,7 @@ select, --workflow checks that the intended workflow is still selected.
 Status lists the available targets. Navigation and highlights only affect the
 view. Simulation replays local input without models, network or remote effects.
 Real PR input is an inspection directory containing evidence.json and fixture.json.
-Start the installed app first, or run corepack pnpm desktop from its checkout.
+Start the installed app first, or run vp run desktop from its checkout.
 Set REPO_CHAP_DESKTOP_CONTROL in both processes to use a separate private socket.
 `;
 async function currentRoot(): Promise<string> {

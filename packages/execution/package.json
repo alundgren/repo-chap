@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
-  "scripts": { "build": "tsc -p tsconfig.json" },
+  "scripts": { "build": "vp exec tsc -p tsconfig.json" },
   "dependencies": { "@repo-chap/workflow": "workspace:*", "@repo-chap/github": "workspace:*", "@repo-chap/providers": "workspace:*" }
 }

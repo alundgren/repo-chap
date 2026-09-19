@@ -5,9 +5,9 @@
   "type": "module",
   "main": "dist/main.cjs",
   "scripts": {
-    "build": "node build.mjs",
-    "start": "electron .",
-    "package": "node package.mjs"
+    "build": "vp exec node build.mjs",
+    "start": "vp exec electron .",
+    "package": "vp exec node package.mjs"
   },
   "devDependencies": {
     "@repo-chap/companion": "workspace:*",

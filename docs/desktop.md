@@ -7,11 +7,11 @@ those files and shows the current workflow and simulation results.
 
 ## Start the app
 
-Use Node 24 and the pinned pnpm through Corepack for development:
+Use Vite+ for development. It selects the pinned Node and pnpm versions:
 
 ```sh
-corepack pnpm install --frozen-lockfile
-corepack pnpm desktop
+vp install --frozen-lockfile
+vp run desktop
 ```
 
 Open repository discovers workflows and shows a selector with names and relative
@@ -28,7 +28,7 @@ repo-chap desktop status --repo-root /path/to/repository --json
 From the source checkout, a known repository can be opened at startup:
 
 ```sh
-corepack pnpm --filter @repo-chap/desktop start --repo-root /path/to/repository --workflow /path/to/repository/.repo-chap/workflow.json
+vp run @repo-chap/desktop#start --repo-root /path/to/repository --workflow /path/to/repository/.repo-chap/workflow.json
 ```
 
 The app restores the last selected repository and workflow after restart. It
@@ -113,8 +113,8 @@ repeating the command. Errors use exit 8; usage errors use exit 64. See
 Build an unpacked Linux application or unsigned macOS bundle outside Git:
 
 ```sh
-corepack pnpm desktop:package --out /tmp/repo-chap-packages --platform linux --arch x64
-corepack pnpm desktop:package --out /tmp/repo-chap-packages --platform darwin --arch arm64
+vp run desktop:package --out /tmp/repo-chap-packages --platform linux --arch x64
+vp run desktop:package --out /tmp/repo-chap-packages --platform darwin --arch arm64
 ```
 
 Both platforms accept `x64` and `arm64`. The package includes Electron, fonts,
@@ -123,8 +123,8 @@ and JavaScript. Linux launches `Repo Chap-linux-x64/repo-chap-desktop`; macOS op
 signing, notarization, or automatic updates. The CLI installs separately.
 
 ```sh
-corepack pnpm check
-REPO_CHAP_DESKTOP_PROOF=/tmp/repo-chap-proof xvfb-run -a corepack pnpm test:desktop
+vp run check
+REPO_CHAP_DESKTOP_PROOF=/tmp/repo-chap-proof vp exec xvfb-run -a vp run test:desktop
 ```
 
 The tests use fictional repositories, actual main/preload/renderer code, and
