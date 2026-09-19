@@ -1,6 +1,6 @@
 import { summarizePublications, type AnalysisResult, type RepairAttemptResult, type RuntimeStore, type RunRecord } from '@repo-chap/runtime';
 import { currentFacts, hasCompleteEvidence, type WorkflowPackage } from '@repo-chap/workflow';
-import type { Inspection, PushReceipt } from '@repo-chap/github';
+import { checkOutcome, ciFacts, type Inspection, type PushReceipt } from '@repo-chap/github';
 import type { DecisionPacket } from '@repo-chap/slack';
 import { threadResolutionSummary } from './threads.js';
 
@@ -65,17 +65,22 @@ export async function packetForRun(store: RuntimeStore, run: RunRecord, pkg: Wor
     const failure = history.findLast(entry => entry.job.actionId === action && entry.job.evidenceKey === run.evidenceKey);
     uncertainty.push(`Action ${action} failed for current evidence.${failure && 'provider' in failure ? ` ${failure.provider.diagnostic}` : failure && 'repair' in failure ? ` ${failure.repair.diagnostic}` : ''}`);
   }
-  const githubChecks: DecisionPacket['checks'] = inspection.evidence.checks.items.map(check => ({ name: check.name,
-    status: (check.status !== 'COMPLETED' && check.kind === 'CheckRun' || check.status === 'PENDING') ? 'pending' : ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(check.conclusion ?? check.status) ? 'passed' : 'failed',
-    evidence: `GitHub ${check.kind} captured on ${run.headSha}: ${check.conclusion ?? check.status}.` }));
+  const githubChecks: DecisionPacket['checks'] = inspection.evidence.checks.items.map(check => {
+    const outcome = checkOutcome(check);
+    return { name: check.name, status: outcome === 'unknown' ? 'not_run' : outcome,
+      evidence: `GitHub ${check.kind} captured on ${run.headSha}: ${check.conclusion ?? check.status}.` };
+  });
   checks.unshift(...githubChecks);
   if (!githubChecks.length) uncertainty.push('No current GitHub check results were recorded. Confirm required checks before merging.');
   const publicationBlocked = publications.some(publication => effects.find(effect => effect.id === publication.effectId)!.evidenceKey === run.evidenceKey && (publication.state !== 'confirmed' || publication.freshness !== 'current'));
   const blocked = !run.evidenceAvailable || !hasCompleteEvidence(facts) || currentFailures.length > 0 || publicationBlocked || facts.lifecycle !== 'open' || facts.draft !== false || facts.externalReviewPending !== false || facts.young !== false || facts.headDebouncing !== false;
   const unresolvedPush = effects.some(effect => effect.kind === 'github.push_candidate' && ['sending', 'unknown'].includes(effect.state));
-  const ready = !blocked && !unresolvedPush && facts.conflict === false && facts.unaddressedReview === false && !threads?.remainingConcerns.length && review?.coverage === 'complete' && review.verdict === 'acceptable' && classification?.uncertain === false && githubChecks.length > 0 && githubChecks.every(check => check.status === 'passed');
-  const outcome = blocked ? 'blocked_execution' : facts.conflict === true ? 'needs_author' : facts.unaddressedReview === true || threads?.remainingConcerns.length || review?.verdict === 'concerns' || review?.verdict === 'blocking' ? 'needs_team' : ready ? 'ready_for_human_merge' : 'blocked_execution';
-  const reason = outcome === 'ready_for_human_merge' ? review!.summary : outcome === 'needs_author' ? 'The PR has a conflict that needs the author.' : outcome === 'needs_team' ? review?.summary ?? 'Retained review concerns need a team decision.' : currentFailures.length ? `Current action failed: ${currentFailures.join(', ')}. ${run.reason}` : publicationBlocked ? 'Publication has not completed with current evidence. Inspect each retained outcome.' : 'Current evidence does not establish a ready handoff.';
-  const decisions = { ready_for_human_merge: 'Review the current GitHub checks and changes. Merge on GitHub if the evidence is sufficient.', needs_author: 'Resolve the conflict or explain the intended change on the pull request.', needs_team: 'Decide how to address the remaining concerns on the pull request.', blocked_execution: 'Inspect the local run evidence and resolve the execution or access problem before retrying.' };
+  const ci = ciFacts(inspection.evidence);
+  if (ci.ciPending === true) uncertainty.push('GitHub CI checks are still running. Wait for their results.');
+  if (ci.ciFailed === null || ci.ciPending === null) uncertainty.push('Current GitHub CI results are unknown. Refresh check evidence before a merge handoff.');
+  const ready = ci.ciFailed === false && ci.ciPending === false && !blocked && !unresolvedPush && facts.conflict === false && facts.unaddressedReview === false && !threads?.remainingConcerns.length && review?.coverage === 'complete' && review.verdict === 'acceptable' && classification?.uncertain === false && githubChecks.length > 0 && githubChecks.every(check => check.status === 'passed');
+  const outcome = blocked ? 'blocked_execution' : facts.conflict === true || ci.ciFailed === true ? 'needs_author' : facts.unaddressedReview === true || threads?.remainingConcerns.length || review?.verdict === 'concerns' || review?.verdict === 'blocking' ? 'needs_team' : ready ? 'ready_for_human_merge' : 'blocked_execution';
+  const reason = outcome === 'ready_for_human_merge' ? review!.summary : outcome === 'needs_author' ? ci.ciFailed === true ? 'The PR has failed CI checks that need the author.' : 'The PR has a conflict that needs the author.' : outcome === 'needs_team' ? review?.summary ?? 'Retained review concerns need a team decision.' : currentFailures.length ? `Current action failed: ${currentFailures.join(', ')}. ${run.reason}` : publicationBlocked ? 'Publication has not completed with current evidence. Inspect each retained outcome.' : 'Current evidence does not establish a ready handoff.';
+  const decisions = { ready_for_human_merge: 'Review the current GitHub checks and changes. Merge on GitHub if the evidence is sufficient.', needs_author: 'Resolve the conflict or failed CI checks, or explain the intended change on the pull request.', needs_team: 'Decide how to address the remaining concerns on the pull request.', blocked_execution: 'Inspect the local run evidence and resolve the execution or access problem before retrying.' };
   return { schemaVersion: 1, repository: store.repository(run.repositoryId).name, prNumber: run.number, headSha: run.headSha!, authorLogin: inspection.evidence.pullRequest?.author ?? null, outcome, reason, recommendedDecision: decisions[outcome], findings, attemptedFixes, checks, uncertainty, evidenceLinks };
 }

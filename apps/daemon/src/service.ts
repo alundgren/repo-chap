@@ -252,7 +252,7 @@ export class DaemonService {
       park('waiting', `Decision packet retained in the CLI inbox. ${this.slackApi ? 'Slack delivery is queued independently.' : 'Slack delivery is disabled in installation settings.'} Request ${request.id}.`, null, action.onSuccess);
       return;
     }
-    const repairing = ['agent.resolve_conflict', 'agent.address_review'].includes(action.uses);
+    const repairing = ['agent.resolve_conflict', 'agent.address_review', 'agent.fix_ci'].includes(action.uses);
     const publishing = ['github.publish_review', 'github.set_labels'].includes(action.uses);
     const applying = repairing || publishing || ['checks.validate_candidate', 'github.push_candidate', 'github.resolve_eligible_threads'].includes(action.uses);
     if (!['agent.classify', 'agent.review'].includes(action.uses) && !(applying && this.dependencies.applyPolicy)) { park('blocked', `Analysis mode stopped before ${action.uses}. Review retained analysis locally.`, null, actionId, true); return; }

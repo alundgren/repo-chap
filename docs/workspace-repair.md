@@ -17,9 +17,11 @@ repo-chap workspace path/to/workflow.json \
 
 Use the same pinned workflow as the capture. The source repository must already
 contain the captured head and base commits. The command never fetches from a
-remote. `--action` identifies an `agent.address_review` or
-`agent.resolve_conflict` action. Repair requires complete capture evidence, an
-open non-draft PR, and either unresolved review threads or a confirmed conflict.
+remote. `--action` identifies an `agent.address_review`,
+`agent.resolve_conflict`, or `agent.fix_ci` action. Repair requires complete
+capture evidence and an open non-draft PR. The action also needs unresolved
+review threads, a confirmed conflict, or failed CI with no pending or unknown
+checks, respectively.
 A conflict must reproduce locally before starting the provider.
 
 Select Codex or Claude through the existing named
@@ -205,3 +207,22 @@ The personal pilot must verify real Codex/Claude repair quality, supported
 provider authentication and native macOS behavior. It must inspect the retained
 patch, required-check output and unknown-intent handoff. Automated Linux tests
 prove the execution and recovery contracts without paid calls or remote writes.
+
+## CI repair
+
+The example workflow selects `fix_ci` for failed GitHub checks after waiting
+for running checks. This action can repair a PR with no review threads. It
+receives captured check names, results and URLs and the pinned repository;
+it does not fetch remote failure logs. The provider must diagnose the cause
+locally or return a blocked result explaining what is missing. Do not disable
+checks to hide failures. Infrastructure or access problems need a human handoff.
+
+Configure required local checks that reproduce the repository's CI where
+possible. The host runs those commands on the finalized candidate. After a
+conditional push, a fresh GitHub observation must confirm CI results before a
+merge recommendation. The normal lifecycle repair limits survive that push.
+
+Replay `fixtures/replay/ci-repair.json` with the team-pr example to see a repair,
+validation, push and fresh observation waiting for CI. The separate
+`fixtures/replay/ci-pending.json` example waits without starting a provider.
+Both fixtures include expected outcomes for the companion's simulation view.

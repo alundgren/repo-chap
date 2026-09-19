@@ -9,7 +9,7 @@ The first true rule wins. Missing evidence is unknown rather than false.
 Conditions use `{ "field": "facts.draft", "op": "eq", "value": true }`,
 or recursive `all`, `any`, and `not`. Facts include lifecycle, draft,
 evidenceComplete, young, headDebouncing, conflict, unaddressedReview, and
-externalReviewPending. Memory includes classificationCurrent, reviewCurrent,
+externalReviewPending, ciFailed, and ciPending. Memory includes classificationCurrent, reviewCurrent,
 packetCurrent, and repairSuppressed. The schema names other available fields.
 
 Each action has `uses`, `execution`, `capabilities`, `onSuccess`, and `onFailure`.
@@ -21,7 +21,7 @@ capabilities, result dependencies, references, and execution cycles.
 | --- | --- | --- | --- |
 | Finish or wait | `control.close`, `control.wait_signal`, `control.wait_refresh`, `control.wait_debounce`, `control.wait_reviewer` | `code` | none |
 | Classify or review | `agent.classify`, `agent.review` | `agent` | `workspace.read` |
-| Repair | `agent.resolve_conflict`, `agent.address_review` | `agent` | `workspace.read`, `workspace.write` |
+| Repair | `agent.resolve_conflict`, `agent.address_review`, `agent.fix_ci` | `agent` | `workspace.read`, `workspace.write` |
 | Test candidate | `checks.validate_candidate` | `code` | `checks.run` |
 | Push tested candidate | `github.push_candidate` | `code` | `pr.push` |
 | Resolve addressed threads | `github.resolve_eligible_threads` | `code` | `review.resolve` |
@@ -60,3 +60,29 @@ Replay never starts providers or performs the proposed effects.
 For a Slack preview, supply complete decision packets with CLI `--packet` or
 desktop `--packets`. The head and outcome must match the proposed handoff.
 Missing packet context is a visible preview error, not evidence of delivery.
+
+## CI detection and repair
+
+Use `facts.ciPending == true` to wait with `control.wait_signal`, then
+`facts.ciFailed == true` to select `agent.fix_ci`. Place these after lifecycle,
+evidence, debounce, suppression and conflict handling. Include CI failure in
+your repair-suppression rule. The first matching rule wins.
+
+CI repair requires a confirmed failed check on the captured head and
+`ciPending == false`. It uses the canonical candidate result and the same
+repair limits, required local checks and conditional push as other repairs.
+Continue through `checks.validate_candidate` and `github.push_candidate`, then
+observe GitHub again. Passing local checks does not establish remote CI success.
+
+Both CI facts are unknown when checks are missing, collection is incomplete,
+or the observed revision changes. Unrecognized check states remain unknown.
+A pending check is not a failure. Completed unsuccessful checks, including
+cancelled and timed-out checks, count as failed; neutral and skipped checks
+count as successful. These facts cover all observed checks, not branch
+protection requirements. Missing facts in older fixtures remain unknown and
+cannot establish merge readiness. Add explicit CI facts to fixtures that test
+successful handoffs.
+
+Providers receive check results and links, without remote failure logs. Repair
+from local evidence; return blocked for missing evidence, infrastructure or
+credential problems. Never weaken checks merely to produce a passing result.

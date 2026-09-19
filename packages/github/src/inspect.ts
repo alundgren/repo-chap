@@ -1,5 +1,6 @@
 import { canonicalJson, currentFacts, digest, parseFixture, type Observation, type ReplayFixture, type WorkflowPackage } from '@repo-chap/workflow';
 import { GitHubReader, object, type QueryResult } from './client.js';
+import { ciFacts } from './checks.js';
 import { GitHubReadError, readFailure, type ReadFailure } from './errors.js';
 
 export interface Coverage { status: 'complete' | 'partial' | 'unknown'; pages: number; failure?: ReadFailure }
@@ -205,7 +206,7 @@ export async function inspectPullRequest(reader: GitHubReader, pkg: WorkflowPack
   const headChangedAt = previous?.headSha === pr?.headSha && previous?.baseSha === pr?.baseSha && previous?.headChangedAt &&
     Number.isFinite(Date.parse(previous.headChangedAt)) && Date.parse(previous.headChangedAt) <= Date.parse(now) ? previous.headChangedAt : headObservedAt;
   const observation: Observation = {
-    facts: { lifecycle: pr?.lifecycle ?? null, draft: pr?.draft ?? null, evidenceComplete: complete,
+    facts: { ...ciFacts(safe), lifecycle: pr?.lifecycle ?? null, draft: pr?.draft ?? null, evidenceComplete: complete,
       young: null, headDebouncing: null, conflict: pr ? pr.mergeability === 'unknown' ? null : pr.mergeability === 'conflicting' : null,
       unaddressedReview: reviewKnown ? pr?.reviewDecision === 'CHANGES_REQUESTED' ||
         safe.reviews.items.some(r => r.author === null && r.state === 'CHANGES_REQUESTED') ||

@@ -252,6 +252,8 @@
                 "facts.young",
                 "facts.headDebouncing",
                 "facts.conflict",
+                "facts.ciFailed",
+                "facts.ciPending",
                 "facts.unaddressedReview",
                 "facts.externalReviewPending",
                 "memory.classificationCurrent",

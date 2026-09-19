@@ -55,6 +55,7 @@ export function replay(pkg: WorkflowPackage, input: ReplayFixture): ReplayResult
     if (facts.lifecycle !== 'open' || facts.draft !== false || facts.young !== false || facts.headDebouncing !== false) {
       if (action.uses !== 'human.publish_packet') return stop('blocked', 'Work requires an open, non-draft PR whose age and debounce delays have passed.');
     }
+    if (action.uses === 'agent.fix_ci' && (facts.ciFailed !== true || facts.ciPending !== false)) return stop('blocked', 'CI repair requires a confirmed failure and no pending or unknown checks.');
     if (definition.repair && memory.repairSuppressed !== false) return stop('blocked', 'Repair suppression must be resolved against current evidence before another repair.');
     if (definition.consumesAgentBudget) {
       if (agents >= workflow.limits.maxAgentActionsPerWake || (control.attemptsThisHead ?? 0) >= workflow.limits.maxAttemptsPerHead) return stop('blocked', 'Agent action or per-head attempt budget is exhausted.');
@@ -63,8 +64,8 @@ export function replay(pkg: WorkflowPackage, input: ReplayFixture): ReplayResult
     let outcome: PacketOutcome | undefined;
     if (action.uses === 'human.publish_packet') {
       outcome = failureReason || !hasCompleteEvidence(facts) || facts.externalReviewPending !== false || facts.lifecycle !== 'open' || facts.draft !== false || facts.young !== false || facts.headDebouncing !== false ? 'blocked_execution' :
-        facts.conflict === true ? 'needs_author' : facts.unaddressedReview === true ? 'needs_team' :
-        memory.reviewCurrent === true && memory.classificationCurrent === true && control.review?.coverage === 'complete' && control.review.verdict === 'acceptable' && control.classification?.uncertain === false ? 'ready_for_human_merge' :
+        facts.conflict === true || facts.ciFailed === true ? 'needs_author' : facts.unaddressedReview === true ? 'needs_team' :
+        facts.ciFailed === false && facts.ciPending === false && memory.reviewCurrent === true && memory.classificationCurrent === true && control.review?.coverage === 'complete' && control.review.verdict === 'acceptable' && control.classification?.uncertain === false ? 'ready_for_human_merge' :
         memory.reviewCurrent === true && (control.review?.verdict === 'concerns' || control.review?.verdict === 'blocking') ? 'needs_team' : 'blocked_execution';
     }
     const reason = failureReason ?? (outcome ? `Proposed human handoff: ${outcome}.` : 'Proposed action only; replay runs no code, provider, or remote effect.');

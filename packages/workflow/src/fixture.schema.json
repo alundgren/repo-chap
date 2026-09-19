@@ -23,6 +23,8 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+              "ciFailed": { "type": ["boolean", "null"] },
+              "ciPending": { "type": ["boolean", "null"] },
               "draft": {
                 "type": [
                   "boolean",

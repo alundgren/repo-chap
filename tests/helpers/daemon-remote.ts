@@ -34,7 +34,7 @@ export function remote(inspection: Inspection, count = 1) {
           createdAt: comment.createdAt, commit: comment.headSha && { oid: comment.headSha } }))), totalCount: thread.comments.items.length },
       } : null };
     }
-    else if (operation === 'InspectChecks') data = { repository: { object: { statusCheckRollup: { contexts: page([]) } } } };
+    else if (operation === 'InspectChecks') data = { repository: { object: { statusCheckRollup: { contexts: page(inspection.evidence.checks.items.map(check => check.kind === 'CheckRun' ? { __typename: check.kind, id: check.id, name: check.name, status: check.status, conclusion: check.conclusion, detailsUrl: check.url } : { __typename: check.kind, id: check.id, context: check.name, state: check.status, targetUrl: check.url })) } } } };
     else if (operation === 'Inspectreactions') data = { repository: { pullRequest: { reactions: page(reviewer ? [{ id: 'EYES_fictional', user: { login: 'willow-bot' }, content: 'EYES', createdAt: '2026-09-16T12:00:00Z' }] : []) } } };
     else if (operation.startsWith('Inspect')) data = { repository: { pullRequest: { [operation.slice(7)]: page([]) } } };
     else throw new Error('Unexpected query');

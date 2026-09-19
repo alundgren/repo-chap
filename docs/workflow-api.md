@@ -104,7 +104,7 @@ The exported `actionRegistry` defines these trusted names:
 | `control.wait_refresh` | Wait with bounded read backoff |
 | `control.wait_debounce` | Wait for both age and head deadlines |
 | `control.wait_reviewer` | Wait until next poll or the fixed reviewer deadline |
-| `agent.resolve_conflict`, `agent.address_review` | Agent, produces a candidate on success |
+| `agent.resolve_conflict`, `agent.address_review`, `agent.fix_ci` | Agent, produces a candidate on success |
 | `agent.classify`, `agent.review` | Agent, produces analysis |
 | `checks.validate_candidate` | Requires a candidate, produces checks |
 | `github.push_candidate` | Requires successful checks, produces a push receipt |
@@ -140,7 +140,7 @@ are data for the caller to persist; it neither owns timers nor changes inputs.
 
 `parseFixture(value)` validates the versioned fixture contract; `replay(package,
 fixture)` returns a serializable `ReplayResult`. Its inputs never launch
-processes, providers, checks, GitHub requests, or notifications. See the five
+processes, providers, checks, GitHub requests, or notifications. See the
 fictional examples in `fixtures/replay`.
 
 A fixture has `schemaVersion: 1`, a UTC `now` timestamp, and one or more
@@ -222,3 +222,22 @@ skill, starter files, and schemas; the Repo Chap source checkout is not required
 annotation commands. JSON responses contain a version and explicit success or
 failure. Desktop failures exit 8; invalid command arguments exit 64. Replay
 completion still requires checking expectation comparisons for test success.
+
+## CI observations
+
+`facts.ciFailed` and `facts.ciPending` expose the captured head's GitHub check
+runs and commit statuses. Both may be true when one check has failed while
+another is running. Missing checks, partial collection and unstable revisions
+produce null values. Unknown states cannot establish successful CI. These are
+all observed checks, not a list of required branch-protection checks.
+
+`agent.fix_ci` produces the existing candidate result and shares repair budgets,
+suppression, validation and conditional push. It requires `ciFailed == true`
+and `ciPending == false`; use `control.wait_signal` while CI runs. The live
+repair runner verifies these conditions against captured check evidence.
+A ready-for-merge replay requires both CI facts to be explicitly false.
+Older version-1 workflows and captures still load; absent CI facts do not block
+unrelated analysis or conflict repair but cannot authorize CI repair or a ready
+handoff. Update old readiness fixtures with explicit CI results.
+
+See [workspace repair](workspace-repair.md) for execution and diagnostic limits.

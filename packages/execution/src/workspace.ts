@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { prepareCaptureDirectory, type Inspection } from '@repo-chap/github';
+import { ciFacts, prepareCaptureDirectory, type Inspection } from '@repo-chap/github';
 import { buildPackage, canonicalJson, digest, parseFixture, validateActionPayload, WorkflowError, type WorkflowPackage } from '@repo-chap/workflow';
 import { collectSources, runProcess, runProvider, validateProfile, type ProviderProfile, type SourceBundle } from '@repo-chap/providers';
 import { artifactLimit, putArtifact, putJson, readArtifact, readRepairResult } from './artifacts.js';
@@ -36,7 +36,7 @@ function validateJob(job: RepairJob, profile: ProviderProfile): void {
     fixture.observations.length !== 1 || observation?.evidenceDigest !== inspection.evidenceDigest || observation.headSha !== job.headSha || observation.baseSha !== job.baseSha)
     throw new ExecutionError('Repair capture identities or digests do not match the job.');
   const action = pkg.workflow.actions[job.actionId];
-  if (!action || !['agent.resolve_conflict', 'agent.address_review'].includes(action.uses) || !action.capabilities.includes('workspace.write') ||
+  if (!action || !['agent.resolve_conflict', 'agent.address_review', 'agent.fix_ci'].includes(action.uses) || !action.capabilities.includes('workspace.write') ||
     !pkg.workflow.requestedCapabilities.includes('checks.run') || !profile.maximumCapabilities.includes('checks.run')) throw new ExecutionError('Choose a repair action and permit host-owned checks.run in the workflow and operator profile.');
 }
 interface RepairOptions {
@@ -93,8 +93,11 @@ export async function runRepair(input: RepairJob, options: RepairOptions): Promi
       evidence.metadata.status !== 'complete' || ['labels', 'checks', 'reviews', 'threads', 'reviewerActivity'].some(key => evidence[key as 'threads'].coverage.status !== 'complete') ||
       unresolvedThreads(job).some(thread => thread.comments.coverage.status !== 'complete'))
       throw new ExecutionFailure('blocked', 'Repair requires complete evidence for an open, non-draft PR at stable captured head and base revisions. Inspect again.');
-    const conflict = job.package.workflow.actions[job.actionId]!.uses === 'agent.resolve_conflict';
-    if (conflict ? pr.mergeability !== 'conflicting' : !unresolvedThreads(job).length) throw new ExecutionFailure('blocked', 'Select a confirmed conflict or captured unresolved review threads before starting repair.');
+    const uses = job.package.workflow.actions[job.actionId]!.uses;
+    const conflict = uses === 'agent.resolve_conflict', ci = uses === 'agent.fix_ci';
+    const checks = ciFacts(evidence);
+    if (ci && (checks.ciFailed !== true || checks.ciPending !== false)) throw new ExecutionFailure('blocked', 'CI repair requires a confirmed failure on the captured head and no pending or unknown checks.');
+    if (conflict ? pr.mergeability !== 'conflicting' : !ci && !unresolvedThreads(job).length) throw new ExecutionFailure('blocked', 'Select a confirmed conflict or captured unresolved review threads before starting repair.');
     const repository = await realpath(options.sourceRepository);
     if (!(await lstat(repository)).isDirectory() || !relative(repository, root).startsWith('..')) throw new ExecutionFailure('blocked', 'Keep execution artifacts outside the source repository.');
     const source = await collectSources(repository, job.headSha, job.baseSha, controller.signal); await current();
@@ -112,7 +115,7 @@ export async function runRepair(input: RepairJob, options: RepairOptions): Promi
     const evidenceRefs = [`evidence:${inspection.evidenceDigest}`, `source:${source.digest}`, ...unresolvedThreads(job).map(thread => `thread:${thread.id}`)];
     const providerEvidence = { ...evidence, workspace: { expectedHeadSha: job.headSha, baseSha: job.baseSha, conflictingPaths: conflicts,
       allowedPaths: job.policy.allowedPaths, excludedPaths: job.policy.excludedPaths, requiredChecks: job.policy.requiredChecks.map(check => check.id), evidenceRefs,
-      instructions: 'Edit only permitted repository files. Read and follow checked-out repository instructions. Do not commit or change HEAD. The host owns staging, final commit creation and required checks. For a candidate proposal set candidateSha to expectedHeadSha and list the actual paths changed relative to that head, including merged base changes. Account for every supplied unresolved thread using only the evidenceRefs listed here. Unknown product intent must return blocked, with the question in its reason. Suggested checks are advisory only. Keep notes in notesMarkdown, never create runtime files in the checkout. Do not access credentials or perform any remote effect.' } };
+      instructions: (ci ? 'Diagnose the captured failed CI checks using the pinned source and local reproduction. Check names, statuses and URLs are supplied; remote failure logs are not. Do not claim to have read unavailable logs. Return blocked when the cause cannot be established locally, or requires credentials, infrastructure changes or a rerun rather than repository edits. Do not weaken checks to make them pass. ' : '') + 'Edit only permitted repository files. Read and follow checked-out repository instructions. Do not commit or change HEAD. The host owns staging, final commit creation and required checks. For a candidate proposal set candidateSha to expectedHeadSha and list the actual paths changed relative to that head, including merged base changes. Account for every supplied unresolved thread using only the evidenceRefs listed here. Unknown product intent must return blocked, with the question in its reason. Suggested checks are advisory only. Keep notes in notesMarkdown, never create runtime files in the checkout. Do not access credentials or perform any remote effect.' } };
     const providerDirectory = join(worker, 'provider');
     result.provider = await runProvider({ package: job.package, actionId: job.actionId, profile: { ...profile, maxAttempts: Math.min(profile.maxAttempts, options.maximumProviderAttempts ?? profile.maxAttempts), timeoutMs: Math.max(1, Math.min(profile.timeoutMs, deadline - Date.now())) }, mode: 'workspace',
       workingDirectory: checkout, artifactDirectory: providerDirectory, sources: source, evidence: providerEvidence, evidenceDigest: digest(canonicalJson(providerEvidence)), fixtureDigest: result.fixtureDigest,
@@ -125,7 +128,7 @@ export async function runRepair(input: RepairJob, options: RepairOptions): Promi
       verifyThreads(job, proposal, source);
       if (await git(checkout, ['rev-parse', 'HEAD'], deadline, controller.signal) !== job.headSha) throw new ExecutionFailure('invalid_output', 'The provider changed HEAD. The host must create the candidate commit.');
       if (proposal.outcome !== 'candidate') { result.payload = proposal; result.status = proposal.outcome; result.diagnostic = proposal.reason; }
-      else if (proposal.threads.some(thread => thread.disposition === 'blocked') || !conflict && !proposal.threads.some(thread => thread.disposition === 'addressed')) {
+      else if (proposal.threads.some(thread => thread.disposition === 'blocked') || !conflict && !ci && !proposal.threads.some(thread => thread.disposition === 'addressed')) {
         result.status = 'blocked'; result.diagnostic = 'Unresolved product intent or declined-only review decisions require a human handoff.';
         const stop: RepairStop = { schemaVersion: 1, outcome: 'blocked', expectedHeadSha: job.headSha, reason: result.diagnostic,
           threads: proposal.threads.map(thread => thread.disposition === 'addressed' ? { ...thread, disposition: 'blocked', response: `Proposed edit was not finalized. ${thread.response}` } : thread), notesMarkdown: proposal.notesMarkdown };
@@ -134,7 +137,7 @@ export async function runRepair(input: RepairJob, options: RepairOptions): Promi
         if (proposal.candidateSha !== job.headSha) throw new ExecutionFailure('invalid_output', 'Candidate proposals must reference the pinned head; the host finalizes the new commit.');
         await git(checkout, ['add', '--all', '--', '.'], deadline, controller.signal);
         const paths = await changedPaths(checkout, job.headSha, deadline, controller.signal);
-        if (!conflict && !paths.length) throw new ExecutionFailure('invalid_output', 'A review candidate proposal made no change. Return no_change with its reason.');
+        if (!conflict && !paths.length) throw new ExecutionFailure('invalid_output', 'A repair candidate proposal made no change. Return no_change with its reason.');
         if (await git(checkout, ['ls-files', '--unmerged', '-z'], deadline, controller.signal)) throw new ExecutionFailure('invalid_output', 'The candidate index still contains unresolved conflicts.');
         if (canonicalJson(paths) !== canonicalJson([...proposal.changedPaths].sort()) || paths.some(path => !permittedPath(path, job.policy))) throw new ExecutionFailure('invalid_output', 'Candidate changed paths do not match the proposal or execution policy.');
         for (const path of paths) {
@@ -146,7 +149,7 @@ export async function runRepair(input: RepairJob, options: RepairOptions): Promi
           if (/^(<<<<<<< |=======$|>>>>>>> )/m.test(text)) throw new ExecutionFailure('invalid_output', 'Conflict markers remain in a repaired file.');
         }
         const tree = await git(checkout, ['write-tree'], deadline, controller.signal), parents = conflict ? [job.headSha, job.baseSha] : [job.headSha];
-        const sha = await git(checkout, ['commit-tree', tree, ...parents.flatMap(parent => ['-p', parent])], deadline, controller.signal, 1024, `Repo Chap: ${conflict ? 'resolve conflict' : 'address review'}\n`);
+        const sha = await git(checkout, ['commit-tree', tree, ...parents.flatMap(parent => ['-p', parent])], deadline, controller.signal, 1024, `Repo Chap: ${conflict ? 'resolve conflict' : ci ? 'fix CI' : 'address review'}\n`);
         const candidate: Candidate = { ...proposal, candidateSha: sha, changedPaths: paths };
         validateActionPayload(job.package, job.actionId, candidate);
         await git(checkout, ['reset', '--hard', sha], deadline, controller.signal);

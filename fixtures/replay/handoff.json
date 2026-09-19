@@ -11,7 +11,9 @@
         "headDebouncing": false,
         "conflict": false,
         "unaddressedReview": false,
-        "externalReviewPending": false
+        "externalReviewPending": false,
+        "ciFailed": false,
+        "ciPending": false
       },
       "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

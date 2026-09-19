@@ -56,3 +56,20 @@ test('partial, rejected and unknown publications stay distinct in the complete p
     assert.equal(packet.outcome, 'blocked_execution'); assert.match(packet.findings.join(' '), /Review publication.*rejected/);
   } finally { await rejected.cleanup(); }
 });
+
+
+test('CI handoffs identify failures and never recommend merge with pending or unknown checks', async () => {
+  const s = await fixture();
+  try {
+    const check = s.inspection.evidence.checks.items[0]!;
+    check.conclusion = 'FAILURE';
+    let packet = await s.packet();
+    assert.equal(packet.outcome, 'needs_author'); assert.match(packet.reason, /failed CI/);
+    check.status = 'IN_PROGRESS'; check.conclusion = null;
+    packet = await s.packet(); assert.equal(packet.outcome, 'blocked_execution'); assert.equal(packet.checks[0]!.status, 'pending');
+    check.status = 'COMPLETED'; check.conclusion = 'UNRECOGNIZED';
+    packet = await s.packet(); assert.equal(packet.outcome, 'blocked_execution'); assert.equal(packet.checks[0]!.status, 'not_run');
+    s.inspection.evidence.checks.items = [];
+    assert.equal((await s.packet()).outcome, 'blocked_execution');
+  } finally { await s.cleanup(); }
+});

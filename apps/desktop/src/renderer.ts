@@ -15,7 +15,7 @@ let activeGuidance: Guidance | null = null;
 const labels: Record<string, string> = {
   'facts.lifecycle': 'PR status', 'facts.draft': 'Draft PR', 'facts.evidenceComplete': 'Complete evidence', 'facts.young': 'New PR',
   'facts.headDebouncing': 'Recent commits', 'facts.conflict': 'Merge conflict', 'facts.unaddressedReview': 'Review to address',
-  'facts.externalReviewPending': 'Reviewer working', 'memory.classificationCurrent': 'Classification current',
+  'facts.ciFailed': 'CI failed', 'facts.ciPending': 'CI running', 'facts.externalReviewPending': 'Reviewer working', 'memory.classificationCurrent': 'Classification current',
   'memory.reviewCurrent': 'Review current', 'memory.packetCurrent': 'Handoff current', 'memory.repairSuppressed': 'Repair paused',
 };
 function conditionText(condition: Condition): string {
@@ -30,7 +30,7 @@ function conditionText(condition: Condition): string {
 const actionLabels: Record<string, string> = {
   'control.close': 'Finish', 'control.wait_signal': 'Wait for a change', 'control.wait_refresh': 'Refresh evidence',
   'control.wait_debounce': 'Wait for commits to settle', 'control.wait_reviewer': 'Wait for reviewer',
-  'agent.resolve_conflict': 'Resolve conflict', 'agent.address_review': 'Address review', 'agent.classify': 'Classify PR', 'agent.review': 'Review PR',
+  'agent.fix_ci': 'Fix CI', 'agent.resolve_conflict': 'Resolve conflict', 'agent.address_review': 'Address review', 'agent.classify': 'Classify PR', 'agent.review': 'Review PR',
   'checks.validate_candidate': 'Test candidate', 'github.push_candidate': 'Push tested commit', 'github.resolve_eligible_threads': 'Resolve addressed threads',
   'github.publish_review': 'Publish review', 'github.set_labels': 'Set labels', 'human.publish_packet': 'Hand off to a person',
 };

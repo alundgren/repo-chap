@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "now": "2026-05-01T12:00:00Z",
+  "observations": [
+    {
+      "facts": {
+        "lifecycle": "open",
+        "draft": false,
+        "evidenceComplete": true,
+        "young": false,
+        "headDebouncing": false,
+        "conflict": false,
+        "unaddressedReview": false,
+        "externalReviewPending": false,
+        "ciFailed": true,
+        "ciPending": false
+      },
+      "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "evidenceDigest": "fictional-evidence-1"
+    },
+    {
+      "facts": {
+        "lifecycle": "open",
+        "draft": false,
+        "evidenceComplete": true,
+        "young": false,
+        "headDebouncing": false,
+        "conflict": false,
+        "unaddressedReview": false,
+        "externalReviewPending": false,
+        "ciFailed": false,
+        "ciPending": true
+      },
+      "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+      "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "evidenceDigest": "fictional-ci-rerun"
+    }
+  ],
+  "control": {
+    "memory": {
+      "classificationCurrent": true,
+      "reviewCurrent": true,
+      "packetCurrent": false,
+      "repairSuppressed": false
+    },
+    "review": {
+      "verdict": "acceptable",
+      "coverage": "complete"
+    },
+    "classification": {
+      "uncertain": false
+    }
+  },
+  "results": {
+    "validate_candidate": [
+      {
+        "status": "success"
+      }
+    ],
+    "push_candidate": [
+      {
+        "status": "success"
+      }
+    ],
+    "resolve_threads": [
+      {
+        "status": "success"
+      }
+    ],
+    "fix_ci": [
+      {
+        "status": "success",
+        "payload": {
+          "schemaVersion": 1,
+          "expectedHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "candidateSha": "cccccccccccccccccccccccccccccccccccccccc",
+          "summary": "Repair the ownership-check regression reported by CI.",
+          "changedPaths": [
+            "src/records/get-record.ts",
+            "src/records/get-record.test.ts"
+          ],
+          "threads": [],
+          "suggestedChecks": [
+            "ownership-check",
+            "typecheck"
+          ],
+          "notesMarkdown": "Reproduced the ownership-check failure locally and corrected the handler. The host validates and pushes the candidate, then observes remote CI again.",
+          "outcome": "candidate"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "status": "waiting",
+    "selectedRuleIds": [
+      "ci_failed",
+      "ci_running"
+    ],
+    "proposedEffects": [
+      {
+        "actionId": "fix_ci",
+        "uses": "agent.fix_ci"
+      },
+      {
+        "actionId": "validate_candidate",
+        "uses": "checks.validate_candidate"
+      },
+      {
+        "actionId": "push_candidate",
+        "uses": "github.push_candidate"
+      },
+      {
+        "actionId": "resolve_threads",
+        "uses": "github.resolve_eligible_threads"
+      }
+    ]
+  }
+}

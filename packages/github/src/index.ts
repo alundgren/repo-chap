@@ -14,3 +14,4 @@ export type { Coverage, Collection, RepositoryIdentity, PullRequestEvidence, Lab
 export * from './publication.js';
 export { localPublicationCredentials, installationPublicationCredentials, type PublicationCredentials, type PublicationCapability } from './auth.js';
 export { GitHubPublicationClient, type PublicationClientOptions } from './publication-client.js';
+export { checkOutcome, ciFacts } from './checks.js';

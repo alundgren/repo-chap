@@ -17,6 +17,7 @@ export const actionRegistry: Readonly<Record<string, ActionDefinition>> = freeze
   'control.wait_reviewer': { execution: 'code', capabilities: [], continuation: '$wait' },
   'agent.resolve_conflict': { execution: 'agent', capabilities: ['workspace.read', 'workspace.write'], consumesAgentBudget: true, repair: true, result: 'candidate', invalidates: ['candidate', 'checks', 'push', 'review', 'classification'], produces: 'candidate' },
   'agent.address_review': { execution: 'agent', capabilities: ['workspace.read', 'workspace.write'], consumesAgentBudget: true, repair: true, result: 'candidate', invalidates: ['candidate', 'checks', 'push', 'review', 'classification'], produces: 'candidate' },
+  'agent.fix_ci': { execution: 'agent', capabilities: ['workspace.read', 'workspace.write'], consumesAgentBudget: true, repair: true, result: 'candidate', invalidates: ['candidate', 'checks', 'push', 'review', 'classification'], produces: 'candidate' },
   'agent.classify': { execution: 'agent', capabilities: ['workspace.read'], consumesAgentBudget: true, result: 'classification', invalidates: ['classification'], produces: 'classification' },
   'agent.review': { execution: 'agent', capabilities: ['workspace.read'], consumesAgentBudget: true, result: 'review', invalidates: ['review'], produces: 'review' },
   'checks.validate_candidate': { execution: 'code', capabilities: ['checks.run'], requires: 'candidate', invalidates: ['checks', 'push'], produces: 'checks' },

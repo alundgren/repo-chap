@@ -107,6 +107,11 @@
                 "field": "facts.unaddressedReview",
                 "op": "eq",
                 "value": true
+              },
+              {
+                "field": "facts.ciFailed",
+                "op": "eq",
+                "value": true
               }
             ]
           }
@@ -131,6 +136,24 @@
         "value": true
       },
       "action": "address"
+    },
+    {
+      "id": "ci_running",
+      "when": {
+        "field": "facts.ciPending",
+        "op": "eq",
+        "value": true
+      },
+      "action": "wait_ci"
+    },
+    {
+      "id": "ci_failed",
+      "when": {
+        "field": "facts.ciFailed",
+        "op": "eq",
+        "value": true
+      },
+      "action": "fix_ci"
     },
     {
       "id": "reviewer_active",
@@ -290,6 +313,25 @@
       ],
       "onSuccess": "$wait",
       "onFailure": "$blocked"
+    },
+    "wait_ci": {
+      "execution": "code",
+      "uses": "control.wait_signal",
+      "capabilities": [],
+      "onSuccess": "$wait",
+      "onFailure": "$blocked"
+    },
+    "fix_ci": {
+      "execution": "agent",
+      "uses": "agent.fix_ci",
+      "capabilities": [
+        "workspace.read",
+        "workspace.write"
+      ],
+      "onSuccess": "validate_candidate",
+      "onFailure": "handoff",
+      "prompt": "prompts/fix-ci.md",
+      "outputSchema": "../../schemas/results.schema.json#/$defs/candidate"
     }
   },
   "slack": {
