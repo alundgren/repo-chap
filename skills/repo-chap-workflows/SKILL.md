@@ -9,6 +9,13 @@ Work in the repository the user wants to configure. Use your normal file tools,
 repository instructions, and agent session. Electron displays those files and
 simulation results. It has no chat or editing session to initialize.
 
+On the first invocation in a conversation, ask: "Would you like me to open the
+Repo Chap desktop companion so you can follow the workflow visually?" Honor
+an answer or launch request already given in the conversation instead of asking
+again. Continue independent authoring work while awaiting the answer. If the
+user declines, use CLI validation and replay without repeating the offer.
+If they accept, follow [the companion launch instructions](references/companion.md#launching-the-app).
+
 Find existing workflow JSON and its referenced Markdown before creating files.
 Use `.repo-chap/workflow.json` for a first workflow unless the repository has
 another convention. Keep unrelated edits. For a new workflow, start from

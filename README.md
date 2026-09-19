@@ -1,3 +1,5 @@
+<img src="apps/desktop/assets/mascot.png" width="128" height="128" alt="Repo Chap mascot holding a repository with a Git branch symbol">
+
 # Repo Chap
 
 Repo Chap looks after trusted teams' repositories. The first release keeps

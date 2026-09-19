@@ -18,6 +18,6 @@ try {
   const manifest = JSON.parse(await readFile('package.json', 'utf8'));
   await cp('dist', join(source, 'dist'), { recursive: true });
   await writeFile(join(source, 'package.json'), JSON.stringify({ name: 'repo-chap-desktop', version: manifest.version, main: 'dist/main.cjs' }));
-  const paths = await packager({ dir: source, tmpdir: join(temporary, 'scratch'), name: 'Repo Chap', executableName: 'repo-chap-desktop', appBundleId: 'dev.repo-chap.desktop', platform, arch, out: resolve(out), electronVersion: manifest.devDependencies.electron, prune: false, asar: true });
+  const paths = await packager({ dir: source, tmpdir: join(temporary, 'scratch'), name: 'Repo Chap', executableName: 'repo-chap-desktop', appBundleId: 'dev.repo-chap.desktop', platform, arch, out: resolve(out), icon: platform === 'darwin' ? resolve('assets/icon.icns') : undefined, electronVersion: manifest.devDependencies.electron, prune: false, asar: true });
   console.log(paths.join('\n'));
 } finally { await rm(temporary, { recursive: true, force: true }); }
