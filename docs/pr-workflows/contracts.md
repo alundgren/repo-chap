@@ -128,16 +128,19 @@ The editor mockup validates only its illustrated subset and says so in the UI.
 
 ## Validation
 
-The document checker uses Python 3 and `jsonschema` 4.19.2. An isolated install
-keeps the application dependency lockfile unchanged:
+The document checker uses TypeScript on Node 24, Ajv for JSON Schema validation,
+and parse5 for HTML checks. Dependencies are pinned in the pnpm lockfile:
 
 ```sh
-python3 -m venv /tmp/repo-chap-docs-check
-/tmp/repo-chap-docs-check/bin/pip install 'jsonschema==4.19.2'
-python3 docs/pr-workflows/build_presentation.py
-/tmp/repo-chap-docs-check/bin/python docs/pr-workflows/validate.py
-corepack pnpm exec node docs/pr-workflows/check-presentation.mjs
+corepack pnpm install --frozen-lockfile
+corepack pnpm docs:validate
+corepack pnpm browser:install
+corepack pnpm docs:browser
 ```
+
+After changing presentation inputs, run `corepack pnpm docs:build` before these
+checks. Only the presentation generator requires Python 3; no pip install or
+virtual environment is needed.
 
 The browser check tests visible navigation, rule/action selection, setting
 changes, invalid-source recovery, simulation, JSON export, and responsive
