@@ -9,8 +9,8 @@ deletion. Finish with `pilot delete` and `pilot verify-clean`.
 
 ## Operator machine
 
-Install Git, GitHub CLI, tar, Terraform 1.14.7, a connected Tailscale client,
-and the repository-pinned Vite+ tools. Build the selected revision:
+Install Git, GitHub CLI, tar, Terraform 1.x, a connected Tailscale client, and
+the repository-pinned Vite+ tools. Build the selected revision:
 
 ```sh
 vp install --frozen-lockfile
@@ -83,8 +83,7 @@ and [conditional push](conditional-push.md) for the file contracts.
   "region": "ams3",
   "size": "s-2vcpu-4gb",
   "configDirectory": "/absolute/private/pilot-config",
-  "codexHome": "/absolute/private/pilot-codex",
-  "trustedPrivateRepository": true
+  "codexHome": "/absolute/private/pilot-codex"
 }
 ```
 
@@ -108,9 +107,10 @@ vp run pilot verify-clean --root /absolute/private/repo-chap-pilot \
   --environment ENVIRONMENT_ID
 ```
 
-Create installs Node 24.21.0, Vite+ 0.3.0, Tailscale 1.94.2, Codex 0.154.0,
-and Actions runner 2.337.0. It records the Repo Chap CLI digest and observed
-versions in the private environment manifest.
+Create installs the repository's Node and Vite+ versions, the current Tailscale
+and Codex releases available from their normal package sources, and Actions
+runner 2.337.0 with its checked digest. It records the Repo Chap CLI digest and
+observed tool versions in the private environment manifest.
 
 Test failure never deletes the host. Use the environment ID and the approved
 tailnet route described in [SSH diagnosis](pilot-ssh-debugging.md). The test can

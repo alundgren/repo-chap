@@ -258,8 +258,7 @@ CONFIG_DIRECTORY="$CONFIG_DIRECTORY" PILOT_CODEX_HOME="$PILOT_CODEX_HOME" \
       region: process.env.REGION,
       size: process.env.SIZE,
       configDirectory: process.env.CONFIG_DIRECTORY,
-      codexHome: process.env.PILOT_CODEX_HOME,
-      trustedPrivateRepository: true
+      codexHome: process.env.PILOT_CODEX_HOME
     };
     const root = process.env.OPERATOR_ROOT;
     await privateDirectory(root, true);

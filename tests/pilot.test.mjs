@@ -102,6 +102,20 @@ test('private inputs and corrupt manifests fail without resource writes', async 
   await assert.rejects(f.store.load(f.run.id), /manifest/);
   assert.equal(f.state.calls.length, 0);
 });
+test('prepare accepts compatible Terraform and verifies the repository directly', async t => {
+  const f = await fixture(t);
+  await writePrivate(join(f.root, 'operator.json'), JSON.stringify({
+    repository: f.run.repository,
+    region: f.run.region,
+    size: f.run.size,
+    configDirectory: f.run.configDirectory,
+    codexHome: f.run.codexHome,
+  }));
+  assert.equal(await main(['create', '--root', f.root], f.accounts, text => f.state.output.push(text)), 0);
+  assert.ok(f.state.calls.includes('terraform version'));
+  assert.equal((await f.store.runs()).length, 2);
+  assert.match(f.state.output.join('\n'), /Prepared environment/);
+});
 test('Ctrl-C during create retains resources for diagnosis and explicit deletion', async t => {
   const f = await fixture(t);
   const original = f.accounts.io.command;

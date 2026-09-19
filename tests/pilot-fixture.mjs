@@ -66,7 +66,7 @@ export async function fixture(t, faults = {}, selectedRoot) {
     async command(file, args, options = {}) {
       state.calls.push(`${file} ${args.join(' ')}`);
       if (file === 'terraform') {
-        if (args[0] === 'version') return JSON.stringify({ terraform_version: versions.terraform });
+        if (args[0] === 'version') return 'Terraform v1.16.3';
         if (args[0] === 'apply') { create(); if (faults.apply) throw new PilotError('partial apply'); }
         if (args[0] === 'destroy') {
           if (faults.stateMissing || faults.stateCorrupt) throw new PilotError('state unavailable');
@@ -101,7 +101,7 @@ export async function fixture(t, faults = {}, selectedRoot) {
           state.runners = [{ id: 201, name: run.name, labels: [{ name: run.name }] }];
           if (faults.afterRegistration) { faults.afterRegistration = false; throw new PilotError('interrupted after registration'); }
         }
-        if (script.includes('Runner.Listener --version')) return `v${versions.node}\nvp v${versions.vitePlus}\n${versions.tailscale}\ncodex-cli ${versions.codex}\n${versions.runner}\n`;
+        if (script.includes('Runner.Listener --version')) return `v${versions.node}\nvp v${versions.vitePlus}\n1.96.0\ncodex-cli 0.155.0\n${versions.runner}\n`;
         if (script.includes('journalctl')) return 'services\nActiveState=active\nfictional-codex-secret\n{"PRIORITY":"6"}\n{"MESSAGE":"fictional-app-secret"}\n';
         return '';
       }
