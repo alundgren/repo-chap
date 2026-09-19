@@ -8,8 +8,8 @@ webhook. GitHub, provider and optional Slack access are outbound connections.
 ## Install and check the account
 
 Install Node 24, Git, systemd and the provider CLIs you intend to use. Build with
-the pinned package manager: `corepack pnpm install --frozen-lockfile`, then
-`corepack pnpm build`. Copy the bundled `apps/cli/dist/cli.js` and `deploy/` to
+the pinned package manager: `vp install --frozen-lockfile`, then
+`vp run build`. Copy the bundled `apps/cli/dist/cli.js` and `deploy/` to
 the VM. From that copy, run as root:
 
 ```sh
@@ -220,7 +220,7 @@ active schedulers need a separate design; no cloud component is installed here.
 
 ## Isolated lifecycle check
 
-After building, run `bash deploy/smoke-systemd.sh` on a Linux development machine
+Run `vp run test:systemd` on a Linux development machine
 with Docker. It runs systemd in a disposable privileged container with networking
 disabled, installs the bundle, checks account diagnostics, registers a fictional
 workflow, exercises local controls, stops, backs up, restores paused, reconciles,

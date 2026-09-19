@@ -7,6 +7,6 @@
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./web-api": { "types": "./dist/web-api.d.ts", "import": "./dist/web-api.js" }
   },
-  "scripts": { "build": "tsc -p tsconfig.json" },
+  "scripts": { "build": "vp exec tsc -p tsconfig.json" },
   "dependencies": { "@repo-chap/workflow": "workspace:*" }
 }

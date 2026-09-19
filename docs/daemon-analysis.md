@@ -16,17 +16,17 @@ analysis and the inbox remain local. No result is permission to merge. See
 
 ## Start and register
 
-Use Node 24 and the pinned Corepack pnpm. After `corepack pnpm install
---frozen-lockfile` and `corepack pnpm build`, the bundled CLI can start the daemon:
+Use Vite+ with the repository's pinned Node and pnpm versions. After `vp install
+--frozen-lockfile` and `vp run build`, the bundled CLI can start the daemon:
 
 ```sh
-node apps/cli/dist/cli.js daemon start \
+vp node apps/cli/dist/cli.js daemon start \
   --state-dir /private/repo-chap/state \
   --config /private/repo-chap/installation.json
 ```
 
 The process stays in the foreground. A service manager can also run the Linux
-entry point with `node apps/daemon/dist/main.js <state-directory>
+entry point with `vp node apps/daemon/dist/main.js <state-directory>
 <installation.json>`. Ctrl-C or SIGTERM stops polling and active providers.
 The state directory must be on local persistent storage, outside every managed
 checkout, owned by the daemon account with mode 0700. SQLite on network storage

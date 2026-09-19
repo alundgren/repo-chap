@@ -41,11 +41,11 @@ test('CLI distinguishes command, workflow and fixture failures with JSON diagnos
 test('packed and installed repo-chap runs independently of workspace dependencies', async () => {
   const temporary = await mkdtemp(join(tmpdir(), 'repo-chap-install-'));
   try {
-    const pack = spawnSync('corepack', ['pnpm', '--filter', 'repo-chap', 'pack', '--pack-destination', temporary], { cwd: root, encoding: 'utf8' });
+    const pack = spawnSync('vp', ['pm', 'pack', '--filter', 'repo-chap', '--pack-destination', temporary], { cwd: root, encoding: 'utf8' });
     assert.equal(pack.status, 0, pack.stderr || pack.stdout);
     const archive = (await readdir(temporary)).find(name => name.endsWith('.tgz'))!;
     await writeFile(join(temporary, 'package.json'), JSON.stringify({ private: true, packageManager: 'pnpm@11.22.0', dependencies: { 'repo-chap': `file:${archive}` } }));
-    const install = spawnSync('corepack', ['pnpm', 'install', '--offline', '--ignore-scripts'], { cwd: temporary, encoding: 'utf8' });
+    const install = spawnSync('vp', ['install', '--offline', '--ignore-scripts'], { cwd: temporary, encoding: 'utf8' });
     assert.equal(install.status, 0, install.stderr || install.stdout);
     const installed = join(temporary, 'node_modules/.bin/repo-chap');
     const validation = spawnSync(installed, ['validate', workflow, '--json'], { cwd: temporary, encoding: 'utf8', env: environment });

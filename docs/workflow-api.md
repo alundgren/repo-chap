@@ -9,21 +9,21 @@ The runtime schemas are `packages/workflow/src/workflow.schema.json` and
 
 ## Commands
 
-Use Node 24 and the Corepack-pinned pnpm version:
+Use Vite+ with the repository's pinned Node and pnpm versions:
 
 ```sh
-corepack pnpm install --frozen-lockfile
-corepack pnpm typecheck
-corepack pnpm test
-node apps/cli/dist/cli.js validate docs/pr-workflows/examples/team-pr/workflow.json
-node apps/cli/dist/cli.js replay docs/pr-workflows/examples/team-pr/workflow.json --fixture fixtures/replay/conflict.json --json
-corepack pnpm --filter repo-chap pack --pack-destination /tmp/repo-chap-package
-corepack pnpm add --global /tmp/repo-chap-package/repo-chap-0.1.0.tgz
+vp install --frozen-lockfile
+vp run typecheck
+vp run test
+vp node apps/cli/dist/cli.js validate docs/pr-workflows/examples/team-pr/workflow.json
+vp node apps/cli/dist/cli.js replay docs/pr-workflows/examples/team-pr/workflow.json --fixture fixtures/replay/conflict.json --json
+vp pm pack --filter repo-chap --pack-destination /tmp/repo-chap-package
+vp add --global /tmp/repo-chap-package/repo-chap-0.1.0.tgz
 repo-chap --help
 ```
 
 The package contains a bundled JavaScript executable and has no installed runtime
-dependencies beyond Node. pnpm's global bin directory must be on `PATH` for a
+dependencies beyond Node. Vite+'s bin directory must be on `PATH` for a
 global install. A local install also exposes `node_modules/.bin/repo-chap`.
 
 The repository root defaults to the nearest ancestor containing `.git`. Supply

@@ -59,12 +59,7 @@ done
 [[ $skill_choice == ask || $skill_choice == yes || $skill_choice == no ]] ||
   fail 'REPO_CHAP_INSTALL_SKILL must be ask, yes, or no.'
 
-for command_name in node npm corepack; do
-  command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required. Install Node 24 and try again."
-done
-
-node_major=$(node -p 'process.versions.node.split(".")[0]')
-[[ $node_major == 24 ]] || fail "Node 24 is required. Found Node $(node --version)."
+command -v vp >/dev/null 2>&1 || fail 'Vite+ is required. Install it from https://viteplus.dev/guide/ and try again.'
 
 case $(uname -s) in
   Linux) platform=linux ;;
@@ -84,12 +79,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$temporary/bin"
-corepack_binary=$(command -v corepack)
-printf '#!/bin/sh\nexec "%s" pnpm "$@"\n' "$corepack_binary" > "$temporary/bin/pnpm"
-chmod 0755 "$temporary/bin/pnpm"
-export PATH="$temporary/bin:$PATH"
-
 if [[ -n $source_directory ]]; then
   [[ -f $source_directory/package.json && -f $source_directory/pnpm-lock.yaml ]] || fail '--source must point to a Repo Chap checkout.'
   source_directory=$(cd "$source_directory" && pwd)
@@ -106,15 +95,15 @@ fi
 printf 'Building Repo Chap...\n'
 (
   cd "$source_directory"
-  corepack pnpm install --frozen-lockfile
-  corepack pnpm build
+  vp install --frozen-lockfile
+  vp run build
 )
 
 mkdir -p "$temporary/packages" "$temporary/desktop" "$prefix/bin" "$prefix/share/repo-chap"
 (
   cd "$source_directory"
-  corepack pnpm --filter repo-chap pack --pack-destination "$temporary/packages"
-  corepack pnpm --filter @repo-chap/desktop package \
+  vp pm pack --filter repo-chap --pack-destination "$temporary/packages"
+  vp run @repo-chap/desktop#package \
     --out "$temporary/desktop" --platform "$platform" --arch "$architecture"
 )
 
@@ -123,7 +112,10 @@ cli_packages=("$temporary"/packages/repo-chap-*.tgz)
 (( ${#cli_packages[@]} == 1 )) || fail 'The CLI build did not produce one package.'
 
 printf 'Installing the CLI into %s...\n' "$prefix"
-npm install --global --prefix "$prefix" "${cli_packages[0]}"
+(
+  cd "$source_directory"
+  PATH="$prefix/bin:$PATH" vp exec pnpm add --global --global-dir "$prefix/lib/repo-chap" --global-bin-dir "$prefix/bin" "${cli_packages[0]}"
+)
 
 if [[ $platform == linux ]]; then
   packaged_desktop="$temporary/desktop/Repo Chap-linux-$architecture"
@@ -160,13 +152,12 @@ if [[ $skill_choice == ask ]]; then
 fi
 
 if [[ $skill_choice == yes ]]; then
-  command -v npx >/dev/null 2>&1 || fail 'npx is required to install the workflow skill.'
   printf 'Choose which agents should receive the global workflow skill.\n'
   if [[ $skill_tty == yes ]]; then
-    npx --yes skills add "$source_directory/skills/repo-chap-workflows" --global <&3
+    vp dlx skills add "$source_directory/skills/repo-chap-workflows" --global <&3
     exec 3>&-
   else
-    npx --yes skills add "$source_directory/skills/repo-chap-workflows" --global
+    vp dlx skills add "$source_directory/skills/repo-chap-workflows" --global
   fi
 elif [[ $skill_tty == yes ]]; then
   exec 3>&-

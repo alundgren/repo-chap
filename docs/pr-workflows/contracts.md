@@ -132,13 +132,13 @@ The document checker uses TypeScript on Node 24, Ajv for JSON Schema validation,
 and parse5 for HTML checks. Dependencies are pinned in the pnpm lockfile:
 
 ```sh
-corepack pnpm install --frozen-lockfile
-corepack pnpm docs:validate
-corepack pnpm browser:install
-corepack pnpm docs:browser
+vp install --frozen-lockfile
+vp run docs:validate
+vp run browser:install
+vp run docs:browser
 ```
 
-After changing presentation inputs, run `corepack pnpm docs:build` before these
+After changing presentation inputs, run `vp run docs:build` before these
 checks. Only the presentation generator requires Python 3; no pip install or
 virtual environment is needed.
 

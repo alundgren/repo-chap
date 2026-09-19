@@ -23,12 +23,20 @@ test('user installer installs and upgrades the CLI, desktop launcher, and workfl
     await mkdir(source);
     await writeFile(join(source, 'package.json'), '{}\n');
     await writeFile(join(source, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
-    await executable(join(fakeBin, 'node'), `#!/bin/sh
-if [ "$1" = "-p" ]; then printf '24\\n'; else printf 'v24.0.0\\n'; fi
-`);
-    await executable(join(fakeBin, 'corepack'), `#!/bin/sh
+    await executable(join(fakeBin, 'vp'), `#!/bin/sh
+mkdir -p "$HOME"
+printf '%s\\n' "$*" >> "$HOME/vp-arguments"
+case "$1" in
+  install|run|pm|dlx|exec) ;;
+  *) exit 91 ;;
+esac
+if [ "$1" = dlx ]; then
+  mkdir -p "$HOME/.agents/skills/repo-chap-workflows"
+  printf '%s\\n' '# Repo Chap workflows' > "$HOME/.agents/skills/repo-chap-workflows/SKILL.md"
+fi
 destination=
 output=
+bin_directory=
 platform=linux
 architecture=x64
 while [ "$#" -gt 0 ]; do
@@ -37,6 +45,7 @@ while [ "$#" -gt 0 ]; do
     --out) output=$2; shift 2 ;;
     --platform) platform=$2; shift 2 ;;
     --arch) architecture=$2; shift 2 ;;
+    --global-bin-dir) bin_directory=$2; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -47,24 +56,15 @@ if [ -n "$output" ]; then
   printf '#!/bin/sh\\n' > "$app/repo-chap-desktop"
   chmod 0755 "$app/repo-chap-desktop"
 fi
+if [ -n "$bin_directory" ]; then
+  mkdir -p "$bin_directory"
+  printf '#!/bin/sh\\n' > "$bin_directory/repo-chap"
+  chmod 0755 "$bin_directory/repo-chap"
+fi
 `);
-    await executable(join(fakeBin, 'npm'), `#!/bin/sh
-prefix=
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--prefix" ]; then prefix=$2; shift 2; else shift; fi
-done
-mkdir -p "$prefix/bin"
-cat > "$prefix/bin/repo-chap" <<'SCRIPT'
-#!/bin/sh
-SCRIPT
-chmod 0755 "$prefix/bin/repo-chap"
-`);
-    await executable(join(fakeBin, 'npx'), `#!/bin/sh
-mkdir -p "$HOME"
-printf '%s\\n' "$*" > "$HOME/npx-arguments"
-mkdir -p "$HOME/.agents/skills/repo-chap-workflows"
-printf '%s\\n' '# Repo Chap workflows' > "$HOME/.agents/skills/repo-chap-workflows/SKILL.md"
-`);
+    for (const command of ['node', 'npm', 'npx', 'corepack', 'pnpm']) {
+      await executable(join(fakeBin, command), '#!/bin/sh\nexit 92\n');
+    }
 
     const result = spawnSync('/bin/bash', [installer, '--source', source, '--prefix', prefix], {
       encoding: 'utf8',
@@ -75,7 +75,7 @@ printf '%s\\n' '# Repo Chap workflows' > "$HOME/.agents/skills/repo-chap-workflo
     assert.equal((await lstat(join(prefix, 'bin/repo-chap'))).mode & 0o111, 0o111);
     assert.equal((await lstat(join(prefix, 'bin/repo-chap-desktop'))).isSymbolicLink(), true);
     assert.match(await readFile(join(home, '.agents/skills/repo-chap-workflows/SKILL.md'), 'utf8'), /Repo Chap/);
-    assert.match(await readFile(join(home, 'npx-arguments'), 'utf8'), /skills add .*repo-chap-workflows --global/);
+    assert.match(await readFile(join(home, 'vp-arguments'), 'utf8'), /dlx skills add .*repo-chap-workflows --global/);
 
     await writeFile(join(home, '.agents/skills/repo-chap-workflows/SKILL.md'), 'outdated\n');
     const upgrade = spawnSync('/bin/bash', [installer, '--source', source, '--prefix', prefix], {

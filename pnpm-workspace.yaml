@@ -6,3 +6,9 @@ allowBuilds:
   electron: true
 minimumReleaseAgeExclude:
   - electron@44.4.1
+overrides:
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.0
+  vitest: 4.1.11
+peerDependencyRules:
+  allowedVersions:
+    vite: 0.3.0

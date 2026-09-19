@@ -24,7 +24,7 @@ files, with no relationship to GitHub Actions workflow syntax.
 `build_presentation.py` embeds local fonts, their licence, examples, and five
 architecture drawings. Mermaid architecture sources remain in architecture.md.
 The TypeScript checker, `validate.ts`, validates the examples, local references
-and generated presentation through `corepack pnpm docs:validate`. Only rebuilding
+and generated presentation through `vp run docs:validate`. Only rebuilding
 the presentation requires Python 3.
 Run the [root validation commands](../../README.md#check-the-investigation)
 after editing the packet. All build inputs and validation dependencies belong
