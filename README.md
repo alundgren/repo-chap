@@ -71,7 +71,6 @@ local control commands. Validation and replay also work without Electron.
 - [Product brief](docs/product-brief.md)
 - [Architecture](docs/pr-workflows/architecture.md)
 - [Specification](docs/pr-workflows/specification.md)
-- [Decisions](docs/pr-workflows/decisions.md)
 
 The CLI and Electron app target macOS and Linux. The daemon runs on a private
 Linux VM with outbound GitHub, model-provider, and Slack connections. Workflow
