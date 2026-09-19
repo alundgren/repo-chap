@@ -248,3 +248,16 @@ test('actual Electron reports the receipt limit and keeps retry, Cancel and manu
   await page.screenshot({ path: join(proof, 'recovery-04-manual-save-after-limit.png'), fullPage: true });
   assert.deepEqual(f.errors, []); assert.deepEqual(f.requests, []);
 });
+
+test('actual Electron authoring through Codex code mode preserves edits and continues the session', { timeout: 90_000 }, async t => {
+  const f = await launch(t, 'code-mode-authoring', 'codex'), { page } = f;
+  await f.send('wrapped-edit', [{ action: { kind: 'edit', changes: [{ path: markdownPath, text: '# Fictional wrapped edit\n' }] } }], 'author-code-mode');
+  await expect.poll(async () => (await f.last()).status).toBe('completed');
+  assert.equal((await f.snapshot()).files.find(file => file.path === markdownPath)!.text, '# Fictional wrapped edit\n');
+  await expect(page.locator('#conversation-failure')).toBeHidden();
+  await f.send('wrapped-read', [{ action: { kind: 'read', paths: [markdownPath] } }], 'author-code-mode');
+  await expect.poll(async () => (await f.last()).status).toBe('completed');
+  await page.locator('#undo').click();
+  assert.notEqual((await f.snapshot()).files.find(file => file.path === markdownPath)!.text, '# Fictional wrapped edit\n');
+  assert.deepEqual(f.errors, []);
+});

@@ -30,6 +30,7 @@ export async function auditCodexTranscript(path: unknown, sessionId: string, tur
     const lines = text.trimEnd().split('\n');
     if (lines.length > 100_000) throw auditFailure();
     let active: string | undefined, last: string | undefined, started = 0, completed = 0, context = 0;
+    const wrapperCalls = new Map<string, string>();
     for (let index = 0; index < lines.length; index++) {
       if (index % 64 === 0) { await new Promise<void>(resolve => setImmediate(resolve)); deadline.throwIfAborted(); }
       const line = lines[index]!;
@@ -54,13 +55,19 @@ export async function auditCodexTranscript(path: unknown, sessionId: string, tur
         if (payload.turn_id !== turnId || payload.cwd !== cwd) throw auditFailure();
         context++;
       } else if (value.type === 'response_item' && active === turnId) {
-        if (payload.type === 'function_call') {
+        if (payload.type === 'custom_tool_call' && payload.name === 'exec' || payload.type === 'function_call' && payload.name === 'wait') {
+          if (typeof payload.call_id !== 'string' || !payload.call_id || wrapperCalls.has(payload.call_id)) throw auditFailure();
+          wrapperCalls.set(payload.call_id, payload.type === 'custom_tool_call' ? 'custom_tool_call_output' : 'function_call_output');
+        } else if (wrapperCalls.has(payload.call_id)) {
+          if (wrapperCalls.get(payload.call_id) !== payload.type) throw auditFailure();
+          wrapperCalls.delete(payload.call_id);
+        } else if (payload.type === 'function_call') {
           if (typeof payload.name !== 'string' || !['request_user_input', ...tools].includes(payload.name)) throw nativeOperationFailure();
         } else if (payload.type === 'custom_tool_call' || typeof payload.type === 'string' && payload.type.endsWith('_call')) throw nativeOperationFailure();
         else if (!['message', 'reasoning', 'function_call_output'].includes(payload.type)) throw auditFailure();
       }
     }
-    if (active || last !== turnId || started !== 1 || completed !== 1 || context !== 1) throw auditFailure();
+    if (wrapperCalls.size || active || last !== turnId || started !== 1 || completed !== 1 || context !== 1) throw auditFailure();
     deadline.throwIfAborted();
   } catch (error) {
     throw error instanceof ConversationError ? error : auditFailure();

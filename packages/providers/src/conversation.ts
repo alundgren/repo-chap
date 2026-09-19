@@ -65,7 +65,7 @@ export async function runConversationTurn(request: ConversationTurnRequest): Pro
     if (prior && (prior.provider !== request.profile.provider || prior.binding !== binding || typeof prior.id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(prior.id) || !Number.isSafeInteger(prior.turns) || prior.turns < 1 || prior.turns >= conversationLimits.turns))
       throw new ConversationError('session', 'This session cannot resume with the selected provider, settings or turn limit. Start a fresh conversation.');
     const runtime: ConversationRuntime = {
-      request, signal: controller.signal, version, binding, emit, probe, instruction,
+      request, signal: controller.signal, version, binding, emit, probe, instruction: instruction + (tools.some(tool => tool.name === 'author') ? ' Workflow authoring is available now through the registered author tool. Use it to read current documents, stage edits, validate and run offline tests. Include the current document token and a unique operationId in each request. The CLI may expose registered tools through its exec wrapper; that is a supported way to call them. Do not use shell commands or apply_patch to edit the workflow on disk. If a tool rejects input, correct the request using its diagnostic and retry; do not claim authoring is unavailable merely because a request failed.' : ''),
       input: `Current immutable workflow context:\n${request.context}\n\nQuestion:\n${request.prompt}`,
       spawn(args) {
         if (controller.signal.aborted) throw controller.signal.reason;

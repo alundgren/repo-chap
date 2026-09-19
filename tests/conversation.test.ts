@@ -213,3 +213,26 @@ test('Codex transcript version metadata does not restrict conversation compatibi
   try { assert.equal((await runConversationTurn(f.request)).status, 'completed'); }
   finally { await f.cleanup(); }
 });
+
+test('Codex code-mode wrappers dispatch registered tools and allow resume', async () => {
+  const f = await setup('codex', 'code-mode');
+  try {
+    const first = await runConversationTurn(f.request);
+    assert.equal(first.status, 'completed');
+    if (first.status !== 'completed') return;
+    assert.equal((await runConversationTurn({ ...f.request, session: first.session })).status, 'completed');
+    assert.equal(f.events.filter(event => event.type === 'tool' && event.name === 'read_context' && event.status === 'completed').length, 2);
+    const calls = await f.calls();
+    assert(calls.some(call => call.args?.includes('features.code_mode_host=true')));
+    for (const call of calls.filter(call => ['thread/start', 'thread/resume'].includes(call.message?.method))) {
+      assert.equal(call.message.params.config['features.shell_tool'], false);
+      assert.equal(call.message.params.sandbox, 'read-only');
+    }
+  } finally { await f.cleanup(); }
+});
+
+for (const mode of ['code-mode-incomplete', 'code-mode-unmatched-output']) test(`Codex rejects ${mode} transcript evidence`, async () => {
+  const f = await setup('codex', mode);
+  try { assert.equal((await runConversationTurn(f.request)).status, 'error'); }
+  finally { await f.cleanup(); }
+});
