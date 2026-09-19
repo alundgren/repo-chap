@@ -13,10 +13,12 @@ temporary highlights and annotated arrows.
 ## Install and run Repo Chap
 
 Repo Chap supports macOS and Linux. Install [Vite+](https://viteplus.dev/guide/)
-first, then install the CLI and desktop app:
+and the [GitHub CLI](https://cli.github.com/) first. Authenticate `gh` with an
+account that can read this repository, then install the CLI and desktop app:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/alundgren/repo-chap/main/install.sh | bash
+gh api -H 'Accept: application/vnd.github.raw+json' \
+  repos/alundgren/repo-chap/contents/install.sh | bash
 ```
 
 Run the same command again to upgrade. It replaces the CLI and desktop app with
@@ -54,7 +56,8 @@ repo-chap desktop highlight --target result --style arrow --text 'Closed PRs fin
 To install a tag instead of `main`, download the installer and pass `--ref`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/alundgren/repo-chap/main/install.sh -o /tmp/repo-chap-install.sh
+gh api -H 'Accept: application/vnd.github.raw+json' \
+  repos/alundgren/repo-chap/contents/install.sh > /tmp/repo-chap-install.sh
 bash /tmp/repo-chap-install.sh --ref v0.1.0
 ```
 
