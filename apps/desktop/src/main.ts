@@ -66,7 +66,7 @@ register('choose-packets', async () => {
 });
 
 async function createWindow(): Promise<void> {
-  window = new BrowserWindow({ width: 1200, height: 850, minWidth: 360, minHeight: 480, title: 'Repo Chap', backgroundColor: '#F2EADE',
+  window = new BrowserWindow({ width: 1200, height: 850, minWidth: 360, minHeight: 480, title: 'Repo Chap', backgroundColor: '#F2EADE', icon: join(__dirname, 'assets/icon.png'),
     webPreferences: { preload: join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());

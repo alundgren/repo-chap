@@ -1,5 +1,32 @@
 # Desktop commands
 
+## Launching the app
+
+After the user accepts the offer to open the companion, check
+`repo-chap desktop status --json`. If it responds successfully, reuse the running
+app with `desktop open` for the intended repository and workflow. Otherwise,
+launch the installed app from the managed repository using the shell tool's
+background-process support:
+
+```sh
+repo-chap-desktop --repo-root "$PWD"
+```
+
+When the intended workflow already exists, add `--workflow` with its absolute
+path. Omit it for a new repository so the app can show the empty state while
+the workflow is created. Keep any process logs outside the managed repository.
+Check `repo-chap desktop status --json` after launch to confirm the app is ready
+before sending navigation or simulation commands. If startup fails, report the
+failure and continue CLI authoring without repeatedly launching the app.
+
+Launching requires a graphical session on the user's desktop machine; no
+computer-use tool is needed. In a remote or headless session, give the user the
+local launch command and continue with the CLI. If the launcher is unavailable,
+the user can open the installed Repo Chap app normally. Developers can run
+`vp run desktop` from the Repo Chap checkout.
+
+## Controlling the app
+
 `repo-chap desktop --help` documents the installed command version. Commands
 return JSON with `--json`. A successful response includes `state`, workflow
 paths, validation diagnostics, view, input, simulation freshness, and `targets`.
@@ -49,11 +76,9 @@ can reuse the same PR observation for comparison, but model analysis commands
 still require the matching pinned workflow. Missing model results are reported
 as `needs_result`; do not invent them to make a real PR appear reviewed.
 
-If the app is closed, keep editing and use CLI validation/replay. Explain that
-the visual companion needs to be started when it would help the user. Installed
-users open Repo Chap normally; developers run `vp run desktop` in the
-Repo Chap checkout. A timeout or disconnect does not confirm whether the view
-changed. Read status before repeating a command.
+If the app is closed and the user has not opted to launch it, keep editing and
+use CLI validation/replay. A timeout or disconnect does not confirm whether the
+view changed. Read status before repeating a command.
 
 The app and CLI share a local Unix socket in `~/.repo-chap/desktop`, outside Git.
 For a separate app instance, set `REPO_CHAP_DESKTOP_CONTROL` to the same private

@@ -7,6 +7,12 @@ The original presentation remains an earlier editor concept.
 
 ## Desktop companion
 
+The corner brand uses the transparent mascot holding a repository with a Git
+branch symbol, with no visible product name. Keep it in the header, with no
+welcome illustration or backdrop. The standalone app icon uses the framed
+version; the README uses the cutout. Teal and coral in the artwork provide
+contrast against the warm-paper UI without changing the interface palette.
+
 Use the existing warm-paper palette and bundled IBM Plex Sans and Mono. Body
 text is 16px, secondary text 13.5px, section titles 22px, and the workflow title
 28px to 36px. Regular and semibold are the only weights. Primary text is #604939

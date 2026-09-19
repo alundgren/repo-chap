@@ -1,3 +1,5 @@
+<img src="apps/desktop/assets/mascot.png" width="128" height="128" alt="Repo Chap mascot holding a repository with a Git branch symbol">
+
 # Repo Chap
 
 Repo Chap looks after trusted teams' repositories. The first release keeps
@@ -28,10 +30,14 @@ Codex, Claude Code, or another supported agent. Pick the agents where you want
 `$repo-chap-workflows` available. The same prompt can update the skill when you
 rerun the installer.
 
-The installer builds a clean checkout and writes the application to
-`~/.local`. It does not use `sudo`. If it reports that `~/.local/bin` is missing
-from `PATH`, add it and open a new terminal. Start a new agent session after
-installing or updating the skill.
+The installer builds a clean checkout and installs the CLI under `~/.local`.
+On macOS, it installs `Repo Chap.app` in `~/Applications` for discovery by Finder
+and Spotlight. On Linux, the desktop app lives under `~/.local/share/repo-chap`.
+It does not use `sudo`. It adds the CLI directory to your Bash or Zsh startup
+files. Open a new terminal after installation, or run the printed `export`
+command in your current terminal. For other shells, add `~/.local/bin` to
+`PATH` in your shell configuration. Start a new agent session after installing
+or updating the skill.
 
 From the repository containing `.repo-chap/workflow.json`, open the desktop
 app with:
