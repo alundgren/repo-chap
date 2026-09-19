@@ -24,3 +24,7 @@ diagnostics outside the checkout.
 Implementation issues close through a PR body containing `Closes #<issue>`.
 Human verification issues close after the stated evidence is recorded. Use
 native sub-issues and blocking dependencies for the implementation plan.
+
+Before diagnosing a retained DigitalOcean test environment by environment ID,
+read `docs/pilot-ssh-debugging.md`. Tailnet access requires explicit operator
+permission for that environment.

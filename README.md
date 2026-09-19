@@ -74,7 +74,7 @@ local control commands. Validation and replay also work without Electron.
 - [Local workspace repair and recovery](docs/workspace-repair.md)
 - [Private analysis daemon and recovery](docs/daemon-analysis.md)
 - [Linux service installation, diagnostics and backup](docs/daemon-operations.md)
-- [Guided disposable Codex pilot](docs/pilot-guide.md)
+- [Disposable environment test](docs/pilot-guide.md)
 - [Product brief](docs/product-brief.md)
 - [Architecture](docs/pr-workflows/architecture.md)
 - [Specification](docs/pr-workflows/specification.md)

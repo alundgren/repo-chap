@@ -20,7 +20,7 @@ export class Pilot {
     await this.store.save(run);
   }
   warn(run) {
-    this.output(`Run ${run.id}: billing may be ongoing${run.retained ? '; retained for diagnosis' : ''}.\nCleanup: vp run pilot cleanup --root '${this.store.root.replaceAll("'", "'\\''")}' --run ${run.id}`);
+    this.output(`Environment ${run.id}: billing may be ongoing.\nDelete: vp run pilot delete --root '${this.store.root.replaceAll("'", "'\\''")}' --environment ${run.id} --confirm`);
   }
   async inventory(run) {
     const account = await this.accounts.do('account');
@@ -203,7 +203,7 @@ export class Pilot {
       this.signal?.throwIfAborted();
       await this.checkpoint(run, 'running');
       this.warn(run);
-      this.output(`Host left running.\nvp run pilot status --root '${this.store.root}' --run ${run.id}\nvp run pilot diagnose --root '${this.store.root}' --run ${run.id}`);
+      this.output(`Environment left running.\nvp run pilot status --root '${this.store.root}' --environment ${run.id}\nWith operator permission, follow docs/pilot-ssh-debugging.md.`);
       return true;
     } catch (error) {
       this.output(error instanceof PilotError ? error.message : 'Pilot setup failed or was interrupted');
