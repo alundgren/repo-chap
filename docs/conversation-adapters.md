@@ -13,42 +13,39 @@ does not become the current draft. Failure and interruption return no resumable
 identity. The host must offer a fresh session and retain the visible transcript
 and unsaved documents.
 
-## Tested protocols
+## Protocol compatibility
 
-Codex uses `codex-cli 0.154.0` app-server over stdio. Startup probes its command
+Codex uses app-server over stdio. Startup probes its command
 help and bundled model catalog, initializes experimental API support, checks
 local account state without requesting a token refresh, and reads effective
 configuration before starting a thread. Each turn selects the requested model
 and effort. A changed model in the thread response stops the turn before sending
-the question. Dynamic tools use the version's function registration and
+the question. Dynamic tools use function registration and
 `item/tool/call` request/result protocol. Completed threads resume by ID.
-The pinned `default_mode_request_user_input` capability enables questions during
-ordinary conversation; without it this CLI rejects the question tool internally.
+The `default_mode_request_user_input` capability enables questions during
+ordinary conversation; without it Codex rejects the question tool internally.
 
 The host disables shell, browser, image, application, plugin, hook, skill search,
 memory and delegation features. It lists available skills and disables their
 paths for the thread, then disables each configured MCP server, including names
 containing dots. Unreadable skill or transport configuration fails visibly before
-the question is sent. Project AGENTS loading has a zero-byte limit. This pinned
-version loads global AGENTS separately, so nonempty or unverifiable
-`instructionSources` rejects startup before dispatch. Recovery uses an
-instruction-free `CODEX_HOME` with ordinary native CLI login; the app neither
-edits global instructions nor copies credentials.
-Effective `instructions` and `model_instructions_file` overrides also reject
-before fresh or resumed dispatch because AGENTS provenance does not cover them.
+the question is sent. Project AGENTS loading has a zero-byte limit, and the conversation runs in a
+private directory outside the managed repository. Inherited global instructions
+and custom base instructions are permitted. Instruction-source metadata is not
+required. Repo Chap supplies its task instructions for each thread and retains
+its explicit skill, MCP and tool controls.
 
-The real selected model can still advertise native `apply_patch`; this version
-has no supported exclusion control for it. Read-only sandbox permissions and
+The real selected model can still advertise native `apply_patch`; the adapter does not rely on an exclusion control for it. Read-only sandbox permissions and
 `approvalPolicy: never` deny native writes. A denied patch is absent from normal
 app-server events, so after clean exit the adapter audits the CLI's private
 JSONL transcript before granting success or resume. The audit binds session,
-CLI version, working directory and current turn start/context/completion. Native
+working directory and current turn start/context/completion. Native
 tool calls produce an unsupported-operation error, retaining any answer text.
 Missing, truncated, incompatible or ambiguous evidence also requires a fresh
-session. This is a version-pinned compatibility check, not mutation authority;
-future authoring must use registered application operations.
+session. The audit checks transcript content, without comparing CLI versions.
+Authoring uses registered application operations.
 
-Claude uses `2.1.236 (Claude Code)` with bidirectional `stream-json`, partial
+Claude uses bidirectional `stream-json`, partial
 messages, explicit session IDs and `--resume`. The host supplies a short system
 prompt, empty setting sources, disabled hooks and automatic memory, disabled
 slash commands and browser integration, and an explicit built-in tool list
@@ -56,16 +53,16 @@ containing only `AskUserQuestion`. Its strict MCP configuration points to the
 application's temporary loopback HTTP server. Each server has an unpredictable
 per-turn bearer token and closes when the turn ends.
 
-Claude safe mode disables even an explicitly supplied MCP configuration in this
-version, so the conversational invocation uses the individual controls above.
+Claude safe mode disables even an explicitly supplied MCP configuration in tested releases, so the conversational invocation uses the individual controls above.
 It does not use bare mode, which excludes the supported OAuth/keychain login.
 The initialization response identifies missing authentication before the host
 sends the question. Model availability remains a provider result; the host does
 not select a replacement model.
 
-Both versions are intentionally pinned. An untested CLI version fails visibly
-before a model call. Updating a pin requires actual installed-CLI protocol checks
-in addition to fake executable tests.
+Neither adapter requires a particular CLI version. Startup checks the required
+command flags and protocol behavior. Version strings are retained for diagnostics;
+a CLI update alone does not block a new turn or session resume. Missing required
+capabilities or incompatible responses still produce an actionable error.
 
 ## Tools and input
 

@@ -34,3 +34,5 @@ input,select{font:inherit;color:inherit;background:var(--field);border:1px solid
 #trial-result pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow: auto; }
 #trial-progress, .trial-findings { overflow-wrap: anywhere; }
 @media (max-width: 600px) { .trial-fields, .trial-provenance { grid-template-columns: minmax(0, 1fr); } .trial-provenance dd { margin-bottom: 10px; } }
+
+#provider-setup{margin-top:18px}#provider-setup select{max-width:100%;min-width:0}#provider-setup p{margin-top:10px}

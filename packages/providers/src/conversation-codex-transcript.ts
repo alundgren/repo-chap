@@ -7,7 +7,7 @@ import { ConversationError, conversationLimits } from './conversation-types.js';
 const auditFailure = () => new ConversationError('session', 'Codex finished, but its private transcript could not verify the current turn. The answer is kept; start a fresh conversation.');
 export const nativeOperationFailure = () => new ConversationError('unsupported', 'Codex requested a native operation. Discussion only supports registered application operations. Your drafts have been kept; start a fresh conversation.');
 
-/** This pinned CLI omits sandbox-denied native calls from its normal event stream. */
+/** The transcript also records sandbox-denied native calls omitted from normal events. */
 export async function auditCodexTranscript(path: unknown, sessionId: string, turnId: string, cwd: string, tools: readonly string[], signal: AbortSignal): Promise<void> {
   if (typeof path !== 'string' || !isAbsolute(path) || path.length > 4096) throw auditFailure();
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(2000)]);
@@ -38,7 +38,7 @@ export async function auditCodexTranscript(path: unknown, sessionId: string, tur
       if (!record(value) || !record(value.payload) || typeof value.type !== 'string') throw auditFailure();
       const payload = value.payload;
       if (index === 0) {
-        if (value.type !== 'session_meta' || payload.id !== sessionId || payload.session_id !== sessionId || payload.cli_version !== '0.154.0' || payload.cwd !== cwd) throw auditFailure();
+        if (value.type !== 'session_meta' || payload.id !== sessionId || payload.session_id !== sessionId || payload.cwd !== cwd) throw auditFailure();
         continue;
       }
       if (value.type === 'session_meta') throw auditFailure();

@@ -1,5 +1,13 @@
 # Repo Chap
 
+Run the desktop app from this checkout:
+
+```sh
+corepack pnpm desktop
+```
+
+First run requires Node 24 and `corepack pnpm install --frozen-lockfile`.
+
 Repo Chap looks after trusted teams' repositories. The first release keeps
 GitHub pull requests moving through review, bounded repairs, and readable Slack
 handoffs. People merge.

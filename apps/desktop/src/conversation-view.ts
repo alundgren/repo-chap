@@ -18,6 +18,36 @@ export function conversationView(bridge: ConversationBridge, perform: (operation
   const entries = new Map<string, HTMLElement>();
   const question = element<HTMLTextAreaElement>('conversation-question');
   const profile = element<HTMLSelectElement>('conversation-profile');
+  const setupProvider = element<HTMLSelectElement>('setup-provider');
+  const setupModel = element<HTMLSelectElement>('setup-model');
+  let modelsLoading = false;
+  async function loadModels(): Promise<void> {
+    const provider = setupProvider.value;
+    modelsLoading = true; renderControls();
+    setupModel.replaceChildren(node('option', provider ? 'Loading models…' : 'Choose a provider first')); setupModel.options[0]!.value = '';
+    element('setup-status').textContent = '';
+    element('setup-retry').hidden = true;
+    try {
+      if (!provider) return;
+      const result = await bridge.models(provider);
+      setupModel.replaceChildren();
+      for (const model of result.models) { const option = node('option', model.label); option.value = model.id; setupModel.append(option); }
+      if (result.error) { element('setup-status').textContent = result.error; element('setup-retry').hidden = false; }
+    } catch { element('setup-status').textContent = 'Cannot load models. Retry to continue.'; element('setup-retry').hidden = false; }
+    finally { modelsLoading = false; renderControls(); }
+  }
+  setupProvider.onchange = () => { void loadModels(); };
+  setupModel.onchange = renderControls;
+  element('setup-retry').onclick = () => { void loadModels(); };
+  element<HTMLFormElement>('provider-setup').onsubmit = event => {
+    event.preventDefault();
+    if (!getDocument() || !setupModel.value || modelsLoading || locked) return;
+    void action(async () => {
+      const result = await bridge.saveProvider(getDocument()!.sessionId, { provider: setupProvider.value as 'codex' | 'claude', model: setupModel.value });
+      if (!result.error) element('setup-status').textContent = 'Saved. Ready for your next question.';
+      return result;
+    });
+  };
   const history = element('conversation-history');
   const showError = (message = ''): void => { element('conversation-error').textContent = message; element('conversation-error').hidden = !message; };
 
@@ -25,13 +55,15 @@ export function conversationView(bridge: ConversationBridge, perform: (operation
     if (!snapshot && current) return;
     if (snapshot && snapshot.documentSessionId !== getDocument()?.sessionId) return;
     if (snapshot && current && current.status !== 'closed' && snapshot.documentSessionId === current.documentSessionId && snapshot.revision < current.revision) return;
-    current = snapshot; renderConversation();
+    current = snapshot;
+    if (snapshot && [...profile.options].some(option => option.value === snapshot.provider.name)) profile.value = snapshot.provider.name;
+    renderConversation();
   }
   function updateProfiles(profiles: ConversationProvider[]): void {
     const key = JSON.stringify(profiles);
     if (key !== profilesKey) {
       const previous = profile.value;
-      profile.replaceChildren(node('option', 'Choose a provider profile'));
+      profile.replaceChildren(node('option', 'Choose a saved profile'));
       profile.options[0]!.value = '';
       for (const item of profiles) {
         const option = node('option', `${item.name} · ${providerName(item.provider)} · ${item.model}${item.effort ? ` · ${item.effort}` : ''}`);
@@ -95,6 +127,10 @@ export function conversationView(bridge: ConversationBridge, perform: (operation
 
   function renderControls(): void {
     const running = !!current?.activeTurnId;
+    setupProvider.disabled = modelsLoading || settingsBusy || locked;
+    setupModel.disabled = modelsLoading || settingsBusy || locked || !setupModel.value;
+    element<HTMLButtonElement>('setup-save').disabled = modelsLoading || settingsBusy || locked || !setupModel.value;
+    element<HTMLButtonElement>('setup-retry').disabled = modelsLoading || settingsBusy || locked;
     element<HTMLButtonElement>('conversation-send').disabled = locked || settingsBusy || !current || current.status === 'closed' || running || current.requiresFresh || !question.value.trim();
     element<HTMLButtonElement>('conversation-cancel').disabled = !running || current?.status === 'cancelling';
     element<HTMLButtonElement>('conversation-fresh').disabled = !current || current.status === 'closed' || settingsBusy;
@@ -109,7 +145,7 @@ export function conversationView(bridge: ConversationBridge, perform: (operation
     element('conversation-failure').hidden = !failure;
     element('conversation-failure').textContent = failure;
     element('conversation-recovery').hidden = !current?.requiresFresh;
-    element('conversation-selected-provider').textContent = current ? `${providerName(current.provider.provider)} · ${current.provider.model}${current.provider.effort ? ` · ${current.provider.effort}` : ''} · Profile ${current.provider.name}` : 'Load your private provider settings, then choose the provider and model for this workflow.';
+    element('conversation-selected-provider').textContent = current ? `${providerName(current.provider.provider)} · ${current.provider.model}${current.provider.effort ? ` · ${current.provider.effort}` : ''} · Profile ${current.provider.name}` : 'Choose a provider and model above, then save to start chatting.';
     const status = settingsBusy ? 'Updating provider settings…' : !current ? 'No provider selected' : current.status === 'closed' ? 'Conversation closed. Choose a profile to continue.' : current.status === 'input' ? 'Needs your reply' : current.status === 'cancelling' ? 'Stopping the current turn…' : current.status === 'running' ? 'Receiving an answer…' : current.status === 'waiting' ? current.waitingFor === 'tool' ? 'Waiting for a local tool…' : 'Waiting for the provider…' : current.requiresFresh ? 'Fresh session required' : current.session ? `Ready · ${current.session.turns} completed turn(s)` : 'Ready for a new session';
     element('conversation-status').textContent = current ? `${providerName(current.provider.provider)} · ${status}` : status;
     element('conversation-tab').textContent = current?.input ? 'Discuss · Reply needed' : running ? 'Discuss · Running' : current?.requiresFresh ? 'Discuss · Fresh needed' : 'Discuss';

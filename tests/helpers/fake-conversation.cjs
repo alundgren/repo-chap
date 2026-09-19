@@ -8,8 +8,9 @@ const option = name => args[args.indexOf(name) + 1];
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const save = value => fs.appendFileSync(log, JSON.stringify(value) + '\n');
 save({ args });
-if (args.includes('--version')) { console.log(mode === 'unsupported' ? 'old-provider' : provider === 'codex' ? 'codex-cli 0.154.0' : '2.1.236 (Claude Code)'); process.exit(); }
+if (args.includes('--version')) { console.log(provider === 'codex' ? `codex-cli ${mode === 'upgraded' ? '9.0.0-preview.1' : '0.154.0'}` : `${mode === 'upgraded' ? '9.0.0-preview.1' : '2.1.236'} (Claude Code)`); process.exit(); }
 if (args.includes('--help')) {
+  if (mode === 'unsupported') { console.log('Required conversation controls unavailable'); process.exit(); }
   console.log('--stdio --strict-config generate-json-schema --print --input-format --output-format --include-partial-messages --verbose --resume --session-id --model --settings --setting-sources --strict-mcp-config --mcp-config --tools --allowedTools --permission-mode --disable-slash-commands --no-chrome --system-prompt stream-json\n--effort <level> (low, medium, high)\n--next'); process.exit();
 }
 if (args.includes('--bundled')) { send({ models: [{ slug: 'fictional-model', default_reasoning_level: 'medium', supported_reasoning_levels: [{ effort: 'medium' }] }] }); process.exit(); }
@@ -18,7 +19,7 @@ const transcript = require('node:path').join(process.cwd(), 'provider-transcript
 const writeTranscript = () => {
   if (mode === 'audit-missing') return;
   const item = (type, payload) => ({ type, payload });
-  const lines = [item('session_meta', { id: mode === 'audit-session' ? 'other-session' : session, session_id: session, cwd: process.cwd(), cli_version: mode === 'audit-version' ? '0.999.0' : '0.154.0' }),
+  const lines = [item('session_meta', { id: mode === 'audit-session' ? 'other-session' : session, session_id: session, cwd: process.cwd(), cli_version: mode === 'audit-version' || mode === 'upgraded' ? '9.0.0-preview.1' : '0.154.0' }),
     item('event_msg', { type: 'task_started', turn_id: 'turn-1' }), item('turn_context', { turn_id: mode === 'audit-turn' ? 'other-turn' : 'turn-1', cwd: process.cwd() })];
   if (mode === 'native-denial' || mode === 'author-native-denial') lines.push(item('response_item', { type: 'custom_tool_call', name: 'apply_patch', input: 'fictional denied edit' }));
   lines.push(item('response_item', { type: 'message', role: 'assistant', content: [] }));
@@ -118,7 +119,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (message.method === 'account/read') respond({ requiresOpenaiAuth: true, account: mode === 'login' ? null : { type: 'chatgpt' } });
     if (message.method === 'config/read') respond({ config: { instructions: mode === 'base-instructions' ? 'Fictional ambient instructions.' : null, model_instructions_file: mode === 'base-instructions-file' ? '/fictional/base-instructions.md' : null, mcp_servers: { 'ambient.with.dot': { enabled: true, url: 'https://example.invalid/mcp' } } }, origins: {} });
     if (message.method === 'skills/list') respond({ data: [{ cwd: message.params.cwds[0], skills: [{ path: '/fictional/ambient-skill/SKILL.md', enabled: true }], errors: mode === 'skills-error' ? [{ message: 'Cannot read a fictional skill.' }] : [] }] });
-    if (message.method === 'thread/start' || message.method === 'thread/resume') respond({ thread: { id: session, path: transcript }, model: 'fictional-model', instructionSources: mode === 'ambient-instructions' ? ['/fictional/AGENTS.md'] : [] });
+    if (message.method === 'thread/start' || message.method === 'thread/resume') respond({ thread: { id: session, path: transcript }, model: 'fictional-model', ...(mode === 'missing-instruction-sources' ? {} : { instructionSources: mode === 'ambient-instructions' ? ['/fictional/AGENTS.md'] : [] }) });
     if (message.method === 'turn/start') { currentInput = message.params.input[0].text; respond({ turn: { id: 'turn-1' } }); notify('turn/started', { turn: { id: 'turn-1' } }); void run(); }
     if ((message.id === 77 || message.id === 78) && pending) { pending = null; finish(); }
   } else {

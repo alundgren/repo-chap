@@ -41,6 +41,8 @@ const bridge: EditorBridge = {
 contextBridge.exposeInMainWorld('repoChap', bridge);
 
 const conversation: ConversationBridge = {
+  models: provider => ipcRenderer.invoke('conversation:models', provider),
+  saveProvider: (id, choice) => ipcRenderer.invoke('conversation:save-provider', id, choice),
   current: () => ipcRenderer.invoke('conversation:current'),
   loadProfiles: () => ipcRenderer.invoke('conversation:load-profiles'),
   selectProfile: (documentSessionId, name) => ipcRenderer.invoke('conversation:select-profile', documentSessionId, name),

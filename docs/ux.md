@@ -493,3 +493,16 @@ commands. Status distinguishes the installation recovery pause from repository
 pause and source activation hold, and separates unresolved logical effects from
 historical unknown attempts. `--keep-unknown` explains that unrelated work may
 resume without granting a resend. No desktop control is added.
+
+## Desktop provider setup
+
+Discuss starts with a provider and model picker and a Save and use action.
+Codex choices come from its installed local catalog; Claude offers CLI model
+aliases. Loading choices makes no model request. A missing CLI explains the
+terminal installation/login step and offers Retry loading models.
+
+Saving writes private application settings outside Git and immediately selects
+the profile for discussion. Settings return after restart. Existing profiles
+remain selectable, and Import settings file supports advanced configuration.
+A failed save preserves the prior settings and conversation. No workflow source
+or credentials are written by provider setup.

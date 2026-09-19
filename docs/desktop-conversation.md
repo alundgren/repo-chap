@@ -1,28 +1,34 @@
 # Discuss a workflow
 
-Open a workflow and choose **Discuss**. Load a private Repo Chap provider settings
-file, choose its provider/model profile, and select **Use profile**. These actions
-make no model request. Sending a question starts the selected installed CLI using
-its supported local login. The supported versions are Codex CLI 0.154.0 and
-Claude Code 2.1.236. A different version, missing executable, unsupported settings
-or unavailable login produces an error without choosing another provider.
+Open a workflow and choose **Discuss**. Choose Codex or Claude Code, select a
+model, and press **Save and use**. Codex models come from the installed CLI's
+local catalog. Claude offers Sonnet, Opus and Haiku. If the CLI is missing,
+install it and log in from your terminal, then use **Retry loading models**.
+Setup makes no model request. Sending a question starts the selected CLI.
 
-Use the same version-1 settings format as [Codex analysis](codex-analysis.md) or
-[Claude analysis](claude-analysis.md). The file must be owned by you, private
-(mode 0600), outside Git, and contain 1–32 named profiles. Every profile needs an
-explicit provider and model. `maximumCapabilities: []` is sufficient for ordinary
-discussion because app-owned draft editing and offline tests grant no live workflow capabilities. The
-desktop reads the chosen file into memory; it does not write it or save the
-choice in the workflow. Settings reload does not change the current conversation
-until you select **Use profile**.
+The app saves provider settings privately outside Git in its application data
+directory and loads them on restart. Saved choices appear under **Saved profiles**; select one and press **Use profile**. Saving provider settings does not
+save workflow drafts or credentials. CLI login stays with the provider.
 
-Codex discussion requires an instruction-free provider home. If startup reports
-ambient instructions, create a separate private directory, use ordinary
-`CODEX_HOME=/absolute/private/directory codex login`, then launch Repo Chap with
-that same `CODEX_HOME`. Keep AGENTS customization out of this directory and leave
-`instructions` and `model_instructions_file` unset in its configuration. The app
-does not remove your existing instructions or copy credentials. Claude uses its
-normal supported login while excluding ambient customization for each turn.
+**Import settings file** also accepts the version-1 format from
+[Codex analysis](codex-analysis.md) or [Claude analysis](claude-analysis.md).
+Imported files must be owned by you, private with mode 0600, outside Git, and
+contain 1–32 named profiles. Import does not modify the original file or switch
+the current conversation. **Save and use** retains loaded profiles alongside
+the chosen desktop profile. Desktop-created profiles allow discussion, draft
+editing and offline tests; live trials may require imported capability settings.
+
+CLI versions are not pinned. The app checks required CLI capabilities and
+protocol responses. Missing capabilities, unsupported settings or unavailable
+login produce an error without choosing another provider.
+
+Codex discussion uses your normal local login and permits inherited global
+instructions, including custom base instructions. It runs in a private session
+directory outside the repository and disables automatic project-document loading.
+Skills and configured MCP servers remain disabled for discussion. Repo Chap
+supplies the workflow context, its own task instructions and registered app tools.
+Claude uses its normal supported login while excluding ambient customization
+for each turn.
 
 Expand **Context for the next question** to choose a rule and the loaded Markdown
 references to send. The current workflow JSON is always included. The latest

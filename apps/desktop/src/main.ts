@@ -1,3 +1,5 @@
+import { desktopProfile, providerModels, saveDesktopProfiles } from './provider-settings.js';
+import type { ProviderChoice } from './provider-settings.js';
 import { app, BrowserWindow, dialog, ipcMain, Menu, session as electronSession } from 'electron';
 import { basename, dirname, join, resolve } from 'node:path';
 import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
@@ -121,7 +123,23 @@ async function startConversation(profile: ProviderProfile): Promise<void> {
   } catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }
 }
 
-registerConversation('current', currentConversation, false);
+let providerSettingsError: string | undefined;
+registerConversation('current', () => ({ ...currentConversation(), ...(providerSettingsError ? { error: providerSettingsError } : {}) }), false);
+ipcMain.handle('conversation:models', async (event, provider: string) => {
+  if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame?.url !== pageUrl) throw new Error('Provider setup is unavailable.');
+  try { return { models: await providerModels(provider, app.getPath('userData')) }; }
+  catch (error) { return { models: [], error: error instanceof Error ? error.message : 'Cannot load models. Retry provider setup.' }; }
+});
+registerConversation('save-provider', async (id: string, choice: ProviderChoice) => {
+  if (!documents || id !== documents.sessionId) throw new Error('The open workflow changed. Choose its provider again.');
+  const selected = desktopProfile(choice);
+  const next = [...profiles.filter(profile => profile.name !== selected.name), selected];
+  await saveDesktopProfiles(app.getPath('userData'), next);
+  providerSettingsError = undefined;
+  updateProfiles(next);
+  if (conversation) await conversation.selectProvider(selected);
+  else await startConversation(selected);
+});
 registerConversation('load-profiles', async () => {
   if (!window) return;
   const choice = await dialog.showOpenDialog(window, { title: 'Load private Repo Chap provider settings', properties: ['openFile'], filters: [{ name: 'Provider settings JSON', extensions: ['json'] }] });
@@ -380,6 +398,11 @@ void app.whenReady().then(async () => {
   electronSession.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     callback({ cancel: !details.url.startsWith(pathToFileURL(`${__dirname}/`).href) });
   });
+  const savedSettings = join(app.getPath('userData'), 'providers.json');
+  if (await lstat(savedSettings).catch(() => null)) {
+    try { profiles = await readProfiles(savedSettings); }
+    catch { providerSettingsError = 'Saved provider settings could not be loaded. Choose a provider below and save again, or import a valid settings file.'; }
+  }
   const fileIndex = process.argv.indexOf('--workflow');
   const rootIndex = process.argv.indexOf('--repo-root');
   let openingError: string | undefined;

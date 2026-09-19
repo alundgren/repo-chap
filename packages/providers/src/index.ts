@@ -6,7 +6,7 @@ export { collectSources, validateCitations, validateSourceBundle, sourceLimits, 
 export { runProcess, type ProcessOptions, type ProcessResult } from './process.js';
 export { readProfile, readProfiles, validateProfile, ProviderConfigurationError } from './profile.js';
 export type { ProviderProfile, ProviderRequest, ProviderResult, SessionIdentity, Outcome, Attempt, Usage } from './types.js';
-export { runConversationTurn, conversationVersions } from './conversation.js';
+export { runConversationTurn } from './conversation.js';
 export { conversationLimits } from './conversation-types.js';
 export type { ConversationSessionIdentity, ConversationQuestion, ConversationInputRequest, ConversationInputAnswer, ConversationEvent, ConversationErrorCode, ConversationTool, ConversationTurnRequest, ConversationTurnResult } from './conversation-types.js';
 export { runAnalysis, type AnalysisRecord, type AnalysisOptions } from './analysis.js';
