@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { Accounts, PilotError } from './io.mjs';
 import { Store, privateDirectory, privateRead, writePrivate } from './store.mjs';
 import { Pilot } from './lifecycle.mjs';
+import { runGuide, guidePreview, guideStatus, saveEvidence } from './guide.mjs';
 import { validateInputs, versions, diagnoseHost } from './remote.mjs';
 
-const help = `Usage: vp run pilot <prepare|up|status|ssh|diagnose|cleanup|verify-clean|reap> --root /absolute/private/directory
-Run commands require --run ID. up accepts --retain-on-failure or --dry-run.
+const help = `Usage: vp run pilot <prepare|run|up|status|ssh|diagnose|cleanup|verify-clean|reap> --root /absolute/private/directory
+Run commands require --run ID. up and run accept --retain-on-failure or --dry-run. run prompts before provisioning.
 reap --older-than 24h previews; add --confirm to clean selected runs.
 prepare writes operator.json on first use. Edit it, then repeat prepare.
 Exit 0: success or clean; 1: setup/cleanup failed or verification unresolved; 64: invalid command.
@@ -25,8 +26,8 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   const { values, positionals } = parsed;
   const action = positionals[0];
   if (values.help) { output(help); return 0; }
-  if (positionals.length !== 1 || (!values.root || !isAbsolute(values.root)) || !['prepare','up','status','ssh','diagnose','cleanup','verify-clean','reap'].includes(action) ||
-      values['retain-on-failure'] && action !== 'up' || values['dry-run'] && action !== 'up' || values.confirm && action !== 'reap' || values['older-than'] && action !== 'reap') {
+  if (positionals.length !== 1 || (!values.root || !isAbsolute(values.root)) || !['prepare','run','up','status','ssh','diagnose','cleanup','verify-clean','reap'].includes(action) ||
+      values['retain-on-failure'] && !['up', 'run'].includes(action) || values['dry-run'] && !['up', 'run'].includes(action) || values.confirm && action !== 'reap' || values['older-than'] && action !== 'reap') {
     output(help); return 64;
   }
   const store = new Store(values.root);
@@ -41,7 +42,7 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   process.on('SIGTERM', interrupt);
   try {
     await privateDirectory(store.root, action === 'prepare');
-    if (['prepare','up','cleanup','reap'].includes(action) && !values['dry-run'] && !(action === 'reap' && !values.confirm)) {
+    if (['prepare','run','up','cleanup','reap'].includes(action) && !values['dry-run'] && !(action === 'reap' && !values.confirm)) {
       const path = join(store.root, '.pilot.lock');
       try { lock = await open(path, 'wx', 0o600); await lock.writeFile(String(process.pid)); }
       catch { throw new PilotError('Operator directory is locked. Confirm its process has exited before removing .pilot.lock'); }
@@ -100,13 +101,27 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       return ok ? 0 : 1;
     }
     const run = await store.load(values.run);
+    if (action === 'run') {
+      if (values['dry-run']) { guidePreview(pilot, run); return 0; }
+      return await runGuide(pilot, run, { retainOnFailure: !!values['retain-on-failure'] }) ? 0 : 1;
+    }
     if (values['dry-run']) {
       output(JSON.stringify({ run: run.id, resources: ['one Droplet, no backups or volumes', 'one Project and membership', 'one deny-inbound firewall', 'four unique ownership tags', 'one tagged ephemeral Tailscale device', 'one persistent repository runner'], directory: store.directory(run.id), region: run.region, size: run.size, versions }, null, 2));
       output('Dry run only. No API calls, Terraform commands, credential reads or resource changes. A powered-off Droplet still bills.');
       return 0;
     }
     if (action === 'up') { return await pilot.up(run, { retainOnFailure: !!values['retain-on-failure'] }) ? 0 : 1; }
-    if (action === 'cleanup') { pilot.signal = undefined; return await pilot.cleanup(run) ? 0 : 1; }
+    if (action === 'cleanup') {
+      pilot.signal = undefined;
+      const clean = await pilot.cleanup(run);
+      if (run.guide) {
+        run.guide.current = clean ? run.guide.completed.includes('fixture-cleanup') ? 'finished' : 'clean-with-incomplete-scenarios' : 'cleanup-pending';
+        await store.save(run);
+        await saveEvidence(pilot, run);
+      }
+      return clean ? 0 : 1;
+    }
+    if (action === 'status' && run.guide) await guideStatus(pilot, run);
     if (action === 'status' || action === 'verify-clean') return pilot.report(run, await pilot.verify(run)) ? 0 : 1;
     if (run.retained) pilot.warn(run);
     if (action === 'diagnose') { await diagnoseHost(pilot, run); output(`Saved bounded redacted diagnostics under ${store.directory(run.id)}.`); return 0; }
