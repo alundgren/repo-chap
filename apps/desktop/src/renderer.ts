@@ -78,8 +78,12 @@ function render(next: CompanionState): void {
   element('welcome').hidden = !!state.repositoryRoot;
   element('empty').hidden = !state.repositoryRoot || !!state.workflowPath;
   element('workspace').hidden = !state.workflowPath;
-  element('repository-name').textContent = state.repositoryRoot?.split('/').at(-1) ?? '';
+  element('repository-name').textContent = state.repositoryName ?? state.repositoryRoot?.split('/').at(-1) ?? '';
   element('repository-name').title = state.repositoryRoot ?? '';
+  element('worktree-name').textContent = state.worktreeName ? `Worktree: ${state.worktreeName}` : '';
+  element('worktree-name').hidden = !state.worktreeName;
+  element('worktree-name').title = state.repositoryRoot ?? '';
+  element('open-repository').textContent = state.repositoryRoot ? 'Change repository' : 'Open repository';
   element('workflow-title').textContent = state.workflow?.id ?? state.workflowPath?.split('/').at(-1) ?? '';
   element('workflow-path').textContent = state.workflowPath ?? '';
   const picker = element<HTMLSelectElement>('workflow-select');

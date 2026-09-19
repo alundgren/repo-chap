@@ -12,7 +12,7 @@
   <a class="skip" href="#main">Skip to workflow</a>
   <header class="app-header">
     <span class="brand"><img src="assets/mascot.png" width="44" height="44" alt="Repo Chap"></span>
-    <span id="repository-name" class="secondary"></span>
+    <div class="repository-identity"><span id="repository-name"></span><span id="worktree-name" class="secondary" hidden></span></div>
     <button id="open-repository">Open repository</button>
   </header>
   <main id="main" tabindex="-1">
@@ -23,6 +23,7 @@
       <p>Open a repository, then use <code>$repo-chap-workflows</code> in your usual agent.</p>
     </section>
     <section id="empty" class="welcome" hidden>
+      <p class="eyebrow">Repository open</p>
       <h1>No workflows yet</h1>
       <p>Ask your agent to create a Repo Chap workflow in this repository. It will appear here when saved.</p>
     </section>

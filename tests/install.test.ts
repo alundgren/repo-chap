@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmod, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -80,7 +80,7 @@ fi
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.match(result.stdout, /Repo Chap is installed/);
     assert.equal((await lstat(join(prefix, 'bin/repo-chap'))).mode & 0o111, 0o111);
-    assert.equal((await lstat(join(prefix, 'bin/repo-chap-desktop'))).isSymbolicLink(), true);
+    assert.equal((await lstat(join(prefix, 'bin/repo-chap-desktop'))).mode & 0o111, 0o111);
     assert.match(await readFile(join(home, '.agents/skills/repo-chap-workflows/SKILL.md'), 'utf8'), /Repo Chap/);
     assert.match(await readFile(join(home, 'vp-arguments'), 'utf8'), /dlx skills add .*repo-chap-workflows --global/);
 
@@ -96,6 +96,23 @@ fi
     } else {
       assert.match(await readFile(join(home, '.profile'), 'utf8'), /export PATH=/);
     }
+    const desktopExecutable = platform === 'Darwin'
+      ? join(home, 'Applications/Repo Chap.app/Contents/MacOS/repo-chap-desktop')
+      : join(prefix, 'share/repo-chap/desktop/repo-chap-desktop');
+    await executable(desktopExecutable, `#!/bin/sh
+if [ "\${ELECTRON_RUN_AS_NODE+x}" = x ]; then exit 93; fi
+printf '%s\\n' "$@"
+exit 17
+`);
+    const launchArgs = ['--repo-root', source, '--workflow', join(source, 'workflow with spaces.json')];
+    const launch = spawnSync(join(prefix, 'bin/repo-chap-desktop'), launchArgs, {
+      encoding: 'utf8', env: { PATH: '/usr/bin:/bin', ELECTRON_RUN_AS_NODE: '1' },
+    });
+    assert.equal(launch.status, 17, launch.stderr);
+    assert.equal(launch.stdout, launchArgs.join('\n') + '\n');
+    // Upgrades replace the previous executable symlink with the launcher.
+    await rm(join(prefix, 'bin/repo-chap-desktop'));
+    await symlink(desktopExecutable, join(prefix, 'bin/repo-chap-desktop'));
     await writeFile(join(home, '.agents/skills/repo-chap-workflows/SKILL.md'), 'outdated\n');
     const upgrade = spawnSync('/bin/bash', [installer, '--source', source, '--prefix', prefix], {
       encoding: 'utf8',
@@ -103,6 +120,11 @@ fi
     });
     assert.equal(upgrade.status, 0, upgrade.stderr || upgrade.stdout);
     assert.match(upgrade.stdout, /installed and up to date/);
+    assert.equal((await lstat(join(prefix, 'bin/repo-chap-desktop'))).isSymbolicLink(), false);
+    const upgradedLaunch = spawnSync(join(prefix, 'bin/repo-chap-desktop'), launchArgs, {
+      encoding: 'utf8', env: { PATH: '/usr/bin:/bin', ELECTRON_RUN_AS_NODE: '1' },
+    });
+    assert.equal(upgradedLaunch.status, 0, upgradedLaunch.stderr);
     assert.equal(await readFile(join(home, startup), 'utf8'), configuration);
     assert.match(await readFile(join(home, '.agents/skills/repo-chap-workflows/SKILL.md'), 'utf8'), /Repo Chap/);
   } finally {

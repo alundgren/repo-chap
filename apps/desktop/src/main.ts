@@ -93,6 +93,7 @@ void app.whenReady().then(async () => {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
     { label: 'File', submenu: [{ label: 'Close window', accelerator: 'CmdOrCtrl+W', click: () => window?.close() }] },
+    { role: 'windowMenu' },
     { role: 'editMenu' }, { label: 'View', submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }] },
   ]));
   await createWindow();

@@ -27,6 +27,9 @@ test('Electron follows a normal agent through workflow edits, simulation, guidan
     return JSON.parse(result.stdout).state;
   };
   await expect(page.locator('#welcome')).toBeVisible();
+  await expect(page.locator('#open-repository')).toHaveText('Open repository');
+  assert.ok(await electron.evaluate(({ Menu }) => Menu.getApplicationMenu()?.items.some(item => item.role?.toLowerCase() === 'windowmenu')));
+
   await command('open', '--workflow', f.pkg.workflowPath);
   await expect(page.locator('#workflow-title')).toHaveText('team-pr');
   await expect(page.locator('#overview')).toBeVisible();
@@ -96,6 +99,27 @@ test('an empty repository discovers the agent-created workflow and a cancelled p
   t.after(() => electron.close()); const page = await electron.firstWindow();
   await page.evaluate(async root => window.repoChap.command({ kind: 'open', repositoryRoot: root }), empty);
   await expect(page.locator('#empty')).toBeVisible();
+  await expect(page.locator('#empty')).toContainText('Repository open');
+  await expect(page.locator('#repository-name')).toHaveText('new-project');
+  await expect(page.locator('#open-repository')).toHaveText('Change repository');
+  await expect(page.locator('#worktree-name')).toBeHidden();
+  const git = (...args: string[]) => promisify(execFile)('git', ['-C', empty, ...args]);
+  await git('init');
+  await git('-c', 'user.name=Willow', '-c', 'user.email=willow@example.invalid', 'commit', '--allow-empty', '-m', 'Initial commit');
+  const worktree = join(f.temporary, 'agent-checkout');
+  await git('worktree', 'add', '-b', 'agent-work', worktree);
+  await page.evaluate(async root => window.repoChap.command({ kind: 'open', repositoryRoot: root }), worktree);
+  await expect(page.locator('#repository-name')).toHaveText('new-project');
+  await expect(page.locator('#worktree-name')).toHaveText('Worktree: agent-checkout');
+  for (const width of [720, 390]) {
+    await electron.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0]!.setBounds({ width, height: 800 }), width);
+    await expect(page.locator('#repository-name')).toBeVisible();
+    await expect(page.locator('#worktree-name')).toBeVisible();
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    if (process.env.REPO_CHAP_DESKTOP_PROOF) await page.screenshot({ path: join(process.env.REPO_CHAP_DESKTOP_PROOF, `empty-worktree-${width}.png`), fullPage: true });
+  }
+  await page.evaluate(async root => window.repoChap.command({ kind: 'open', repositoryRoot: root }), empty);
+
   await writeFile(join(empty, 'workflow.json'), await readFile('skills/repo-chap-workflows/assets/workflow.json', 'utf8'));
   await expect(page.locator('#workflow-title')).toHaveText('repository-pr', { timeout: 10_000 });
   await electron.evaluate(({ dialog }) => { dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] }); });

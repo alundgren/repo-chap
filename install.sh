@@ -133,7 +133,15 @@ fi
 
 rm -rf "$desktop_target"
 mv "$packaged_desktop" "$desktop_target"
-ln -sfn "$desktop_executable" "$prefix/bin/repo-chap-desktop"
+# Agent hosts can export this variable, which makes Electron run as Node.
+quoted_desktop=$(printf '%s' "$desktop_executable" | sed "s/'/'\\\\''/g")
+rm -f "$prefix/bin/repo-chap-desktop"
+cat > "$prefix/bin/repo-chap-desktop" <<EOF
+#!/bin/sh
+unset ELECTRON_RUN_AS_NODE
+exec '$quoted_desktop' "\$@"
+EOF
+chmod 0755 "$prefix/bin/repo-chap-desktop"
 
 # Installers cannot change the parent shell, so persist PATH for new terminals.
 path_files=()
