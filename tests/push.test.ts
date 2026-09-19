@@ -98,8 +98,8 @@ test('temporary credential and final-read failures permit bounded retry of the s
   } finally { await s.cleanup(); }
 });
 
-async function daemonFixture(mode = 'valid', maxRepairs = 2) {
-  const s = await repairFixture('codex', mode), remotePath = await bare(s), directory = join(s.temporary, 'state');
+async function daemonFixture(mode = 'valid', maxRepairs = 2, ci = false) {
+  const s = await repairFixture('codex', mode, false, ci), remotePath = await bare(s), directory = join(s.temporary, 'state');
   const files = Object.fromEntries(s.pkg.files.map(file => [file.path, file.text])), workflow = JSON.parse(files[s.pkg.workflowPath]!);
   workflow.settings.newPrDelaySeconds = 0; workflow.settings.headDebounceSeconds = 0; workflow.limits.maxRepairsPerLifecycle = maxRepairs;
   workflow.actions.push_candidate.onSuccess = '$observe'; delete workflow.actions.resolve_threads; files[s.pkg.workflowPath] = JSON.stringify(workflow); s.pkg = buildPackage(s.pkg.workflowPath, files);
@@ -414,5 +414,24 @@ test('an empty-content conflict merge pushes its exact tested two-parent commit'
       headRef: request.targetRef, baseRef: 'refs/heads/main', defaultRef: 'refs/heads/main', headSha: s.head, baseSha: s.base, lifecycle: 'open', draft: false };
     assert.equal((await conditionalPush(request, { transport: localPushTransport(request.repository, checkout, remote), readTarget: async () => target, authorize: () => true })).status, 'confirmed');
     assert.equal(git(remote, 'rev-parse', request.targetRef), result.candidate!.sha);
+  } finally { await s.cleanup(); }
+});
+
+
+test('daemon resumes CI repair after restart and keeps the repair limit across its pushed head', async () => {
+  const s = await daemonFixture('valid', 1, true);
+  try {
+    await s.tick(); const run = s.store.runs()[0]!;
+    assert.equal(s.jobs.length, 1); assert.equal(s.jobs[0]!.actionId, 'fix_ci');
+    const saved = await s.store.readRepair(s.store.run(run.id).repair!.result);
+    assert.equal(saved.status, 'candidate', saved.diagnostic); assert.deepEqual(saved.payload?.threads, []);
+    await s.restart(); await s.tick(); await s.tick();
+    assert.equal(s.store.effects(run.id)[0]!.state, 'confirmed');
+    assert.equal(git(s.remotePath, 'rev-parse', 'refs/heads/update'), saved.candidate!.sha);
+    assert.equal(s.jobs.length, 1); assert.equal(s.sends, 1);
+    s.inspection.evidence.pullRequest!.headSha = saved.candidate!.sha;
+    s.store.pollFinished(s.repo.id, 0, null); await s.restart(); await s.tick();
+    assert.equal(s.jobs.length, 1); assert.equal(s.store.run(run.id).control.repairsThisLifecycle, 1);
+    assert.match(s.store.run(run.id).reason, /repair limit/i);
   } finally { await s.cleanup(); }
 });

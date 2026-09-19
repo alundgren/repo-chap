@@ -32,8 +32,9 @@ export function currentMemory(control: ControlState, observation: Observation): 
   if (control.repairSuppression) memory.repairSuppressed = observation.evidenceDigest ? control.repairSuppression.evidenceDigest === observation.evidenceDigest : null;
   return memory;
 }
+// CI results are optional in older captures and are checked separately for CI repair and merge readiness.
 export function hasCompleteEvidence(facts: Facts): boolean {
-  return facts.evidenceComplete === true && Object.entries(factTypes).every(([key, type]) => typeof (facts as Record<string, unknown>)[key] === type);
+  return facts.evidenceComplete === true && Object.entries(factTypes).filter(([key]) => key !== 'ciFailed' && key !== 'ciPending').every(([key, type]) => typeof (facts as Record<string, unknown>)[key] === type);
 }
 export function evaluate(workflow: Workflow, observation: Observation, control: ControlState, now: string): Decision {
   const facts = currentFacts(workflow, observation, now);

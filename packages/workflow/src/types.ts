@@ -1,7 +1,7 @@
 export type Truth = true | false | 'unknown';
 export const factTypes = {
   lifecycle: 'string', draft: 'boolean', evidenceComplete: 'boolean', young: 'boolean',
-  headDebouncing: 'boolean', conflict: 'boolean', unaddressedReview: 'boolean', externalReviewPending: 'boolean',
+  ciFailed: 'boolean', ciPending: 'boolean', headDebouncing: 'boolean', conflict: 'boolean', unaddressedReview: 'boolean', externalReviewPending: 'boolean',
 } as const;
 export const memoryFields = ['classificationCurrent', 'reviewCurrent', 'packetCurrent', 'repairSuppressed'] as const;
 export type MemoryField = typeof memoryFields[number];

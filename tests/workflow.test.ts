@@ -17,12 +17,12 @@ function rejectsCode(fn: () => unknown, code: string): void {
 }
 
 test('supplied example loads as an immutable package with explicit references only', () => {
-  assert.equal(pkg.files.length, 7);
+  assert.equal(pkg.files.length, 8);
   assert.ok(Object.isFrozen(pkg.workflow.actions.review));
   assert.ok(Object.isFrozen(pkg.files));
   const text = source['docs/pr-workflows/examples/team-pr/review.md']!;
   const changed = { ...source, 'docs/pr-workflows/examples/team-pr/review.md': `${text}\n[Absent](absent.md)\n` };
-  assert.equal(buildPackage(workflowPath, changed).files.length, 7);
+  assert.equal(buildPackage(workflowPath, changed).files.length, 8);
 });
 
 test('canonical digest ignores formatting, object order and layout but includes context bytes and rule order', () => {
@@ -56,6 +56,8 @@ test('moving overlapping rules changes priority without changing IDs', async () 
 
 for (const [name, rule, status] of [
   ['conflict', 'conflict', 'needs_observation'],
+  ['ci-repair', 'ci_failed', 'waiting'],
+  ['ci-pending', 'ci_running', 'waiting'],
   ['review-wait', 'reviewer_active', 'waiting'],
   ['incomplete-evidence', 'missing_evidence', 'waiting'],
   ['suppressed-repair', 'repair_waiting_human', 'waiting'],
@@ -334,4 +336,41 @@ test('schema fragments validate their own constraints and retain internal refere
   });
   const input = await fixture('conflict');
   rejectsCode(() => replay(narrow, input), 'schema');
+});
+
+
+test('CI rules wait before repair and share suppression and lifecycle limits', async () => {
+  const input = await fixture('handoff'), facts = input.observations[0]!.facts;
+  facts.ciFailed = true; facts.ciPending = true;
+  let result = replay(pkg, input);
+  assert.equal(result.decisions[0]?.ruleId, 'ci_running'); assert.equal(result.status, 'waiting');
+  assert.ok(result.nextWakeAt); assert.equal(result.proposedEffects.length, 0);
+  facts.ciPending = false;
+  result = replay(pkg, input);
+  assert.equal(result.decisions[0]?.ruleId, 'ci_failed'); assert.equal(result.proposedEffects[0]?.uses, 'agent.fix_ci');
+  input.control!.memory!.repairSuppressed = true;
+  assert.equal(replay(pkg, input).decisions[0]?.ruleId, 'repair_waiting_human');
+  input.control!.memory!.repairSuppressed = false;
+  input.control!.repairsThisLifecycle = pkg.workflow.limits.maxRepairsPerLifecycle;
+  result = replay(pkg, input); assert.equal(result.status, 'blocked'); assert.equal(result.proposedEffects.length, 0);
+});
+
+test('CI repair validates and pushes a candidate then requires fresh observation', async () => {
+  const input = await fixture('conflict');
+  Object.assign(input.observations[0]!.facts, { conflict: false, ciFailed: true });
+  input.results!.fix_ci = input.results!.resolve_conflict!; delete input.results!.resolve_conflict;
+  const result = replay(pkg, input);
+  assert.deepEqual(result.proposedEffects.map(effect => effect.uses), ['agent.fix_ci', 'checks.validate_candidate', 'github.push_candidate', 'github.resolve_eligible_threads']);
+  assert.equal(result.status, 'needs_observation'); assert.equal(result.control.repairsThisLifecycle, 1);
+  assert.equal(result.control.memory?.reviewCurrent, false);
+});
+
+test('failed, pending, unknown and absent CI cannot authorize a ready handoff', async () => {
+  const workflow = copy(); workflow.rules.unshift({ id: 'direct_handoff', when: { field: 'facts.lifecycle', op: 'eq', value: 'open' }, action: 'handoff' });
+  const compiled = compile(workflow);
+  for (const state of [{ ciFailed: true, ciPending: false }, { ciFailed: false, ciPending: true }, { ciFailed: null, ciPending: null }, {}]) {
+    const input = await fixture('handoff'); delete input.observations[0]!.facts.ciFailed; delete input.observations[0]!.facts.ciPending;
+    Object.assign(input.observations[0]!.facts, state);
+    assert.notEqual(replay(compiled, input).proposedEffects.at(-1)?.outcome, 'ready_for_human_merge');
+  }
 });

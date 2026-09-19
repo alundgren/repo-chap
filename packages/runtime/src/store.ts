@@ -499,7 +499,7 @@ export class RuntimeStore {
       const run = this.requireCurrent(claim, now), limits = input.package.workflow.limits;
       if (run.packageDigest !== input.package.digest || this.repository(run.repositoryId).paused) throw new RuntimeError('The repository is paused or package is not current.');
       const repair = !!apply, uses = input.package.workflow.actions[input.actionId]?.uses;
-      if (!(repair ? ['agent.resolve_conflict', 'agent.address_review'] : ['agent.classify', 'agent.review']).includes(uses ?? '')) throw new RuntimeError('Cannot reserve this action in the selected execution mode.');
+      if (!(repair ? ['agent.resolve_conflict', 'agent.address_review', 'agent.fix_ci'] : ['agent.classify', 'agent.review']).includes(uses ?? '')) throw new RuntimeError('Cannot reserve this action in the selected execution mode.');
       if (repair && this.effects(run.id).some(effect => ['github.push_candidate', 'github.resolve_eligible_threads'].includes(effect.kind) && ['sending', 'unknown'].includes(effect.state))) throw new RuntimeError('Reconcile the pending remote effect before starting another provider attempt.');
       const repairs = Number((this.db.prepare("SELECT COUNT(*) AS count FROM attempts WHERE run_id=? AND json_extract(job,'$.kind')='repair'").get(run.id) as { count: number }).count);
       if (repair && repairs >= Math.min(limits.maxRepairsPerLifecycle, apply!.maxRepairsPerLifecycle)) throw new RuntimeError('Total repair limit reached across all PR heads. A human decision is required.');

@@ -210,3 +210,42 @@ for (const provider of ['codex', 'claude'] as const) test(`${provider} conflict 
     assert.equal(git(restored, 'rev-parse', 'HEAD^{tree}'), originalTree);
   } finally { await s.cleanup(); }
 });
+
+for (const provider of ['codex', 'claude'] as const) test(`${provider} repairs failed CI without review threads and tests the final commit`, async () => {
+  const s = await setup(provider, 'valid', false, true);
+  try {
+    const { result } = await runRepair(s.job(), s.options);
+    assert.equal(result.status, 'candidate', result.diagnostic); assert.equal(result.requiredChecksPassed, true);
+    assert.deepEqual(result.payload?.threads, []); assert.deepEqual(result.candidate?.parents, [s.head]);
+    assert.equal(result.checks[0]?.candidateSha, result.candidate?.sha);
+    const marker = JSON.parse(await readFile(s.marker, 'utf8'));
+    assert.equal(marker.input.evidence.checks.items[0].conclusion, 'FAILURE');
+    assert.match(marker.input.evidence.workspace.instructions, /remote failure logs are not/);
+    assert.equal(git(s.repository, 'rev-parse', 'HEAD'), s.head);
+  } finally { await s.cleanup(); }
+});
+
+for (const state of ['passing', 'pending', 'unknown', 'missing', 'partial', 'stale']) test(`CI repair rejects ${state} evidence before launching a provider`, async () => {
+  const s = await setup('codex', 'valid', false, true);
+  try {
+    const evidence = s.inspection.evidence;
+    if (state === 'passing') evidence.checks.items[0]!.conclusion = 'SUCCESS';
+    if (state === 'pending') evidence.checks.items.push({ ...evidence.checks.items[0]!, id: 'CHECK_pending', status: 'IN_PROGRESS', conclusion: null });
+    if (state === 'unknown') evidence.checks.items.push({ ...evidence.checks.items[0]!, id: 'CHECK_unknown', conclusion: null });
+    if (state === 'missing') evidence.checks.items = [];
+    if (state === 'partial') evidence.checks.coverage.status = 'partial';
+    if (state === 'stale') evidence.revision.status = 'changed';
+    s.inspection.evidenceDigest = digest(canonicalJson(evidence)); s.inspection.fixture.observations[0]!.evidenceDigest = s.inspection.evidenceDigest;
+    const { result } = await runRepair(s.job(), s.options);
+    assert.equal(result.status, 'blocked'); assert.equal(result.provider, undefined); assert.equal(result.candidate, undefined);
+  } finally { await s.cleanup(); }
+});
+
+for (const mode of ['blocked', 'no_change', 'keep_head']) test(`CI repair handles ${mode} without retaining a candidate`, async () => {
+  const s = await setup('codex', mode, false, true);
+  try {
+    const { result } = await runRepair(s.job(), s.options);
+    assert.equal(result.status, mode === 'keep_head' ? 'invalid_output' : mode, result.diagnostic);
+    assert.equal(result.candidate, undefined); assert.equal(result.requiredChecksPassed, false);
+  } finally { await s.cleanup(); }
+});

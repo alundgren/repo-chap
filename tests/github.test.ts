@@ -456,3 +456,45 @@ test('a deleted review author and GitHub aggregate changes-requested state remai
     assert.equal(result.status, 'complete');
   }
 });
+
+test('inspection derives CI failure and pending facts from check runs and commit statuses', async () => {
+  const run = (conclusion: string | null, status = 'COMPLETED') => ({ __typename: 'CheckRun', id: 'CHECK_ci', name: 'unit', status, conclusion, detailsUrl: null });
+  const context = (state: string) => ({ __typename: 'StatusContext', id: 'STATUS_ci', context: 'build', state, targetUrl: null });
+  const cases = [
+    { nodes: [run('SUCCESS'), context('SUCCESS'), run('NEUTRAL'), run('SKIPPED')], failed: false, pending: false },
+    ...['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE'].map(value => ({ nodes: [run(value)], failed: true, pending: false })),
+    ...['FAILURE', 'ERROR'].map(value => ({ nodes: [context(value)], failed: true, pending: false })),
+    ...['QUEUED', 'IN_PROGRESS', 'WAITING', 'REQUESTED', 'PENDING'].map(value => ({ nodes: [run(null, value)], failed: false, pending: true })),
+    { nodes: [run('FAILURE'), context('PENDING')], failed: true, pending: true },
+    { nodes: [run(null)], failed: null, pending: null },
+    { nodes: [context('FUTURE_STATE')], failed: null, pending: null },
+    { nodes: [run('FAILURE'), run('FUTURE_CONCLUSION')], failed: true, pending: null },
+    { nodes: [], failed: null, pending: null },
+  ];
+  for (const scenario of cases) {
+    const fake = githubFixture();
+    const result = await inspect(async (url, init) => {
+      if (String(init?.body).includes('query InspectChecks')) return Response.json({ data: { repository: { object: { statusCheckRollup: { contexts: {
+        nodes: scenario.nodes, pageInfo: { hasNextPage: false, endCursor: null },
+      } } } } } });
+      return fake.fetch(url, init);
+    });
+    assert.equal(result.fixture.observations[0]!.facts.ciFailed, scenario.failed, JSON.stringify(scenario));
+    assert.equal(result.fixture.observations[0]!.facts.ciPending, scenario.pending, JSON.stringify(scenario));
+    assert.equal(result.fixture.observations[0]!.facts.evidenceComplete, true);
+  }
+});
+
+test('partial check collection and changed heads leave both CI facts unknown', async () => {
+  for (const changed of [false, true]) {
+    const fake = githubFixture({ changed });
+    const result = await inspect(async (url, init) => {
+      const input = JSON.parse(String(init?.body));
+      if (!changed && input.query.includes('query InspectChecks') && input.variables.cursor) return Response.json({}, { status: 503 });
+      return fake.fetch(url, init);
+    });
+    assert.equal(result.fixture.observations[0]!.facts.ciFailed, null);
+    assert.equal(result.fixture.observations[0]!.facts.ciPending, null);
+    assert.equal(result.fixture.observations[0]!.facts.evidenceComplete, false);
+  }
+});

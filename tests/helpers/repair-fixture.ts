@@ -5,12 +5,15 @@ import { saveCapture } from '@repo-chap/github';
 import { createRepairJob, type ExecutionPolicy } from '@repo-chap/execution';
 import { setup as providerFixture, git } from './provider-fixture.ts';
 
-export async function repairFixture(provider: 'codex' | 'claude' = 'codex', mode = 'valid', conflict = false) {
+export async function repairFixture(provider: 'codex' | 'claude' = 'codex', mode = 'valid', conflict = false, ci = false) {
   const s = await providerFixture('valid', { provider });
   await writeFile(join(s.repository, 'AGENTS.md'), 'Keep the exported value numeric. Use the supplied review intent.\n');
   git(s.repository, 'add', 'AGENTS.md'); git(s.repository, 'commit', '-qm', 'Repository instructions'); s.head = git(s.repository, 'rev-parse', 'HEAD');
   s.inspection.evidence.pullRequest!.headSha = s.head; s.inspection.evidence.revision.headSha = s.head; s.inspection.fixture.observations[0]!.headSha = s.head;
-  if (conflict) {
+  if (ci) {
+    s.inspection.evidence.checks.items = [{ id: 'CHECK_value', kind: 'CheckRun', name: 'value', status: 'COMPLETED', conclusion: 'FAILURE', url: null }];
+    Object.assign(s.inspection.fixture.observations[0]!.facts, { ciFailed: true, ciPending: false });
+  } else if (conflict) {
     git(s.repository, 'checkout', '--detach', s.base);
     await writeFile(join(s.repository, 'src/value.js'), 'export const value = 4;\n');
     git(s.repository, 'commit', '-qam', 'Base advances'); s.base = git(s.repository, 'rev-parse', 'HEAD');
@@ -29,7 +32,7 @@ export async function repairFixture(provider: 'codex' | 'claude' = 'codex', mode
   const policy: ExecutionPolicy = { schemaVersion: 1, allowedPaths: ['src'], excludedPaths: ['src/generated'], requiredChecks: [{ id: 'value', executable: process.execPath,
     args: ['-e', 'const fs=require("node:fs"),cp=require("node:child_process");if(cp.execFileSync("git",["rev-parse","HEAD"]).toString().trim()!==process.env.REPO_CHAP_CANDIDATE_SHA)process.exit(8);if(fs.readFileSync("src/value.js","utf8")!=="export const value = 3;\\n")process.exit(9);'], timeoutMs: 5000, maxOutputBytes: 64 * 1024 }] };
   const policyFile = join(s.temporary, 'execution.json'); await writeFile(policyFile, JSON.stringify(policy));
-  const action = conflict ? 'resolve_conflict' : 'address';
+  const action = ci ? 'fix_ci' : conflict ? 'resolve_conflict' : 'address';
   const job = () => createRepairJob(s.pkg, s.inspection, s.profile, policy, action);
   const options = { sourceRepository: s.repository, artifactDirectory: s.output, profile: s.profile };
   const args = ['workspace', resolve('docs/pr-workflows/examples/team-pr/workflow.json'), '--capture', capture.directory, '--source-repo', s.repository, '--output-dir', s.output,

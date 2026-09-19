@@ -9,15 +9,15 @@
         "evidenceComplete": true,
         "young": false,
         "headDebouncing": false,
-        "conflict": true,
+        "conflict": false,
         "unaddressedReview": false,
         "externalReviewPending": false,
         "ciFailed": false,
-        "ciPending": false
+        "ciPending": true
       },
-      "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headSha": "cccccccccccccccccccccccccccccccccccccccc",
       "baseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "evidenceDigest": "fictional-evidence-1"
+      "evidenceDigest": "fictional-ci-rerun"
     }
   ],
   "control": {
@@ -33,11 +33,13 @@
     },
     "classification": {
       "uncertain": false
-    },
-    "repairSuppression": {
-      "evidenceDigest": "fictional-evidence-1",
-      "reason": "The same conflict needs a product decision."
-    },
-    "repairsThisLifecycle": 2
+    }
+  },
+  "expected": {
+    "status": "waiting",
+    "selectedRuleIds": [
+      "ci_running"
+    ],
+    "proposedEffects": []
   }
 }
