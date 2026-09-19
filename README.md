@@ -10,33 +10,39 @@ workflows, and replaying test fixtures or captured real PRs. It refreshes saved
 files automatically. Your agent can navigate the app and point out changes with
 temporary highlights and annotated arrows.
 
-## Install the workflow skill
+## Install and run Repo Chap
 
-Build with Node 24 and the pinned pnpm:
-
-```sh
-corepack pnpm install --frozen-lockfile
-corepack pnpm build
-mkdir -p /tmp/repo-chap-cli
-corepack pnpm --filter repo-chap pack --pack-destination /tmp/repo-chap-cli
-npm install --global /tmp/repo-chap-cli/repo-chap-0.1.0.tgz
-repo-chap skill install
-```
-
-The CLI includes `repo-chap-workflows` and installs it into
-`~/.agents/skills/repo-chap-workflows`, Codex's
-[user skill directory](https://developers.openai.com/codex/skills/).
-Use `--replace` to update an existing copy. The installer leaves other skills
-and agent configuration alone.
-
-Start your normal Codex agent in the repository you want to configure and ask
-it to use `$repo-chap-workflows`. Start the desktop app from this checkout with:
+Repo Chap requires Node 24 on macOS or Linux. Install the CLI and desktop app
+with one command:
 
 ```sh
-corepack pnpm desktop
+curl -fsSL https://raw.githubusercontent.com/alundgren/repo-chap/main/install.sh | bash
 ```
 
-The agent can open the relevant workflow and explain it in the app:
+Run the same command again to upgrade. It replaces the CLI and desktop app with
+the current `main` versions.
+
+After installing the app, the script asks whether to install the workflow skill
+globally. If you agree, the standard `npx skills` agent picker lets you choose
+Codex, Claude Code, or another supported agent. Pick the agents where you want
+`$repo-chap-workflows` available. The same prompt can update the skill when you
+rerun the installer.
+
+The installer builds a clean checkout and writes the application to
+`~/.local`. It does not use `sudo`. If it reports that `~/.local/bin` is missing
+from `PATH`, add it and open a new terminal. Start a new agent session after
+installing or updating the skill.
+
+From the repository containing `.repo-chap/workflow.json`, open the desktop
+app with:
+
+```sh
+repo-chap-desktop --repo-root "$PWD" --workflow "$PWD/.repo-chap/workflow.json"
+```
+
+Leave the app running while the agent works. It refreshes when the agent saves
+changes. The agent can select the workflow, run a simulation, and point out
+results:
 
 ```sh
 repo-chap desktop open --repo-root . --workflow .repo-chap/workflow.json
@@ -44,6 +50,16 @@ repo-chap desktop status --json
 repo-chap desktop simulate --fixture .repo-chap/tests/closed.json
 repo-chap desktop highlight --target result --style arrow --text 'Closed PRs finish here.'
 ```
+
+To install a tag instead of `main`, download the installer and pass `--ref`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/alundgren/repo-chap/main/install.sh -o /tmp/repo-chap-install.sh
+bash /tmp/repo-chap-install.sh --ref v0.1.0
+```
+
+For development, clone the repository and run
+`./install.sh --source . --prefix "$HOME/.local"`.
 
 See [the desktop guide](docs/desktop.md) for app packaging, captured PRs, and
 local control commands. Validation and replay also work without Electron.
