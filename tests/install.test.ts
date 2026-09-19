@@ -95,9 +95,3 @@ test('user installer rejects an unsafe ref before changing files', () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /plain Git branch or tag/);
 });
-
-test('user installer downloads private repository sources through GitHub CLI', async () => {
-  const contents = await readFile(installer, 'utf8');
-  assert.match(contents, /gh api "repos\/\$repository\/tarball\/\$ref"/);
-  assert.doesNotMatch(contents, /raw\.githubusercontent\.com|github\.com\/[^\s]+\/archive/);
-});

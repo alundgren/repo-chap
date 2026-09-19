@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repository=alundgren/repo-chap
+repository=https://github.com/alundgren/repo-chap
 ref=main
 prefix=${REPO_CHAP_INSTALL_PREFIX:-"$HOME/.local"}
 source_directory=
@@ -83,12 +83,12 @@ if [[ -n $source_directory ]]; then
   [[ -f $source_directory/package.json && -f $source_directory/pnpm-lock.yaml ]] || fail '--source must point to a Repo Chap checkout.'
   source_directory=$(cd "$source_directory" && pwd)
 else
-  command -v gh >/dev/null 2>&1 || fail 'GitHub CLI is required to download Repo Chap.'
+  command -v curl >/dev/null 2>&1 || fail 'curl is required to download Repo Chap.'
   command -v tar >/dev/null 2>&1 || fail 'tar is required to unpack Repo Chap.'
   source_directory=$temporary/source
   mkdir -p "$source_directory"
   printf 'Downloading Repo Chap %s...\n' "$ref"
-  gh api "repos/$repository/tarball/$ref" |
+  curl --fail --location --silent --show-error "$repository/archive/$ref.tar.gz" |
     tar -xz --strip-components=1 -C "$source_directory"
 fi
 

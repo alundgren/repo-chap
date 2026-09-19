@@ -5,8 +5,8 @@ applications are a macOS/Linux CLI named `repo-chap`, a local Electron workflow
 companion and simulator, and a daemon on a private Linux VM. There is no public
 server endpoint.
 
-Read docs/product-brief.md and docs/pr-workflows/decisions.md before changing
-scope. Keep JSON and Markdown authoring usable without the Electron app. Share
+Read docs/product-brief.md before changing scope. Keep JSON and Markdown
+authoring usable without the Electron app. Share
 validation and evaluation across the CLI, companion, and daemon. Keep runtime
 state outside managed repositories. Preserve run limits across bot commits.
 

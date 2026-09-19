@@ -6,9 +6,9 @@ No real-PR trial has been performed. Repo Chap targets a CLI, local Electron
 visual companion, and private Linux daemon.
 
 Start with the [product brief](../product-brief.md), [specification](specification.md),
-[architecture](architecture.md), and [decisions](decisions.md). The
-[contracts](contracts.md), [research](research.md), and [runtime notes](runtime-options.md)
-explain the proposed file format and implementation evidence.
+and [architecture](architecture.md). The [contracts](contracts.md),
+[research](research.md), and [runtime notes](runtime-options.md) explain the
+proposed file format and implementation evidence.
 
 The [offline presentation](presentation.html) contains an interactive editor
 concept and fictional simulation. Download it and open it in a browser. It
