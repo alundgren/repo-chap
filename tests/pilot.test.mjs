@@ -114,25 +114,14 @@ async function fixture(t, faults = {}) {
   return { root, store, run, state, accounts, pilot, create };
 }
 
-test('successful lifecycle leaves one persistent runner for failing and repaired-head jobs, then cleans', async t => {
+test('successful lifecycle leaves one persistent runner until explicit cleanup', async t => {
   const f = await fixture(t);
   assert.equal(await f.pilot.up(f.run), true);
   assert.equal(f.state.droplets.length, 1);
   assert.equal(f.run.stage, 'running');
   const runnerId = f.state.runners[0].id;
-  // This fixture models two workflow dispatches against the registered runner label.
-  for (const [head, conclusion] of [['initial-head', 'failure'], ['repaired-head', 'success']]) {
-    const runner = f.state.runners.find(r => r.labels.some(l => l.name === f.run.name));
-    assert.equal(runner.id, runnerId);
-    const check = join(f.root, 'pilot-check.sh');
-    await writeFile(check, head === 'initial-head' ? 'exit 1\n' : 'exit 0\n');
-    let observed = 'success';
-    try { await command('vp', ['exec', 'bash', check]); } catch { observed = 'failure'; }
-    assert.equal(observed, conclusion);
-    f.state.jobs.push({ head, conclusion: observed, runnerId: runner.id });
-    if (head === 'initial-head') await f.pilot.up(await f.store.load(f.run.id));
-  }
-  assert.deepEqual(f.state.jobs.map(j => j.conclusion), ['failure', 'success']);
+  await f.pilot.up(await f.store.load(f.run.id));
+  assert.equal(f.state.runners[0].id, runnerId);
   assert.equal(await f.pilot.cleanup(f.run), true);
   assert.equal(await f.pilot.cleanup(await f.store.load(f.run.id)), true);
   assert.equal(f.state.calls.filter(c => c === 'terraform apply -input=false -no-color -auto-approve -lock-timeout=10s').length, 1);
@@ -283,4 +272,75 @@ test('interruption after token minting resumes with a fresh token and one runner
   const manifest = await readFile(join(f.store.directory(f.run.id), 'manifest.json'), 'utf8');
   assert.doesNotMatch(manifest, /SECRET|fictional-.*secret/);
   await f.pilot.cleanup(f.run);
+});
+
+async function integrationFixture(t, fault = {}) {
+  const f = await fixture(t);
+  const original = f.accounts.io.command;
+  const dispatched = [];
+  const controller = new AbortController();
+  f.pilot.signal = controller.signal;
+  f.accounts.io.command = async (file, args, options) => {
+    const path = args.at(-1);
+    if (file === 'gh' && path.includes('/commits/')) return JSON.stringify({ sha: path.endsWith('/failing') ? 'a'.repeat(40) : 'b'.repeat(40) });
+    if (file === 'gh' && path.endsWith('/dispatches')) {
+      const body = JSON.parse(options.input);
+      const native = { id: 501 + dispatched.length, display_title: body.inputs.correlation, head_sha: body.ref === 'failing' ? 'a'.repeat(40) : 'b'.repeat(40), run_attempt: 1, status: 'completed', branch: body.ref };
+      dispatched.push(native);
+      if (fault.dispatchResponse) { fault.dispatchResponse = false; throw new PilotError('dispatch response lost'); }
+      return '';
+    }
+    if (file === 'gh' && path.includes('/runs?')) {
+      return JSON.stringify({ workflow_runs: dispatched.filter(d => path.includes(`branch=${d.branch}`)) });
+    }
+    if (file === 'gh' && path.includes('/jobs?')) {
+      const native = dispatched.find(d => path.includes(`/runs/${d.id}/`));
+      if (fault.betweenJobs && native.branch === 'failing') { fault.betweenJobs = false; controller.abort(); }
+      return JSON.stringify({ total_count: 1, jobs: [{ id: native.id + 100, name: 'check', status: 'completed', conclusion: native.branch === 'failing' ? 'failure' : 'success', runner_id: fault.wrongRunner ? 999 : f.run.runnerId, runner_name: f.run.name, labels: [f.run.name] }] });
+    }
+    return original(file, args, options);
+  };
+  return { ...f, dispatched };
+}
+const integrationSelection = { workflow: 'pilot.yml', failingRef: 'failing', repairedRef: 'repaired' };
+test('live integration path provisions and validates GitHub job evidence on the installed runner', async t => {
+  const { runIntegration } = await import('../deploy/pilot/integration.mjs');
+  const f = await integrationFixture(t);
+  assert.equal(await runIntegration(f.pilot, f.run, integrationSelection), true);
+  const evidence = JSON.parse(await readFile(join(f.store.directory(f.run.id), 'integration.json'), 'utf8'));
+  assert.equal(evidence.complete, true);
+  assert.deepEqual(evidence.jobs.map(j => [j.conclusion, j.runnerId]), [['failure',201], ['success',201]]);
+  assert.notEqual(evidence.jobs[0].head, evidence.jobs[1].head);
+  assert.equal(f.state.droplets.length, 0);
+  assert.ok(f.state.calls.some(c => c.includes('systemctl is-active --quiet repo-chap-runner.service')));
+});
+test('integration rejects successful jobs reported on a different runner and still cleans', async t => {
+  const { runIntegration } = await import('../deploy/pilot/integration.mjs');
+  const f = await integrationFixture(t, { wrongRunner: true });
+  assert.equal(await runIntegration(f.pilot, f.run, integrationSelection), false);
+  assert.equal(f.state.droplets.length, 0);
+  assert.equal(f.dispatched.length, 1);
+});
+test('interruption between real workflow observations cleans by default', async t => {
+  const { runIntegration } = await import('../deploy/pilot/integration.mjs');
+  const f = await integrationFixture(t, { betweenJobs: true });
+  assert.equal(await runIntegration(f.pilot, f.run, integrationSelection), false);
+  assert.equal(f.dispatched.length, 1);
+  assert.equal(f.state.droplets.length, 0);
+});
+test('retained integration reconciles a lost dispatch response without sending the job twice', async t => {
+  const { runIntegration } = await import('../deploy/pilot/integration.mjs');
+  const f = await integrationFixture(t, { dispatchResponse: true });
+  assert.equal(await runIntegration(f.pilot, f.run, integrationSelection, { retainOnFailure: true }), false);
+  assert.equal(f.run.retained, true);
+  assert.equal(f.dispatched.length, 1);
+  assert.equal(await runIntegration(f.pilot, f.run, integrationSelection), true);
+  assert.equal(f.dispatched.length, 2);
+  assert.equal(f.state.droplets.length, 0);
+});
+test('live integration defaults to a read-only preview without cloud credentials', async t => {
+  const f = await fixture(t);
+  const output = await command('vp', ['exec', 'node', 'deploy/pilot/integration.mjs', '--root', f.root, '--run', f.run.id, '--failing-ref', 'failing', '--repaired-ref', 'repaired']);
+  assert.match(output, /Preview only/);
+  assert.equal(f.state.calls.length, 0);
 });

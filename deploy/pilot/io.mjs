@@ -83,8 +83,8 @@ export class Accounts {
     }
     throw new PilotError('DigitalOcean inventory exceeded page limit');
   }
-  async gh(path, method = 'GET') {
-    const output = await this.io.command('gh', ['api', '--method', method, path]);
+  async gh(path, method = 'GET', body) {
+    const output = await this.io.command('gh', ['api', '--method', method, ...(body ? ['--input', '-'] : []), path], body ? { input: JSON.stringify(body) } : {});
     if (!output.trim()) return {};
     try { return JSON.parse(output); } catch { throw new PilotError('Invalid GitHub response'); }
   }

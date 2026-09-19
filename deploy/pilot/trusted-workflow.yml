@@ -1,8 +1,13 @@
 # Copy to the dedicated trusted private test repository and use its exact pilot label.
 name: Disposable pilot check
+run-name: ${{ inputs.correlation }}
 on:
   workflow_dispatch:
     inputs:
+      correlation:
+        description: Exact correlation from the integration fixture
+        required: true
+        type: string
       pilot_label:
         description: Exact rcp-RUN_ID label from the external pilot manifest
         required: true

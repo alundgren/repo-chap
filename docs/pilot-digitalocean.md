@@ -181,15 +181,43 @@ actions do not stop billing; still run cleanup or use the DigitalOcean console.
 
 ## Two-job pilot fixture
 
-Use a manually dispatched workflow in the dedicated test repository. Set its
-`runs-on` to the exact `rcp-RUN_ID` label printed in the manifest, or use the
-example at `deploy/pilot/trusted-workflow.yml`. The runner omits default labels
-and is repository-scoped, with no one-job ephemeral flag. Dispatch a failing
-head, record the runner ID/job ID privately, repair the check and dispatch again.
-Both jobs must use the same runner. Interruptions between jobs leave the host
-running until explicit cleanup. The automated local fixture runs a failing and
-repaired check against the same fake runner identity; it does not provision a
-paid host or execute jobs on GitHub.
+The live integration command provisions through the same host installer, checks
+that the installed runner service is active on the recorded VM, dispatches two
+GitHub Actions workflow runs, and verifies native GitHub job records. It requires
+two distinct heads, the expected failure then success, and the same recorded
+runner ID/name and unique label on both jobs. It cleans up after success or
+failure by default. This command creates paid resources and dispatches jobs only
+when passed `--confirm`.
+
+In the dedicated private test repository, copy
+`deploy/pilot/trusted-workflow.yml` to `.github/workflows/pilot.yml` on the default
+branch. Create two branches that also contain that workflow. On `pilot-failing`,
+put `exit 1` in `pilot-check.sh`. On `pilot-repaired`, repair that script so it
+exits 0. Both branches must remain unchanged during the fixture. The persistent
+runner has only the unique pilot label, with no one-job ephemeral flag.
+
+```sh
+vp run test:pilot:integration --root /absolute/private/repo-chap-pilot \
+  --run RUN_ID --workflow pilot.yml \
+  --failing-ref pilot-failing --repaired-ref pilot-repaired
+# After reviewing the printed target, append --confirm to run it.
+```
+
+`integration.json` records commit, workflow run, job and runner IDs and both
+observed conclusions outside Git. A dispatch intent is durable before sending
+it. If the response is lost, a retained resume finds the matching correlation
+instead of dispatching a duplicate. Pass `--retain-on-failure` with `--confirm`
+only when retaining the VM for diagnosis is intended, then repeat the same
+command to resume. Ctrl-C between the jobs defaults to cleanup. A changed
+reference or ambiguous dispatch stops the fixture. A completed fixture's
+`verify-clean` must report all categories absent.
+
+The automated command/API tests cover this integration controller, wrong-runner
+rejection, interrupted observation between jobs and lost dispatch responses.
+Those tests use fake APIs; they do not prove that a live account or runner works.
+Use the opt-in command above for actual installation and two-job evidence, and
+retain its external checkpoint. No live cloud run is part of the default test
+suite.
 
 Before finishing, check all of the following:
 
