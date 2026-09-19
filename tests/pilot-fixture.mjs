@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, chmod, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Accounts, command, PilotError } from '../deploy/pilot/io.mjs';
@@ -8,7 +8,7 @@ import { Pilot } from '../deploy/pilot/lifecycle.mjs';
 import { bootstrap, diagnoseHost, versions } from '../deploy/pilot/remote.mjs';
 
 export async function fixture(t, faults = {}, selectedRoot) {
-  const root = selectedRoot ?? await mkdtemp(join(tmpdir(), 'repo-chap-pilot-test-'));
+  const root = selectedRoot ?? await mkdtemp(join(await realpath(tmpdir()), 'repo-chap-pilot-test-'));
   if (selectedRoot) await mkdir(root, { mode: 0o700 });
   t.after(() => rm(root, { recursive: true, force: true }));
   const store = new Store(root);
