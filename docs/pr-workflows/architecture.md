@@ -1,22 +1,22 @@
 # Repo Chap architecture
 
-Status: proposed implementation. The existing runnable artifact is an offline
-presentation, not the CLI, Electron app, or daemon.
+The CLI, Electron companion, and private daemon share workflow validation and
+execution contracts. Repository files remain the authoring format.
 
 ## Applications and external systems
 
 ```mermaid
 flowchart LR
   Engineer[Engineer] --> CLI[repo-chap CLI: macOS and Linux]
-  Engineer --> Desktop[Electron: local editing and simulation]
+  Engineer --> Agent[Normal agent with workflow skill]
+  Engineer --> Desktop[Electron: workflow overview and simulation]
+  Agent -->|edit| Files
+  Agent -->|desktop commands| CLI
+  CLI -->|private local socket| Desktop
   CLI --> Core[Shared workflow loading, validation, evaluator and replay]
-  Desktop --> Chat[Local CLI authoring session]
-  Chat --> Provider
-  Chat --> Documents[Versioned editor documents and test operations]
-  Documents --> Core
   Desktop --> Core
   CLI --> Files[Repository JSON and Markdown]
-  Desktop --> Files
+  Desktop -->|read and refresh| Files
   Operator[Operator through SSH] --> Control[repo-chap CLI on the VM]
   Control -->|local socket| Daemon[Linux daemon]
   Daemon --> Core
@@ -36,10 +36,12 @@ to the daemon. Slack has no interactive callback in v1.
 
 ## Code organization
 
-| Proposed directory | Responsibility |
+| Directory | Responsibility |
 | --- | --- |
 | apps/cli | Local commands, inspection, replay, apply, and daemon controls |
-| apps/desktop | Electron file editing, rule view, simulation and Slack preview |
+| apps/desktop | File refresh, workflow overview, simulation, Slack preview and guidance |
+| packages/companion | Desktop control protocol and private local socket |
+| skills/repo-chap-workflows | Globally installable agent authoring instructions and starter |
 | apps/daemon | Linux entry point, polling, durable scheduling and local controls |
 | packages/workflow | File loading, schemas, immutable packages, evaluator, replay |
 | packages/github | Authentication, paginated observations and named GitHub effects |
@@ -48,9 +50,8 @@ to the daemon. Slack has no interactive callback in v1.
 | packages/runtime | SQLite runs, timers, leases, budgets and effect receipts |
 | packages/slack | Identity mapping, rendering, delivery and message receipts |
 
-These are proposed implementation locations, not implemented modules. Keep
-related code together and avoid an interface per internal class. CLI and desktop
-must use the shared evaluator instead of maintaining their own rule engines.
+CLI and desktop use the shared evaluator. The companion package defines local
+commands and their transport; it does not depend on Electron or provider adapters.
 
 ## Persisted data
 
@@ -161,18 +162,26 @@ multi-host scheduler.
 
 ## Desktop agent collaboration
 
-Electron owns local conversation processes outside the renderer. The renderer
-receives bounded streamed events through typed IPC and shares one revisioned
-workflow/Markdown/fixture model with the source editor, visual editor and agent
-operations. Operations return actual validation and simulation results.
+The agent owns its editing session in the managed repository. The workflow skill
+ships with the CLI and installs into the user's global skills directory. It
+uses ordinary files, shared validation/replay, and `repo-chap desktop` commands.
 
-An agent mutation carries the expected document revision. Reject a stale update
-and return current context so it can propose a new edit; never overwrite newer
-human work. Apply valid operations visibly, group undo per agent operation, and
-keep changes staged until save. Cancellation stops the process and pending tools
-without pretending previously applied edits were undone. A conversation stores
-bounded context privately and can restart without losing staged documents.
+Electron's main process owns a read-only repository session. A serialized queue
+handles commands and file refresh, and shared loading pins consistent JSON and
+references. The renderer receives typed snapshots and renders plain text.
+It has no filesystem access, provider process, or editing operation.
 
-Simulation takes a pinned draft and fixture revision, so editing while a test
-runs does not mislabel its result as current. It requires no network even when
-a provider-backed chat session is open. No daemon connection is introduced.
+The companion socket lives in a user-owned mode-0700 directory outside Git.
+It accepts versioned commands with repository and optional workflow checks.
+Targets identify visible sections, rules, and actions. Annotation text is inert,
+expires automatically, and can be dismissed. No public listener is introduced.
+
+Simulation retains the tested package and input digests. Refresh marks prior
+results stale when files change or become unreadable. Test and captured-PR inputs
+remain separate. Captures validate their paired evidence and fixture digests,
+while existing analysis callers still require the original workflow digest.
+Replaying new workflow logic against an older observation makes no live request.
+
+The last repository/workflow selection is saved in private app data. Restart
+reloads files from disk, not an unsaved editor buffer. The app neither activates
+daemon workflows nor changes remote permissions or run budgets.

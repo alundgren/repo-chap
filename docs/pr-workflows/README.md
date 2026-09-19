@@ -3,7 +3,7 @@
 Status: design proposal, revised 2026-09-16. The shared workflow validator and
 offline CLI replay are now implemented; see [their contracts](../workflow-api.md).
 No real-PR trial has been performed. Repo Chap targets a CLI, local Electron
-editor, and private Linux daemon.
+visual companion, and private Linux daemon.
 
 Start with the [product brief](../product-brief.md), [specification](specification.md),
 [architecture](architecture.md), and [decisions](decisions.md). The
@@ -13,7 +13,8 @@ explain the proposed file format and implementation evidence.
 The [offline presentation](presentation.html) contains an interactive editor
 concept and fictional simulation. Download it and open it in a browser. It
 uses embedded fonts and requires no server or network. It illustrates part of
-the intended Electron experience; it is not an Electron implementation.
+an earlier editor direction. The current [desktop companion](../desktop.md)
+uses repository files edited by the user's normal agent.
 
 `examples/team-pr/workflow.json` and its Markdown files are a candidate process.
 `schemas/` and `examples/results/` document action payloads. These are Repo Chap

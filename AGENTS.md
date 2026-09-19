@@ -2,12 +2,12 @@
 
 Repo Chap is an independent repository-care product for trusted teams. Its v1
 applications are a macOS/Linux CLI named `repo-chap`, a local Electron workflow
-editor and simulator, and a daemon on a private Linux VM. There is no public
+companion and simulator, and a daemon on a private Linux VM. There is no public
 server endpoint.
 
 Read docs/product-brief.md and docs/pr-workflows/decisions.md before changing
 scope. Keep JSON and Markdown authoring usable without the Electron app. Share
-validation and evaluation across the CLI, editor, and daemon. Keep runtime
+validation and evaluation across the CLI, companion, and daemon. Keep runtime
 state outside managed repositories. Preserve run limits across bot commits.
 
 Use fictional repositories, people, and Slack IDs in examples and tests. Keep

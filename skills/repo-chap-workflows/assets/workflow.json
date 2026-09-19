@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "repository-pr",
+  "version": "0.1.0",
+  "settings": { "newPrDelaySeconds": 120, "headDebounceSeconds": 30, "reviewWaitSeconds": 300, "reviewDeadlineSeconds": 1800, "mergeMode": "human" },
+  "limits": { "maxAttemptsPerHead": 1, "maxRepairsPerLifecycle": 1, "maxAgentActionsPerWake": 1, "maxAttemptSeconds": 300, "maxDailyCostUnits": 1 },
+  "requestedCapabilities": [],
+  "labels": [],
+  "rules": [{ "id": "closed", "when": { "any": [
+    { "field": "facts.lifecycle", "op": "eq", "value": "closed" },
+    { "field": "facts.lifecycle", "op": "eq", "value": "merged" }
+  ] }, "action": "stop" }],
+  "otherwise": "park",
+  "actions": {
+    "stop": { "uses": "control.close", "execution": "code", "capabilities": [], "onSuccess": "$closed", "onFailure": "$blocked" },
+    "park": { "uses": "control.wait_signal", "execution": "code", "capabilities": [], "onSuccess": "$wait", "onFailure": "$blocked" }
+  }
+}

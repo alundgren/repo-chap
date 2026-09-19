@@ -1,6 +1,0 @@
-interface:
-  display_name: "Real CLI integration"
-  short_description: "Test desktop authoring with a real local CLI"
-  default_prompt: "Use $real-cli-integration to test desktop authoring with my selected provider and model."
-policy:
-  allow_implicit_invocation: false

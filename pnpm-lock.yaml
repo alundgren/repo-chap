@@ -11,6 +11,9 @@ importers:
       '@playwright/test':
         specifier: 1.62.1
         version: 1.62.1
+      '@repo-chap/companion':
+        specifier: workspace:*
+        version: link:packages/companion
       '@repo-chap/daemon':
         specifier: workspace:*
         version: link:apps/daemon
@@ -53,6 +56,9 @@ importers:
 
   apps/cli:
     devDependencies:
+      '@repo-chap/companion':
+        specifier: workspace:*
+        version: link:../../packages/companion
       '@repo-chap/daemon':
         specifier: workspace:*
         version: link:../daemon
@@ -101,12 +107,12 @@ importers:
       '@electron/packager':
         specifier: 20.3.0
         version: 20.3.0
+      '@repo-chap/companion':
+        specifier: workspace:*
+        version: link:../../packages/companion
       '@repo-chap/github':
         specifier: workspace:*
         version: link:../../packages/github
-      '@repo-chap/providers':
-        specifier: workspace:*
-        version: link:../../packages/providers
       '@repo-chap/slack':
         specifier: workspace:*
         version: link:../../packages/slack
@@ -116,6 +122,15 @@ importers:
       electron:
         specifier: 44.4.1
         version: 44.4.1
+
+  packages/companion:
+    devDependencies:
+      '@repo-chap/slack':
+        specifier: workspace:*
+        version: link:../slack
+      '@repo-chap/workflow':
+        specifier: workspace:*
+        version: link:../workflow
 
   packages/execution:
     dependencies:

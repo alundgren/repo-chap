@@ -12,9 +12,10 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --packages=bundle --outfile=dist/cli.js"
+    "build": "node build.mjs"
   },
   "devDependencies": {
+    "@repo-chap/companion": "workspace:*",
     "@repo-chap/workflow": "workspace:*",
     "@repo-chap/github": "workspace:*",
     "@repo-chap/providers": "workspace:*",

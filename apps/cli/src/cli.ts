@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { loadWorkflow, parseFixture, parseJson, readFixtureText, replay, compareReplay, WorkflowError, type ReplayResult, type ConditionTrace } from '@repo-chap/workflow';
+import { loadWorkflow, parseFixture, parseJson, readFixtureText, replay, compareReplay, WorkflowError, workflowSchema, fixtureSchema, resultSchemas, type ReplayResult, type ConditionTrace } from '@repo-chap/workflow';
 import { CaptureError, GitHubReadError, validateTarget } from '@repo-chap/github';
 import { inspectCommand } from './inspect.js';
 import { analyzeCommand } from './analyze.js';
@@ -10,10 +10,15 @@ import { slackPreviewCommand } from './slack.js';
 import { previewReplayHandoffs, validatePacket, SlackError } from '@repo-chap/slack';
 import { ExecutionError } from '@repo-chap/execution';
 import { readProfile, ProviderConfigurationError } from '@repo-chap/providers';
+import { desktopCommand } from './desktop.js';
+import { skillCommand } from './skill.js';
 
 const help = `repo-chap validates, replays, and inspects repository workflows.
 
 Usage:
+  repo-chap skill install [--directory <skills-directory>] [--replace]
+  repo-chap schema <workflow|fixture|results>
+  repo-chap desktop <open|status|select|show|input|simulate|highlight|clear> [options]
   repo-chap validate <workflow.json> [--repo-root <directory>] [--json]
   repo-chap replay <workflow.json> --fixture <fixture.json> [--packet <packet-or-packets.json>] [--repo-root <directory>] [--json]
   repo-chap inspect <workflow.json> --repo <owner/name> --pr <number> --capture-dir <private-directory> [--reviewers <login,login>] [--repo-root <directory>] [--json]
@@ -57,6 +62,14 @@ function humanReplay(result: ReplayResult): string {
 }
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args[0] === 'desktop') { await desktopCommand(args.slice(1)); return; }
+  if (args[0] === 'skill') { await skillCommand(args.slice(1)); return; }
+  if (args[0] === 'schema') {
+    const schemas: Record<string, unknown> = { workflow: workflowSchema, fixture: fixtureSchema, results: resultSchemas };
+    if (args.length === 2 && Object.hasOwn(schemas, args[1]!)) process.stdout.write(JSON.stringify(schemas[args[1]!], null, 2) + '\n');
+    else { process.stdout.write('repo-chap schema <workflow|fixture|results>\n'); if (!args.includes('--help')) process.exitCode = 64; }
+    return;
+  }
   if (args[0] === 'daemon') { await daemonCommand(args.slice(1)); return; }
   if (args[0] === 'apply') { await applyCommand(args.slice(1)); return; }
   if (args[0] === 'slack-preview') { await slackPreviewCommand(args.slice(1)); return; }

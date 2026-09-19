@@ -71,12 +71,12 @@ async function readJson(file: string): Promise<unknown> {
     return parseJson(new TextDecoder('utf-8', { fatal: true }).decode(data.subarray(0, length)), file);
   } finally { await handle.close(); }
 }
-export async function readCapture(directory: string, pkg: WorkflowPackage): Promise<Inspection> {
+export async function readCapturedInspection(directory: string): Promise<Inspection> {
   try {
     const document = object(await readJson(join(directory, 'evidence.json')));
     const fixture = parseFixture(await readJson(join(directory, 'fixture.json')));
     const evidence = object(document.evidence);
-    if (document.schemaVersion !== 1 || evidence.schemaVersion !== 1 || document.packageDigest !== pkg.digest ||
+    if (document.schemaVersion !== 1 || evidence.schemaVersion !== 1 || typeof document.packageDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(document.packageDigest) ||
       document.evidenceDigest !== digest(canonicalJson(evidence)) || document.fixtureDigest !== digest(canonicalJson(fixture)) || fixture.observations.length !== 1)
       throw new CaptureError('Capture versions or digests do not match. Use both files from the same inspection and its pinned workflow package.');
     const requested = object(evidence.requested);
@@ -93,10 +93,16 @@ export async function readCapture(directory: string, pkg: WorkflowPackage): Prom
     }
     if (!Array.isArray(evidence.configuredReviewers) || !['stable', 'changed', 'unknown'].includes(String(object(evidence.revision).status)))
       throw new CaptureError('Capture provenance is invalid.');
-    return { schemaVersion: 1, status: document.status as Inspection['status'], packageDigest: pkg.digest,
+    return { schemaVersion: 1, status: document.status as Inspection['status'], packageDigest: document.packageDigest,
       evidenceDigest: document.evidenceDigest as string, evidence: evidence as unknown as Evidence, fixture };
   } catch (error) {
     if (error instanceof CaptureError) throw error;
     throw new CaptureError('Cannot read a valid capture. Use the fixture and evidence files from one inspection.');
   }
+}
+
+export async function readCapture(directory: string, pkg: WorkflowPackage): Promise<Inspection> {
+  const inspection = await readCapturedInspection(directory);
+  if (inspection.packageDigest !== pkg.digest) throw new CaptureError('Capture versions or digests do not match. Use both files from the same inspection and its pinned workflow package.');
+  return inspection;
 }

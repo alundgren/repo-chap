@@ -9,8 +9,8 @@ The implementation has three applications:
 
 - A macOS and Linux CLI for validation, offline replay, live local trials,
   and daemon operations.
-- A macOS and Linux Electron app for editing workflow files and simulating
-  their behavior locally. It does not connect to the daemon in v1.
+- A macOS and Linux Electron visual companion for viewing workflows and
+  simulating their behavior locally. It does not connect to the daemon in v1.
 - A daemon on a private Linux VM. It polls GitHub, schedules bounded work,
   persists progress, and sends Slack messages through outbound connections.
 
@@ -69,18 +69,16 @@ and stops repeated repairs that make no progress.
 
 ## Local authoring
 
-The engineer opens a repository, edits its JSON and referenced Markdown, checks
-validation errors, and simulates a PR using fictional or locally captured facts.
-The editor explains which rule matched, what the action would do, and what a
-Slack recipient would receive. Saving changes preserves the file format used
-by the CLI and daemon. Unsaved work, external file edits, and invalid JSON need
-clear recovery paths. Unknown formats open without destructive rewriting.
+The engineer runs their usual agent in the repository to edit workflow JSON,
+referenced Markdown, and fictional test fixtures. A globally installed skill
+teaches the agent the file contracts and shared CLI validation and replay.
+Electron shows the current workflow and simulation results, refreshes agent
+edits from disk, and accepts local navigation and explanation commands.
 
-Live reads, model calls, local repairs, and remote apply are separate CLI modes.
-An offline replay requires neither network access nor credentials. A workspace
-trial may edit and test a disposable checkout while retaining the proposed
-patch locally. An explicitly configured apply policy authorizes repeated
-autonomous effects within its bounds, with human merge retained.
+Offline replay requires neither network access nor credentials. Real PR captures
+stay private and retain their observed revision and time. Live reads, model calls,
+local repairs, and remote apply use separate CLI modes. An explicitly configured
+apply policy authorizes autonomous effects within its bounds; a person merges.
 
 ## Reliability for trusted teams
 
@@ -111,8 +109,8 @@ A personal pilot must show an ordinary review and a PR with a conflict or an
 actionable review progressing to a useful Slack handoff. The pushed commit
 matches the tested commit. A person performs the final merge. Restart, stale
 head, invalid configuration, repeated bot activity, and uncertain Slack delivery
-must produce bounded and explainable outcomes. The same workflow can be edited
-and simulated locally in Electron on macOS and Linux.
+must produce bounded and explainable outcomes. The same repository files can be edited with an agent
+and viewed and simulated locally in Electron on macOS and Linux.
 
 A work deployment follows the personal trial, using that environment's GitHub
 App installation, Slack app, provider access, repositories, and private VM.
@@ -125,38 +123,33 @@ logical artifact references, durable claims and effect reconciliation. Shared
 data services and coordinated workers/schedulers are later work. See the
 architecture document for the concrete requirements and platform limits.
 
-## Local authoring assistant in v1
+## Agent authoring and desktop companion
 
-The Electron editor includes a conversation with an agent running through a
-supported local CLI. It can answer questions about the workflow, help create it,
-and make visible edits to JSON, referenced Markdown, and local test fixtures.
-It can run offline workflow tests and discuss actual results with the person.
-The existing PR-review chat feature in another Electron application is technical
-prior art for process ownership and interaction, not a product dependency.
+The user runs their normal agent in the repository being configured. A globally
+installed `repo-chap-workflows` skill supplies workflow contracts, validation,
+replay, and desktop commands. The agent edits repository JSON, Markdown, and
+fictional test fixtures with its ordinary tools and instructions.
 
-Agent edits use the same versioned document model as manual edits. They appear
-immediately as staged changes, with changed files, validation errors and undo.
-Saving remains an explicit editor operation. Concurrent human edits must not be
-overwritten by a response based on an older document revision.
+Electron is a visual companion with Overview and Simulate views, a repository
+picker, and a workflow selector. It reads files from disk and refreshes them as
+the agent saves. Overview shows ordered rules, action continuations, timing,
+limits, and referenced files. Invalid or unsupported files produce diagnostics
+without rewriting the files or displaying an old workflow as current.
 
-Chat uses the selected provider and may contact that provider through the local
-CLI. Simulation itself remains offline, with fixtures, stubbed results and fake
-time. The assistant can prepare expected outcomes, run the shared simulation,
-and explain pass/fail evidence tied to the tested document and fixture revisions.
-Changing a test expectation is a visible edit, not proof that the workflow works.
+The agent steers the running app through `repo-chap desktop` over a private local
+Unix socket. Commands open or select a workflow, navigate, load input, replay,
+and show temporary highlights or arrows with plain text. Guidance has a bounded
+lifetime and can be dismissed by the user. Repository and optional workflow
+checks prevent a command from steering an unrelated open workspace.
 
-Keep streaming, cancellation, bounded conversation context, actionable process
-errors, and a fresh-session recovery path. The desktop never connects to the
-daemon or activates a remote workflow. Normal authoring tools do not push code,
-send Slack messages, or perform live PR repairs. Electron also supports explicitly started live read-only trials using real
-repository evidence and local CLI providers. Local repair/apply trials remain
-CLI operations. Both Codex and Claude provider choices should support this local
-collaboration through the same document/test operations.
+Simulation uses shared loading, validation, replay, and Slack preview code.
+Test fixtures and captured real PRs have separate selections and results. Every
+result identifies the workflow and input digests it tested. Changed or unreadable
+inputs make retained results stale. A capture records its observed head, time,
+and evidence coverage; it never claims current GitHub state. A saved capture can
+be replayed against an edited workflow without another network request.
 
-A live trial requires an explicit start in the UI showing repository/PR,
-provider, current workflow revision and the live-read mode. An agent request
-can prepare that proposal but cannot silently start a model trial. Results
-record the tested head, package/fixture revision, provider and missing evidence.
-Changing the draft or PR head marks the old result stale. Cancellation stops
-work and preserves already visible edits. Offline simulation stays available
-without provider access.
+Live GitHub reads, provider analysis, repair, apply, and daemon operations remain
+CLI tasks with their existing authorization and recovery behavior. Electron
+starts no provider process and has no agent chat, editing controls, or daemon
+connection. Runtime state and captured evidence stay outside Git.
