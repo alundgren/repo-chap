@@ -38,17 +38,15 @@ async function prepareEnvironment(store, accounts, output) {
     await writePrivate(configPath, JSON.stringify({
       repository: 'example-team/pilot-test', region: 'ams3', size: 's-2vcpu-4gb',
       configDirectory: '/absolute/private/pilot-config', codexHome: '/absolute/private/pilot-codex',
-      trustedPrivateRepository: true,
     }, null, 2) + '\n');
     output(`Wrote ${configPath}. Complete the private values, then rerun create. No credentials were read and no resources were created.`);
     return null;
   }
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.repository) || !/^[a-z0-9-]+$/.test(config.region) ||
-      !/^[a-z0-9-]+$/.test(config.size) || config.trustedPrivateRepository !== true)
+      !/^[a-z0-9-]+$/.test(config.size))
     throw new PilotError('Select one dedicated trusted private repository, region and size in operator.json');
   await validateInputs(config);
-  const tf = JSON.parse(await accounts.io.command('terraform', ['version', '-json']));
-  if (tf.terraform_version !== versions.terraform) throw new PilotError(`Install Terraform ${versions.terraform}`);
+  await accounts.io.command('terraform', ['version']);
   const ts = JSON.parse(await accounts.io.command('tailscale', ['status', '--json']));
   if (ts.BackendState !== 'Running') throw new PilotError('Connect the operator to Tailscale first');
   await accounts.io.command('tar', ['--version']);

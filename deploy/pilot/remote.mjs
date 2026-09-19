@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { PilotError } from './io.mjs';
 import { privateDirectory, privateRead, writePrivate } from './store.mjs';
 
-export const versions = { node: '24.21.0', vitePlus: '0.3.0', tailscale: '1.94.2', runner: '2.337.0', codex: '0.154.0', terraform: '1.14.7', digitalocean: '2.101.0' };
+export const versions = { node: '24.21.0', vitePlus: '0.3.0', runner: '2.337.0' };
 const runnerDigest = '70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613';
 export function bootstrap(run, key) {
   if (!/^tskey-auth-[a-zA-Z0-9-]+$/.test(key)) throw new PilotError('Invalid bootstrap key');
@@ -26,7 +26,7 @@ write_files:
 runcmd:
   - [sh, -c, 'systemctl disable --now ssh.service ssh.socket || true']
   - [sh, -c, 'apt-get update && apt-get install -y curl ca-certificates sudo git tar xz-utils']
-  - [sh, -c, 'curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg && curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list && apt-get update && apt-get install -y tailscale=${versions.tailscale}']
+  - [sh, -c, 'curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg && curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list && apt-get update && apt-get install -y tailscale']
   - [sh, -c, 'tailscale up --auth-key=file:/run/pilot-auth --ssh --hostname=${run.name}; result=$?; rm -f /run/pilot-auth; exit $result']
 `;
 }
@@ -63,7 +63,7 @@ fi
 cd /opt
 vp env pin ${versions.node} --target node-version >/dev/null
 ln -sf "$(vp node -p process.execPath)" /usr/local/bin/node
-vp exec npm install --global --prefix /opt/repo-chap-tools @openai/codex@${versions.codex} >/dev/null
+vp exec npm install --global --prefix /opt/repo-chap-tools @openai/codex >/dev/null
 ln -sf /opt/repo-chap-tools/bin/codex /usr/local/bin/codex
 `;
 
@@ -155,8 +155,9 @@ tailscale version | head -1
 /opt/repo-chap-runner/bin/Runner.Listener --version
 `, 30000);
   const observed = installed.trim().split('\n');
-  const expected = [versions.node, versions.vitePlus, versions.tailscale, versions.codex, versions.runner];
-  if (observed.length !== 5 || expected.some((value, i) => !/^(?:v|vp v|codex-cli )?\d+\.\d+\.\d+$/.test(observed[i]) || !observed[i].endsWith(value))) throw new PilotError('Installed version verification failed');
+  if (observed.length !== 5 || observed.some(value => !/^(?:v|vp v|codex-cli )?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(value)) ||
+      !observed[0].startsWith('v24.') || !observed[1].endsWith(versions.vitePlus) || !observed[4].endsWith(versions.runner))
+    throw new PilotError('Installed tools did not report supported versions');
   run.versions = { ...versions, observed, repoChapRelease: run.release };
 }
 
