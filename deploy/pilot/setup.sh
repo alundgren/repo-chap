@@ -198,8 +198,8 @@ cd "$WORKSPACE_ROOT"
 banner "Repo Chap test environment"
 
 stage "Local tools" 2
-say "The pilot uses the repository-pinned build plus Terraform, GitHub CLI, Tailscale, and tar."
-for tool in vp terraform gh tailscale tar codex; do
+say "The pilot uses the repository-pinned build plus Terraform, GitHub CLI, Tailscale, OpenSSH, and tar."
+for tool in vp terraform gh tailscale ssh tar codex; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     warn "$tool is missing from PATH"
     exit 1
