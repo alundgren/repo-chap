@@ -124,7 +124,7 @@ rm /run/runner.tgz
 chown -R pilot-runner:pilot-runner .
 # A missing API registration permits replacing stale local runner credentials.
 rm -f .runner .credentials .credentials_rsaparams
-sudo -u pilot-runner env ACTIONS_RUNNER_INPUT_TOKEN='${token.token}' ./config.sh --unattended --url https://github.com/${run.repository} --name ${run.name} --labels ${run.name} --no-default-labels --work _work >/dev/null
+runuser -u pilot-runner -- env ACTIONS_RUNNER_INPUT_TOKEN='${token.token}' ./config.sh --unattended --url https://github.com/${run.repository} --name ${run.name} --labels ${run.name} --no-default-labels --work _work >/dev/null
 `, 180000);
   }
   const runners = await pilot.runners(run);

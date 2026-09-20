@@ -47,6 +47,9 @@ test('successful lifecycle leaves one persistent runner until explicit cleanup',
   assert.equal(await f.pilot.up(f.run), true);
   assert.equal(f.state.droplets.length, 1);
   assert.equal(f.run.stage, 'running');
+  const registration = f.state.commands.find(command => command.script?.includes('./config.sh --unattended'));
+  assert.match(registration.script, /runuser -u pilot-runner -- env/);
+  assert.doesNotMatch(registration.script, /sudo -u pilot-runner/);
   const runnerId = f.state.runners[0].id;
   await f.pilot.up(await f.store.load(f.run.id));
   assert.equal(f.state.runners[0].id, runnerId);

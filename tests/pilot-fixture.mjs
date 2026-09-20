@@ -65,7 +65,10 @@ export async function fixture(t, faults = {}, selectedRoot) {
     },
     async command(file, args, options = {}) {
       state.calls.push(`${file} ${args.join(' ')}`);
-      state.commands.push({ file, args, interactive: options.interactive, hasInput: options.input !== undefined, timeout: options.timeout });
+      const script = typeof options.input === 'string'
+        ? options.input.replace(/ACTIONS_RUNNER_INPUT_TOKEN='[^']+'/g, "ACTIONS_RUNNER_INPUT_TOKEN='[redacted]'")
+        : undefined;
+      state.commands.push({ file, args, interactive: options.interactive, hasInput: options.input !== undefined, timeout: options.timeout, script });
       if (file === 'terraform') {
         if (args[0] === 'version') return 'Terraform v1.16.3';
         if (args[0] === 'apply') { create(); if (faults.apply) throw new PilotError('partial apply'); }
