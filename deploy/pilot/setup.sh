@@ -279,7 +279,7 @@ else
   warn "Creation failed. The environment may still bill until deletion succeeds."
   exit "$CREATE_STATUS"
 fi
-ENVIRONMENT_ID=$(printf '%s\n' "$CREATE_OUTPUT" | sed -n 's/^Environment \([a-f0-9]\{24\}\): running$/\1/p' | tail -n1)
+ENVIRONMENT_ID=$(printf '%s\n' "$CREATE_OUTPUT" | sed -n 's/^Environment ID: \([a-f0-9]\{24\}\)$/\1/p' | tail -n1)
 [[ -n "$ENVIRONMENT_ID" ]] || { warn "Could not read the environment ID."; exit 1; }
 finish
 say "Environment: $ENVIRONMENT_ID"

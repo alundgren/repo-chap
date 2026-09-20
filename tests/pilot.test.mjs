@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Accounts, command, PilotError } from '../deploy/pilot/io.mjs';
 import { Store, markers, writePrivate } from '../deploy/pilot/store.mjs';
 import { Pilot } from '../deploy/pilot/lifecycle.mjs';
-import { main } from '../deploy/pilot/pilot.mjs';
+import { createdLabel, main } from '../deploy/pilot/pilot.mjs';
 import { bootstrap, diagnoseHost, prerequisites, versions } from '../deploy/pilot/remote.mjs';
 import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from '../deploy/pilot/digitalocean-key.mjs';
 
@@ -175,6 +175,26 @@ test('pilot root can come from the environment and --root takes precedence', asy
   assert.equal(await main(['status', '--environment', f.run.id], f.accounts, () => {}, { REPO_CHAP_PILOT_ROOT: f.root }), 1);
   assert.equal(await main(['status', '--root', f.root, '--environment', f.run.id], f.accounts, () => {}, { REPO_CHAP_PILOT_ROOT: 'relative' }), 1);
   assert.equal(await main(['status', '--environment', f.run.id], f.accounts, () => {}, { REPO_CHAP_PILOT_ROOT: 'relative' }), 64);
+});
+test('create saves the current environment and prints its ID', async t => {
+  const f = await fixture(t);
+  await writePrivate(join(f.root, 'operator.json'), JSON.stringify({
+    repository: f.run.repository,
+    region: f.run.region,
+    size: f.run.size,
+    digitalOceanSshKeyFingerprint: f.run.digitalOceanSshKeyFingerprint,
+    configDirectory: f.run.configDirectory,
+    codexHome: f.run.codexHome,
+  }));
+  assert.equal(await main(['create', '--root', f.root], f.accounts, text => f.state.output.push(text)), 0);
+  const id = await f.store.current();
+  assert.match(id, /^[a-f0-9]{24}$/);
+  assert.ok(f.state.output.includes(`Environment ID: ${id}`));
+});
+test('created label uses minutes today and a local date otherwise', () => {
+  const now = new Date(2026, 8, 20, 12, 0);
+  assert.equal(createdLabel(new Date(2026, 8, 20, 11, 23).getTime() / 1000, now), '37 minutes ago');
+  assert.equal(createdLabel(new Date(2026, 8, 19, 23, 59).getTime() / 1000, now), '2026-09-19');
 });
 test('Ctrl-C during create retains resources for diagnosis and explicit deletion', async t => {
   const f = await fixture(t);
@@ -370,4 +390,35 @@ test('delete removes the environment and verifies absence in one invocation', as
   assert.equal(await main(['delete', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text)), 0);
   assert.equal(f.state.droplets.length, 0);
   assert.equal(await main(['verify-clean', '--root', f.root, '--environment', f.run.id], f.accounts, () => {}), 0);
+});
+test('commands use the current environment and confirmed delete clears it', async t => {
+  const f = await integrationFixture(t);
+  await f.store.select(f.run.id);
+  assert.equal(await main(['test', '--root', f.root], f.accounts, () => {}), 0);
+  const prompts = [];
+  assert.equal(await main(['delete', '--root', f.root], f.accounts, () => {}, process.env, async (run, output) => {
+    output(`Environment: ${run.id}`);
+    output(`Created: ${createdLabel(run.created, new Date(run.created * 1000 + 120000))}`);
+    prompts.push(run.id);
+    return true;
+  }), 0);
+  assert.deepEqual(prompts, [f.run.id]);
+  assert.equal(await f.store.current(), null);
+});
+test('delete cancellation preserves the current environment', async t => {
+  const f = await integrationFixture(t);
+  await f.store.select(f.run.id);
+  const output = [];
+  assert.equal(await main(['delete', '--root', f.root], f.accounts, text => output.push(text), process.env, async () => false), 1);
+  assert.equal(await f.store.current(), f.run.id);
+  assert.equal(f.state.droplets.length, 1);
+  assert.deepEqual(output, ['Deletion cancelled.']);
+});
+test('non-interactive delete needs an explicit environment when one is selected', async t => {
+  const f = await integrationFixture(t);
+  await f.store.select(f.run.id);
+  const output = [];
+  assert.equal(await main(['delete', '--root', f.root], f.accounts, text => output.push(text), process.env, async () => null), 1);
+  assert.deepEqual(output, ['Non-interactive delete requires --environment ID.']);
+  assert.equal(f.state.droplets.length, 1);
 });
