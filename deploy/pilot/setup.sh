@@ -240,7 +240,17 @@ REGION=${REGION:-ams3}
 ask SIZE "DigitalOcean size [s-2vcpu-4gb]:"
 SIZE=${SIZE:-s-2vcpu-4gb}
 [[ "$OPERATOR_ROOT" = /* ]] || { warn "The operator directory must be absolute."; exit 1; }
+if ! DIGITALOCEAN_KEY_OUTPUT=$(vp exec node deploy/pilot/digitalocean-key.mjs --root "$OPERATOR_ROOT"); then
+  warn "Could not prepare the local DigitalOcean SSH key."
+  exit 1
+fi
+DIGITALOCEAN_SSH_KEY_FINGERPRINT=$(printf '%s\n' "$DIGITALOCEAN_KEY_OUTPUT" | sed -n '1p')
+DIGITALOCEAN_SSH_PUBLIC_KEY_FILE=$(printf '%s\n' "$DIGITALOCEAN_KEY_OUTPUT" | sed -n '2p')
+step "Register this public key with DigitalOcean: $DIGITALOCEAN_SSH_PUBLIC_KEY_FILE"
+open_url "https://cloud.digitalocean.com/account/security"
+pause "Press Enter after registering the public key."
 OPERATOR_ROOT="$OPERATOR_ROOT" REPOSITORY="$REPOSITORY" REGION="$REGION" SIZE="$SIZE" \
+DIGITALOCEAN_SSH_KEY_FINGERPRINT="$DIGITALOCEAN_SSH_KEY_FINGERPRINT" \
 CONFIG_DIRECTORY="$CONFIG_DIRECTORY" PILOT_CODEX_HOME="$PILOT_CODEX_HOME" \
   vp node --input-type=module -e '
     import { join } from "node:path";
@@ -249,6 +259,7 @@ CONFIG_DIRECTORY="$CONFIG_DIRECTORY" PILOT_CODEX_HOME="$PILOT_CODEX_HOME" \
       repository: process.env.REPOSITORY,
       region: process.env.REGION,
       size: process.env.SIZE,
+      digitalOceanSshKeyFingerprint: process.env.DIGITALOCEAN_SSH_KEY_FINGERPRINT,
       configDirectory: process.env.CONFIG_DIRECTORY,
       codexHome: process.env.PILOT_CODEX_HOME
     };

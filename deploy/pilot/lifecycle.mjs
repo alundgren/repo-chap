@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { PilotError } from './io.mjs';
 import { markers, writePrivate } from './store.mjs';
 import { bootstrap, provisionHost, diagnoseHost, validateInputs } from './remote.mjs';
+import { validDigitalOceanSshFingerprint } from './digitalocean-key.mjs';
 
 const moduleDirectory = new URL('./digitalocean/', import.meta.url);
 const statusOf = error => error.status === 'inaccessible' ? 'inaccessible' : 'unknown';
@@ -181,6 +182,7 @@ export class Pilot {
         throw new PilotError('Run ID collision; prepare a new run');
       if (mayExist && (inventory.droplets.length !== 1 || inventory.projects.length !== 1 || inventory.firewalls.length !== 1 || inventory.tags.length !== 4)) throw new PilotError('Incomplete infrastructure requires cleanup, then a new run');
       if (!mayExist) {
+        if (!validDigitalOceanSshFingerprint(run.digitalOceanSshKeyFingerprint)) throw new PilotError('Prepared environment has no DigitalOcean SSH key');
         const key = await this.accounts.ts('tailnet/-/keys', { method: 'POST', body: {
           capabilities: { devices: { create: { reusable: false, ephemeral: true, preauthorized: true, tags: ['tag:repo-chap-pilot'] } } },
           expirySeconds: 600, description: run.name,
@@ -189,7 +191,7 @@ export class Pilot {
         const directory = join(this.store.directory(run.id), 'terraform');
         await mkdir(directory, { recursive: true, mode: 0o700 });
         await cp(moduleDirectory, directory, { recursive: true });
-        await writePrivate(join(directory, 'pilot.auto.tfvars.json'), JSON.stringify({ run_id: run.id, created: run.created, expires: run.expires, region: run.region, size: run.size, bootstrap: bootstrap(run, key.key) }));
+        await writePrivate(join(directory, 'pilot.auto.tfvars.json'), JSON.stringify({ run_id: run.id, created: run.created, expires: run.expires, region: run.region, size: run.size, ssh_key_fingerprint: run.digitalOceanSshKeyFingerprint, bootstrap: bootstrap(run, key.key) }));
         await this.terraform(run, 'init');
         await this.checkpoint(run, 'applying');
         mayExist = true;

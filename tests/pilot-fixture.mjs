@@ -12,7 +12,8 @@ export async function fixture(t, faults = {}, selectedRoot) {
   if (selectedRoot) await mkdir(root, { mode: 0o700 });
   t.after(() => rm(root, { recursive: true, force: true }));
   const store = new Store(root);
-  const run = { version: 1, id: '0123456789abcdef01234567', name: 'rcp-0123456789abcdef01234567', created: 1700000000, expires: 1700086400, repository: 'example-team/pilot-test', repositoryId: 17, digitaloceanAccount: 'fictional-account', region: 'ams3', size: 's-2vcpu-4gb', stage: 'prepared', configDirectory: join(root, 'config'), codexHome: join(root, 'codex') };
+  const sshFingerprint = '00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff';
+  const run = { version: 1, id: '0123456789abcdef01234567', name: 'rcp-0123456789abcdef01234567', created: 1700000000, expires: 1700086400, repository: 'example-team/pilot-test', repositoryId: 17, digitaloceanAccount: 'fictional-account', digitalOceanSshKeyFingerprint: sshFingerprint, region: 'ams3', size: 's-2vcpu-4gb', stage: 'prepared', configDirectory: join(root, 'config'), codexHome: join(root, 'codex') };
   await mkdir(run.configDirectory, { mode: 0o700 });
   await mkdir(run.codexHome, { mode: 0o700 });
   await writePrivate(join(run.codexHome, 'auth.json'), '{"token":"fictional-codex-secret"}');

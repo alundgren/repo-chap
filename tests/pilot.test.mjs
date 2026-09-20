@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm, chmod, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, chmod, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Accounts, command, PilotError } from '../deploy/pilot/io.mjs';
@@ -8,8 +8,24 @@ import { Store, markers, writePrivate } from '../deploy/pilot/store.mjs';
 import { Pilot } from '../deploy/pilot/lifecycle.mjs';
 import { main } from '../deploy/pilot/pilot.mjs';
 import { bootstrap, diagnoseHost, prerequisites, versions } from '../deploy/pilot/remote.mjs';
+import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from '../deploy/pilot/digitalocean-key.mjs';
 
 import { fixture } from './pilot-fixture.mjs';
+
+test('DigitalOcean SSH key setup generates and reuses a private local keypair', async t => {
+  const directory = await mkdtemp(join(await realpath(tmpdir()), 'repo-chap-key-test-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await chmod(directory, 0o700);
+  const created = await ensureDigitalOceanSshKey(directory);
+  assert.equal(created.created, true);
+  assert.equal(created.publicKeyFile, join(directory, 'digitalocean_ed25519.pub'));
+  assert.equal(validDigitalOceanSshFingerprint(created.fingerprint), true);
+  assert.equal((await stat(join(directory, 'digitalocean_ed25519'))).mode & 0o777, 0o600);
+  assert.equal((await stat(created.publicKeyFile)).mode & 0o777, 0o600);
+  const existing = await ensureDigitalOceanSshKey(directory);
+  assert.equal(existing.created, false);
+  assert.equal(existing.fingerprint, created.fingerprint);
+});
 
 test('pilot SSH uses OpenSSH with a private environment host-key file', async t => {
   const f = await fixture(t);
@@ -47,6 +63,8 @@ test('successful lifecycle leaves one persistent runner until explicit cleanup',
   assert.equal(await f.pilot.up(f.run), true);
   assert.equal(f.state.droplets.length, 1);
   assert.equal(f.run.stage, 'running');
+  const terraformVariables = JSON.parse(await readFile(join(f.store.directory(f.run.id), 'terraform', 'pilot.auto.tfvars.json'), 'utf8'));
+  assert.equal(terraformVariables.ssh_key_fingerprint, f.run.digitalOceanSshKeyFingerprint);
   const registration = f.state.commands.find(command => command.script?.includes('./config.sh --unattended'));
   assert.match(registration.script, /runuser -u pilot-runner -- env/);
   assert.doesNotMatch(registration.script, /sudo -u pilot-runner/);
@@ -142,6 +160,7 @@ test('create verifies configuration and provisions in one invocation', async t =
     repository: f.run.repository,
     region: f.run.region,
     size: f.run.size,
+    digitalOceanSshKeyFingerprint: f.run.digitalOceanSshKeyFingerprint,
     configDirectory: f.run.configDirectory,
     codexHome: f.run.codexHome,
   }));
