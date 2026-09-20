@@ -9,6 +9,7 @@ import { Pilot } from '../deploy/pilot/lifecycle.mjs';
 import { createdLabel, main } from '../deploy/pilot/pilot.mjs';
 import { bootstrap, diagnoseHost, prerequisites, versions } from '../deploy/pilot/remote.mjs';
 import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from '../deploy/pilot/digitalocean-key.mjs';
+import { prepareRepository } from '../deploy/pilot/repository.mjs';
 
 import { fixture } from './pilot-fixture.mjs';
 
@@ -25,6 +26,53 @@ test('DigitalOcean SSH key setup generates and reuses a private local keypair', 
   const existing = await ensureDigitalOceanSshKey(directory);
   assert.equal(existing.created, false);
   assert.equal(existing.fingerprint, created.fingerprint);
+});
+
+test('repository preparation confirms before writes and creates canonical fixture branches', async () => {
+  const base = 'a'.repeat(40), baseTree = 'b'.repeat(40);
+  const generated = ['c','d','e','f','1','2','3','4','5'].map(value => value.repeat(40));
+  const calls = [];
+  const accounts = { gh: async (path, method = 'GET', body) => {
+    calls.push({ path, method, body });
+    if (path === 'repos/example-team/pilot-test') return { private: true, permissions: { admin: true }, default_branch: 'main' };
+    if (path.endsWith('/git/ref/heads/main') && method === 'GET') return { object: { sha: base } };
+    if (path.endsWith(`/git/commits/${base}`)) return { tree: { sha: baseTree } };
+    if (path.endsWith(`/git/trees/${baseTree}?recursive=1`)) return { tree: [], truncated: false };
+    if (path.endsWith('/git/matching-refs/heads/pilot-')) return [];
+    if (method === 'POST' && path.endsWith('/git/blobs')) return { sha: generated.shift() };
+    if (method === 'POST' && path.endsWith('/git/trees')) return { sha: generated.shift() };
+    if (method === 'POST' && path.endsWith('/git/commits')) return { sha: generated.shift() };
+    if (method === 'POST' && path.endsWith('/git/refs')) return {};
+    if (method === 'PATCH' && path.includes('/git/refs/heads/')) return {};
+    throw new Error(`Unexpected GitHub call ${method} ${path}`);
+  } };
+  const output = [];
+  assert.equal(await prepareRepository(accounts, 'example-team/pilot-test', text => output.push(text), async plan => {
+    assert.deepEqual(plan, { repository: 'example-team/pilot-test', defaultBranch: 'main', defaultHead: base, failingHead: null, repairedHead: null });
+    return true;
+  }), true);
+  const writes = calls.filter(call => call.method !== 'GET');
+  assert.ok(writes.some(call => call.method === 'PATCH' && call.path.endsWith('/heads/main') && call.body.force === false));
+  assert.deepEqual(writes.filter(call => call.method === 'POST' && call.path.endsWith('/git/refs')).map(call => call.body.ref), [
+    'refs/heads/pilot-failing', 'refs/heads/pilot-repaired',
+  ]);
+  assert.match(output.join('\n'), /pilot-failing [a-f0-9]{40}/);
+  assert.match(output.join('\n'), /pilot-repaired [a-f0-9]{40}/);
+});
+
+test('repository preparation cancellation makes no GitHub writes', async () => {
+  const accounts = { gh: async (path, method = 'GET') => {
+    assert.equal(method, 'GET');
+    if (path === 'repos/example-team/pilot-test') return { private: true, permissions: { admin: true }, default_branch: 'main' };
+    if (path.endsWith('/git/ref/heads/main')) return { object: { sha: 'a'.repeat(40) } };
+    if (path.includes('/git/commits/')) return { tree: { sha: 'b'.repeat(40) } };
+    if (path.includes('?recursive=1')) return { tree: [], truncated: false };
+    if (path.endsWith('/git/matching-refs/heads/pilot-')) return [];
+    throw new Error(`Unexpected GitHub call ${path}`);
+  } };
+  const output = [];
+  assert.equal(await prepareRepository(accounts, 'example-team/pilot-test', text => output.push(text), async () => false), false);
+  assert.deepEqual(output, ['Repository preparation cancelled.']);
 });
 
 test('pilot SSH uses OpenSSH with a private environment host-key file', async t => {

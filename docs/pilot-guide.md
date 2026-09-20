@@ -8,10 +8,18 @@ Use a dedicated private repository. The commands never merge or change its
 default branch. Keep credentials, Terraform state, provider login data, raw
 repository evidence, and logs in the private operator directory outside Git.
 
-## One-time test repository setup
+## Prepare the test repository
 
-The environment tests expect `.github/workflows/pilot.yml` from
-`deploy/pilot/trusted-workflow.yml` and two stable branches:
+Prepare the dedicated private repository before creating an environment:
+
+```sh
+vp run pilot prepare-repository
+```
+
+The command reads the repository from `operator.json` and shows the repository,
+default branch, and two fixture branches before asking for confirmation. It
+preserves other default-branch files, installs the trusted workflow at
+`.github/workflows/pilot.yml`, and creates or resets two stable branches:
 
 - `pilot-failing` contains `pilot-check.sh` that exits 1.
 - `pilot-repaired` contains a different commit where `pilot-check.sh` exits 0.
@@ -20,6 +28,11 @@ Both branches contain the workflow and must remain unchanged during a test. The
 workflow accepts the environment's unique runner label and has one job named
 `check`. The suite refuses changed heads, multiple matching dispatches, another
 runner, or an unexpected conclusion.
+
+Run preparation again after a fixture branch changes or disappears. It restores
+the expected branch contents without touching other branch names. GitHub
+requires a `workflow_dispatch` workflow on the default branch, so preparation
+may add one commit there when the checked-in workflow differs.
 
 Prepare a repository-scoped GitHub App, a dedicated Codex login, and the private
 daemon files described in [disposable host setup](pilot-digitalocean.md). Slack
