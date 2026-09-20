@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm, chmod, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { Accounts, command, PilotError } from '../deploy/pilot/io.mjs';
 import { Store, markers, writePrivate } from '../deploy/pilot/store.mjs';
 import { Pilot } from '../deploy/pilot/lifecycle.mjs';
@@ -21,12 +21,12 @@ export async function fixture(t, faults = {}, selectedRoot) {
   await writePrivate(join(run.configDirectory, 'app.pem'), 'fictional-app-secret');
   await store.save(run);
   const state = { droplets: [], projects: [], firewalls: [], tags: [], devices: [], runners: [], calls: [], commands: [], output: [], jobs: [] };
-  function create() {
-    state.droplets = [{ id: 101, name: run.name, tags: markers(run) }];
-    state.projects = [{ id: 'project-101', name: run.name, description: markers(run).join(' ') }];
-    state.firewalls = [{ id: 'firewall-101', name: run.name, tags: [run.name] }];
-    state.tags = markers(run).map(name => ({ name, resources: { count: 1 } }));
-    if (!faults.enrollment) state.devices = [{ id: 'device-101', hostname: run.name, name: `${run.name}.example.ts.net`, tags: ['tag:repo-chap-pilot'] }];
+  function create(selected = run) {
+    state.droplets = [{ id: 101, name: selected.name, tags: markers(selected) }];
+    state.projects = [{ id: 'project-101', name: selected.name, description: markers(selected).join(' ') }];
+    state.firewalls = [{ id: 'firewall-101', name: selected.name, tags: [selected.name] }];
+    state.tags = markers(selected).map(name => ({ name, resources: { count: 1 } }));
+    if (!faults.enrollment) state.devices = [{ id: 'device-101', hostname: selected.name, name: `${selected.name}.example.ts.net`, tags: ['tag:repo-chap-pilot'] }];
   }
   async function hang() { return command(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { timeout: 20 }); }
   const io = {
@@ -71,7 +71,10 @@ export async function fixture(t, faults = {}, selectedRoot) {
       state.commands.push({ file, args, interactive: options.interactive, hasInput: options.input !== undefined, timeout: options.timeout, script });
       if (file === 'terraform') {
         if (args[0] === 'version') return 'Terraform v1.16.3';
-        if (args[0] === 'apply') { create(); if (faults.apply) throw new PilotError('partial apply'); }
+        if (args[0] === 'apply') {
+          create(await store.load(basename(dirname(options.cwd))));
+          if (faults.apply) throw new PilotError('partial apply');
+        }
         if (args[0] === 'destroy') {
           if (faults.stateMissing || faults.stateCorrupt) throw new PilotError('state unavailable');
           if (!faults.delete) { state.droplets = []; state.projects = []; state.firewalls = []; state.tags = []; }
@@ -105,7 +108,8 @@ export async function fixture(t, faults = {}, selectedRoot) {
         const script = options.input?.toString() ?? '';
         if (script.includes('RUNNER_INPUT_TOKEN')) {
           if (faults.register) throw new PilotError('registration failed');
-          state.runners = [{ id: 201, name: run.name, labels: [{ name: run.name }] }];
+          const name = /--name ([a-zA-Z0-9.-]+)/.exec(script)?.[1] ?? run.name;
+          state.runners = [{ id: 201, name, labels: [{ name }] }];
           if (faults.afterRegistration) { faults.afterRegistration = false; throw new PilotError('interrupted after registration'); }
         }
         if (script.includes('Runner.Listener --version')) return `v${versions.node}\nvp v${versions.vitePlus}\n1.96.0\ncodex-cli 0.155.0\n${versions.runner}\n`;

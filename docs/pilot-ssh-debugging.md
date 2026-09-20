@@ -83,19 +83,19 @@ tailnet policy, or mutating GitHub or DigitalOcean, show the operator the exact
 command, what it changes, and the likely failure if it goes wrong. Wait for
 approval of that action.
 
-After an approved correction, leave the SSH session and rerun the fixed suite
+After an approved correction, leave the SSH session and rerun the environment tests
 from the Mac:
 
 ```sh
 vp run pilot test --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID --confirm
+  --environment ENVIRONMENT_ID
 ```
 
 Finish by deleting the environment and independently verifying absence:
 
 ```sh
 vp run pilot delete --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID --confirm
+  --environment ENVIRONMENT_ID
 vp run pilot verify-clean --root /absolute/private/repo-chap-pilot \
   --environment ENVIRONMENT_ID
 ```

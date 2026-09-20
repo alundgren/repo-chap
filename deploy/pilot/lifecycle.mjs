@@ -20,7 +20,7 @@ export class Pilot {
     await this.store.save(run);
   }
   warn(run) {
-    this.output(`Environment ${run.id}: billing may be ongoing.\nDelete: vp run pilot delete --root '${this.store.root.replaceAll("'", "'\\''")}' --environment ${run.id} --confirm`);
+    this.output(`Environment ${run.id}: billing may be ongoing.\nDelete: vp run pilot delete --root '${this.store.root.replaceAll("'", "'\\''")}' --environment ${run.id}`);
   }
   async inventory(run) {
     const account = await this.accounts.do('account');

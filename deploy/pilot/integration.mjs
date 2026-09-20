@@ -44,12 +44,15 @@ export async function runTestSuite(pilot, run, selection = suite) {
   }
   const save = () => writePrivate(path, JSON.stringify(evidence, null, 2) + '\n');
   let successful = false;
+  let scenario = 'environment health';
   try {
     if (!run.runnerId || !run.deviceId) throw new PilotError('Installed runner and device identities are required');
     run.test = { status: 'running', startedAt: new Date().toISOString() };
     await pilot.store.save(run);
     await pilot.ssh(run, 'sudo -u repo-chap -H env CODEX_HOME=/var/lib/repo-chap-home/pilot-codex /opt/repo-chap/current/repo-chap daemon diagnose --state-dir /var/lib/repo-chap --config /etc/repo-chap/installation.json --json >/dev/null && sudo systemctl is-active --quiet repo-chap.service repo-chap-runner.service');
+    pilot.output(`${scenario}: pass`);
     for (const [index, ref, expected] of [[0, selected.failingRef, 'failure'], [1, selected.repairedRef, 'success']]) {
+      scenario = `${ref} returns ${expected}`;
       pilot.signal?.throwIfAborted();
       const runners = await pilot.runners(run);
       if (runners.length !== 1 || runners[0].id !== run.runnerId) throw new PilotError('Installed runner identity changed');
@@ -99,14 +102,14 @@ export async function runTestSuite(pilot, run, selection = suite) {
         await pilot.pause(10000);
       }
       if (!complete) throw new PilotError('Workflow outcome unknown after deadline; inspect the recorded correlation before retrying');
-      pilot.output(`Verified ${expected} job on runner ${run.runnerId}, head ${job.head}.`);
+      pilot.output(`${scenario}: pass`);
     }
     evidence.complete = true;
     await save();
     run.test = { ...run.test, status: 'passed', completedAt: new Date().toISOString() };
     await pilot.store.save(run);
     successful = true;
-  } catch (error) {
+  } catch {
     // A dispatch is not safe to replace until its one job has a confirmed
     // terminal result. Resume queued, interrupted, and temporarily unreadable
     // runs by their saved correlation instead of dispatching another job.
@@ -115,24 +118,18 @@ export async function runTestSuite(pilot, run, selection = suite) {
     await save();
     run.test = { ...run.test, status: uncertain ? 'interrupted' : 'failed', completedAt: new Date().toISOString() };
     await pilot.store.save(run);
-    pilot.output(error instanceof PilotError ? error.message : 'Environment test interrupted or failed');
-    pilot.warn(run);
-    pilot.output(`With operator permission, follow docs/pilot-ssh-debugging.md for environment ${run.id}.`);
+    pilot.output(`${scenario}: fail`);
   }
   return successful;
 }
 
 async function cli() {
   const { values } = parseArgs({ options: {
-    root: { type: 'string' }, environment: { type: 'string' }, confirm: { type: 'boolean' },
+    root: { type: 'string' }, environment: { type: 'string' },
   } });
-  if (!values.root || !isAbsolute(values.root) || !values.environment) throw new PilotError('Use --root PATH --environment ID; add --confirm to run the fixed suite');
+  if (!values.root || !isAbsolute(values.root) || !values.environment) throw new PilotError('Use --root PATH --environment ID');
   const store = new Store(values.root);
   const run = await store.load(values.environment);
-  console.log(`Tests will use running environment ${run.id} and repository ${run.repository}.`);
-  console.log(`Fixed suite: ${suite.workflow}, ${suite.failingRef} => failure, ${suite.repairedRef} => success.`);
-  console.log('The suite never merges or deletes the environment. Billing continues until pilot delete succeeds.');
-  if (!values.confirm) { console.log(`Preview only. Add --confirm to test environment ${run.id}.`); return 0; }
   const lockPath = join(store.root, '.pilot.lock');
   const lock = await open(lockPath, 'wx', 0o600).catch(() => { throw new PilotError('Operator directory is locked; inspect .pilot.lock'); });
   await lock.writeFile(String(process.pid));
@@ -150,5 +147,5 @@ async function cli() {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   process.umask(0o077);
   try { process.exitCode = await cli(); }
-  catch (error) { console.error(error instanceof PilotError ? error.message : 'Environment test failed; inspect the private checkpoint.'); process.exitCode = 1; }
+  catch { console.error('environment health: fail'); process.exitCode = 1; }
 }

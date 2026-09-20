@@ -99,12 +99,10 @@ Follow [the three-phase guide](pilot-guide.md):
 
 ```sh
 vp run pilot create --root /absolute/private/repo-chap-pilot
-vp run pilot create --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID --confirm
 vp run pilot test --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID --confirm
+  --environment ENVIRONMENT_ID
 vp run pilot delete --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID --confirm
+  --environment ENVIRONMENT_ID
 vp run pilot verify-clean --root /absolute/private/repo-chap-pilot \
   --environment ENVIRONMENT_ID
 ```
