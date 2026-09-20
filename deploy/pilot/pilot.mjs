@@ -10,9 +10,11 @@ import { Pilot } from './lifecycle.mjs';
 import { runTestSuite } from './integration.mjs';
 import { validateInputs } from './remote.mjs';
 import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from './digitalocean-key.mjs';
+import { prepareRepository } from './repository.mjs';
 
 const help = `Usage:
   vp run pilot create [--root /absolute/private/directory] [--environment ID]
+  vp run pilot prepare-repository [--root /absolute/private/directory]
   vp run pilot test [--root /absolute/private/directory] [--environment ID]
   vp run pilot delete [--root /absolute/private/directory] [--environment ID]
   vp run pilot <status|ssh|verify-clean> [--root /absolute/private/directory] [--environment ID]
@@ -45,6 +47,17 @@ async function confirmDeletion(run, output) {
   output(`Created: ${createdLabel(run.created)}`);
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try { return /^y(?:es)?$/i.test((await prompt.question('Delete this environment? [y/N] ')).trim()); }
+  finally { prompt.close(); }
+}
+
+async function confirmRepository(plan, output) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+  output(`Repository: ${plan.repository}`);
+  output(`Default branch: ${plan.defaultBranch}`);
+  output(`Fixture branches: pilot-failing, pilot-repaired`);
+  output('The workflow file on the default branch will be added or refreshed if needed.');
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try { return /^y(?:es)?$/i.test((await prompt.question('Prepare these branches? [y/N] ')).trim()); }
   finally { prompt.close(); }
 }
 
@@ -90,7 +103,7 @@ async function prepareEnvironment(store, accounts, output) {
   return run;
 }
 
-export async function main(argv, accounts = new Accounts(), output = console.log, env = process.env, askDelete = confirmDeletion) {
+export async function main(argv, accounts = new Accounts(), output = console.log, env = process.env, askDelete = confirmDeletion, askPrepare = confirmRepository) {
   let parsed;
   try {
     parsed = parseArgs({ args: argv, allowPositionals: true, options: {
@@ -103,9 +116,9 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   const root = values.root ?? env.REPO_CHAP_PILOT_ROOT;
   if (values.help) { output(help); return 0; }
   if (positionals.length !== 1 || !root || !isAbsolute(root) ||
-      !['create', 'test', 'delete', 'status', 'ssh', 'verify-clean', 'reap'].includes(action) ||
+      !['create', 'prepare-repository', 'test', 'delete', 'status', 'ssh', 'verify-clean', 'reap'].includes(action) ||
       values.confirm && action !== 'reap' ||
-      values['older-than'] && action !== 'reap' || action === 'reap' && values.environment) {
+      values['older-than'] && action !== 'reap' || ['reap', 'prepare-repository'].includes(action) && values.environment) {
     output(help); return 64;
   }
   const store = new Store(root);
@@ -120,7 +133,7 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   process.on('SIGTERM', interrupt);
   try {
     await privateDirectory(store.root, action === 'create' && !values.environment);
-    const writes = ['create', 'test', 'delete'].includes(action) || action === 'reap' && values.confirm;
+    const writes = ['create', 'prepare-repository', 'test', 'delete'].includes(action) || action === 'reap' && values.confirm;
     if (writes) {
       const path = join(store.root, '.pilot.lock');
       try { lock = await open(path, 'wx', 0o600); await lock.writeFile(String(process.pid)); }
@@ -143,8 +156,13 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       }
       return ok ? 0 : 1;
     }
-    const selectedEnvironment = values.environment ?? (!['create', 'reap'].includes(action) ? await store.current() : null);
-    if (!['create', 'reap'].includes(action) && !selectedEnvironment)
+    if (action === 'prepare-repository') {
+      const config = JSON.parse(await privateRead(join(store.root, 'operator.json')));
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.repository)) throw new PilotError('Select one private repository in operator.json');
+      return await prepareRepository(accounts, config.repository, output, askPrepare) ? 0 : 1;
+    }
+    const selectedEnvironment = values.environment ?? (!['create', 'reap', 'prepare-repository'].includes(action) ? await store.current() : null);
+    if (!['create', 'reap', 'prepare-repository'].includes(action) && !selectedEnvironment)
       throw new PilotError('No current environment. Run create or use --environment ID.');
     const run = action === 'create' && !values.environment
       ? await prepareEnvironment(store, accounts, output)

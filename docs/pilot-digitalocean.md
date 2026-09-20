@@ -108,6 +108,7 @@ Codex cache are rejected.
 Follow [the three-phase guide](pilot-guide.md):
 
 ```sh
+vp run pilot prepare-repository
 vp run pilot create
 vp run pilot test
 vp run pilot delete
