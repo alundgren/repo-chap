@@ -32,17 +32,28 @@ Electron does not create or edit the workflow and does not start an agent.
 The saved file appears through normal workflow discovery and refresh. The empty
 repository view offers the same handoff.
 
-Map answers how the selected configured workflow will behave. It gives ordered
-decisions most of the window and states that the first matching condition runs;
-a false or unknown answer continues to the next decision. Nested all, any, and
-not conditions retain their grouping. Every action and its success and failure
-continuations come from the loaded workflow. Shared paths and cycles appear
-once with references, so a large workflow remains readable. Short wait and
-finish paths stay on one row. More involved paths use one action area containing
-a title and flow diagram. Diagram steps are labels, never controls. Small
-explain disclosures show exact condition fields, action IDs, prompt and context
-references, and required capabilities without turning the main view into a
-contract browser.
+Map answers how the selected configured workflow will behave. It uses a
+left-to-right canvas with panning and zoom. Open at a readable scale; Show whole
+workflow fits the graph for orientation. Shared actions appear once. Solid
+connections show entry and completed outcomes; dashed connections show failure.
+ELK uses layered placement, crossing reduction, and orthogonal routing. Completed
+connections leave a step on its right and failures leave below it. Placement does
+not change execution order or imply that independent branches run sequentially.
+
+Related action contracts form expandable sections for pauses, repairs,
+checks/pushes, and classification/review. These are visual groupings and can
+contain alternatives as well as sequences. Selecting a section shows its members
+and their conditions. Expanding it reveals the individual actions and connections.
+Selecting an action opens its inspector and brings the step into view. Outcomes
+in the inspector navigate to their destinations. Waiting and reinspection remain
+distinct, with navigation back to the PR conditions.
+
+The PR inspection step exposes ordered conditions and fallback behavior. It
+states that the first matching condition runs and that false or unknown answers
+continue to the next check. Nested all, any, and not conditions retain their
+grouping. The action inspector shows exact identifiers, prompts, context files,
+capabilities, and both continuations. Names identify repeated action contracts.
+No run status is implied by the configured map.
 
 Timing, limits, and files stay in disclosures at the end of Map. Recent changed
 paths provide temporary refresh feedback. There is no permanent valid-file
@@ -70,14 +81,15 @@ workflow version stays identifiable, and changed inputs mark prior results stale
 Invalid or missing source/input disables simulation until the agent fixes it.
 
 An agent can navigate to named sections, rules, and actions, highlight a target,
-and place a short explanation with an arrow. Guidance opens relevant disclosures,
-scrolls the target into view, and expires after a bounded interval. Escape or the
+and place a short explanation with an arrow. Guidance expands a hidden action section, opens relevant disclosures,
+brings the target into view, and expires after a bounded interval. Escape or the
 close control dismisses it. Text is plain text, never rendered HTML. Only one
 annotation is visible at a time; it does not become a permanent panel.
 
-At narrow widths each action flow moves below its decision. Long paths and
-conditions wrap, keyboard focus stays visible, and only bounded JSON blocks
-scroll. The last repository and workflow return after restart; simulations are
+At narrow widths the inspector overlays part of the canvas. Long paths and
+conditions wrap, keyboard focus stays visible, and the page never scrolls
+horizontally. The canvas pans independently and the inspector scrolls when needed.
+Arrow keys pan a focused canvas; plus and minus zoom, and zero fits the graph. The last repository and workflow return after restart; simulations are
 rerun explicitly against files on disk. Screenshots and browser evidence remain
 outside Git.
 
