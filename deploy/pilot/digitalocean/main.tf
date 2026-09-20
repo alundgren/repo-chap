@@ -15,6 +15,7 @@ variable "created" { type = number }
 variable "expires" { type = number }
 variable "region" { type = string }
 variable "size" { type = string }
+variable "ssh_key_fingerprint" { type = string }
 variable "bootstrap" {
   type      = string
   sensitive = true
@@ -62,7 +63,7 @@ resource "digitalocean_droplet" "pilot" {
   tags          = [for tag in digitalocean_tag.markers : tag.name]
   backups       = false
   monitoring    = false
-  ssh_keys      = []
+  ssh_keys      = [var.ssh_key_fingerprint]
   user_data     = var.bootstrap
   droplet_agent = true
   depends_on    = [digitalocean_firewall.pilot]

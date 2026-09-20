@@ -84,10 +84,20 @@ and [conditional push](conditional-push.md) for the file contracts.
   "repository": "example-team/pilot-test",
   "region": "ams3",
   "size": "s-2vcpu-4gb",
+  "digitalOceanSshKeyFingerprint": "00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff",
   "configDirectory": "/absolute/private/pilot-config",
   "codexHome": "/absolute/private/pilot-codex"
 }
 ```
+
+The setup wizard creates a dedicated Ed25519 keypair in the private operator
+directory if it does not already exist. It prints the `.pub` path and waits for
+the operator to register that public key with DigitalOcean. Only the public
+fingerprint is stored in `operator.json`; no machine-specific path or key enters
+the repository. Attaching the registered key prevents DigitalOcean from
+emailing a temporary root password. The firewall still denies public inbound
+traffic, cloud-init disables the normal SSH server, and operator access
+continues through Tailscale SSH.
 
 The operator directory and generated files use modes 0700 and 0600. Symlinks,
 Git directories, public modes, nested configuration, and the normal operator

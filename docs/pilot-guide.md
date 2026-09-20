@@ -27,8 +27,10 @@ is not part of this suite.
 
 ## 1. Create
 
-The setup wizard checks local tools, walks through the private account inputs,
-writes `operator.json` outside Git, and creates the environment:
+The setup wizard checks local tools and creates a dedicated SSH keypair in the
+private operator directory if needed. It shows the public-key path and waits
+for you to register it with DigitalOcean. It then writes `operator.json` outside
+Git and creates the environment:
 
 ```sh
 deploy/pilot/setup.sh

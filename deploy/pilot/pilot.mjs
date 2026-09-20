@@ -8,6 +8,7 @@ import { Store, privateDirectory, privateRead, writePrivate } from './store.mjs'
 import { Pilot } from './lifecycle.mjs';
 import { runTestSuite } from './integration.mjs';
 import { validateInputs } from './remote.mjs';
+import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from './digitalocean-key.mjs';
 
 const help = `Usage:
   vp run pilot create --root /absolute/private/directory [--environment ID]
@@ -29,17 +30,19 @@ async function prepareEnvironment(store, accounts, output) {
   try { config = JSON.parse(await privateRead(configPath)); }
   catch (error) {
     if (error.code !== 'ENOENT') throw error;
+    const sshKey = await ensureDigitalOceanSshKey(store.root, accounts.io);
     await writePrivate(join(store.root, '.gitignore'), '*\n');
     await writePrivate(configPath, JSON.stringify({
       repository: 'example-team/pilot-test', region: 'ams3', size: 's-2vcpu-4gb',
+      digitalOceanSshKeyFingerprint: sshKey.fingerprint,
       configDirectory: '/absolute/private/pilot-config', codexHome: '/absolute/private/pilot-codex',
     }, null, 2) + '\n');
-    output(`Wrote ${configPath}. Complete the private values, then rerun create. No credentials were read and no resources were created.`);
+    output(`Register ${sshKey.publicKeyFile} with DigitalOcean, complete ${configPath}, then rerun create. No credentials were read and no resources were created.`);
     return null;
   }
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.repository) || !/^[a-z0-9-]+$/.test(config.region) ||
-      !/^[a-z0-9-]+$/.test(config.size))
-    throw new PilotError('Select one dedicated trusted private repository, region and size in operator.json');
+      !/^[a-z0-9-]+$/.test(config.size) || !validDigitalOceanSshFingerprint(config.digitalOceanSshKeyFingerprint))
+    throw new PilotError('Select one private repository, region, size, and DigitalOcean SSH key fingerprint in operator.json');
   await validateInputs(config);
   await accounts.io.command('terraform', ['version']);
   const ts = JSON.parse(await accounts.io.command('tailscale', ['status', '--json']));
@@ -55,6 +58,7 @@ async function prepareEnvironment(store, accounts, output) {
   const run = {
     version: 1, id, name: `rcp-${id}`, created, expires: created + 86400,
     repository: config.repository, repositoryId: repo.id, digitaloceanAccount: account.account.uuid,
+    digitalOceanSshKeyFingerprint: config.digitalOceanSshKeyFingerprint,
     configDirectory: config.configDirectory, codexHome: config.codexHome, region: config.region, size: config.size,
     stage: 'prepared', retained: false,
   };
