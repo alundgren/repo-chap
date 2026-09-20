@@ -8,6 +8,7 @@ import { Accounts, PilotError } from './io.mjs';
 import { Store, privateDirectory, privateRead, writePrivate } from './store.mjs';
 import { Pilot } from './lifecycle.mjs';
 import { runAllTests } from './tests.mjs';
+import { confirmPilot } from './test-setup.mjs';
 import { validateInputs } from './remote.mjs';
 import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from './digitalocean-key.mjs';
 
@@ -70,6 +71,7 @@ async function prepareEnvironment(store, accounts, output) {
       repository: 'example-team/pilot-test', region: 'ams3', size: 's-2vcpu-4gb',
       digitalOceanSshKeyFingerprint: sshKey.fingerprint,
       configDirectory: '/absolute/private/pilot-config', codexHome: '/absolute/private/pilot-codex',
+      pilotConfig: { profile: 'pilot', workspaceId: 'TSELECT', channelId: 'CSELECT' },
     }, null, 2) + '\n');
     output(`Register ${sshKey.publicKeyFile} with DigitalOcean, complete ${configPath}, then rerun create. No credentials were read and no resources were created.`);
     return null;
@@ -94,13 +96,13 @@ async function prepareEnvironment(store, accounts, output) {
     repository: config.repository, repositoryId: repo.id, digitaloceanAccount: account.account.uuid,
     digitalOceanSshKeyFingerprint: config.digitalOceanSshKeyFingerprint,
     configDirectory: config.configDirectory, codexHome: config.codexHome, region: config.region, size: config.size,
-    stage: 'prepared', retained: false,
+    stage: 'prepared', retained: false, pilotConfig: config.pilotConfig,
   };
   await store.save(run);
   return run;
 }
 
-export async function main(argv, accounts = new Accounts(), output = console.log, env = process.env, askDelete = confirmDeletion, askReap = confirmReap, testRunner = runAllTests) {
+export async function main(argv, accounts = new Accounts(), output = console.log, env = process.env, askDelete = confirmDeletion, askReap = confirmReap, confirm = confirmPilot) {
   let parsed;
   try {
     parsed = parseArgs({ args: argv, allowPositionals: true, options: {
@@ -119,7 +121,8 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   }
   const store = new Store(root);
   const controller = new AbortController();
-  const pilot = new Pilot(store, accounts, { output, signal: controller.signal });
+  const pilot = new Pilot(store, accounts, { output, signal: controller.signal, pause: accounts.io.pause });
+  pilot.confirm = confirm;
   let lock;
   const interrupt = () => {
     if (action === 'delete' || action === 'reap' || pilot.cleaning) output('Deletion continues through its bounded infrastructure removal stage.');
@@ -154,10 +157,10 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       if (ok) output('done');
       return ok ? 0 : 1;
     }
-    const selectedEnvironment = values.environment ?? (!['create', 'reap'].includes(action) ? await store.current() : null);
+    const selectedEnvironment = values.environment ?? (action !== 'reap' ? await store.current() : null);
     if (!['create', 'reap'].includes(action) && !selectedEnvironment)
       throw new PilotError('No current environment. Run create or use --environment ID.');
-    const run = action === 'create' && !values.environment
+    const run = action === 'create' && !selectedEnvironment
       ? await prepareEnvironment(store, accounts, output)
       : await store.load(values.environment ?? selectedEnvironment);
     if (!run) return 0;
@@ -169,7 +172,7 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       return created ? 0 : 1;
     }
     if (action === 'test') {
-      return await testRunner(pilot, run) ? 0 : 1;
+      return await runAllTests(pilot, run) ? 0 : 1;
     }
     if (action === 'delete') {
       const confirmed = await askDelete(run, output);

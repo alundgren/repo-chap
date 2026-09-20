@@ -21,8 +21,7 @@
     "test:systemd": "vp run build && vp exec bash deploy/smoke-systemd.sh",
     "docs:validate": "vp exec node docs/pr-workflows/validate.ts",
     "pilot": "vp exec node deploy/pilot/pilot.mjs",
-    "test:pilot": "vp run build && vp exec node --test --test-reporter=dot tests/pilot.test.mjs tests/pilot-workflows.test.mjs",
-    "test:pilot:integration": "vp run build && vp exec node deploy/pilot/integration.mjs",
+    "test:pilot": "vp run build && vp exec node --test --test-reporter=dot tests/pilot.test.mjs tests/pilot-workflows.test.mjs tests/pilot-journey.test.mjs",
     "pilot:setup": "vp exec bash deploy/pilot/setup.sh"
   },
   "devDependencies": {

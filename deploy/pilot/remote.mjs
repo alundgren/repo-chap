@@ -1,3 +1,4 @@
+import { prepareConfiguration } from './configuration.mjs';
 import { mkdir, readFile, readdir, rm, copyFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -79,6 +80,7 @@ export async function provisionHost(pilot, run) {
   await mkdir(join(payload, 'config'), { recursive: true, mode: 0o700 });
   try {
     for (const file of files) await writePrivate(join(payload, 'config', file), await privateRead(join(run.configDirectory, file)));
+    await prepareConfiguration(run, join(payload, 'config'));
     await writePrivate(join(payload, 'auth.json'), await privateRead(join(run.codexHome, 'auth.json')));
     const cli = await readFile(new URL('../../apps/cli/dist/cli.js', import.meta.url));
     run.release = createHash('sha256').update(cli).digest('hex');

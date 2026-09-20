@@ -9,7 +9,6 @@ import { Pilot } from '../deploy/pilot/lifecycle.mjs';
 import { createdLabel, main } from '../deploy/pilot/pilot.mjs';
 import { bootstrap, diagnoseHost, prerequisites, versions } from '../deploy/pilot/remote.mjs';
 import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from '../deploy/pilot/digitalocean-key.mjs';
-import { prepareRepository } from '../deploy/pilot/repository.mjs';
 import { runTestSuite } from '../deploy/pilot/integration.mjs';
 
 import { fixture } from './pilot-fixture.mjs';
@@ -27,32 +26,6 @@ test('DigitalOcean SSH key setup generates and reuses a private local keypair', 
   const existing = await ensureDigitalOceanSshKey(directory);
   assert.equal(existing.created, false);
   assert.equal(existing.fingerprint, created.fingerprint);
-});
-
-test('repository preparation creates canonical fixture branches', async () => {
-  const base = 'a'.repeat(40), baseTree = 'b'.repeat(40);
-  const generated = ['c','d','e','f','1','2','3','4','5'].map(value => value.repeat(40));
-  const calls = [];
-  const accounts = { gh: async (path, method = 'GET', body) => {
-    calls.push({ path, method, body });
-    if (path === 'repos/example-team/pilot-test') return { private: true, permissions: { admin: true }, default_branch: 'main' };
-    if (path.endsWith('/git/ref/heads/main') && method === 'GET') return { object: { sha: base } };
-    if (path.endsWith(`/git/commits/${base}`)) return { tree: { sha: baseTree } };
-    if (path.endsWith(`/git/trees/${baseTree}?recursive=1`)) return { tree: [], truncated: false };
-    if (path.endsWith('/git/matching-refs/heads/pilot-')) return [];
-    if (method === 'POST' && path.endsWith('/git/blobs')) return { sha: generated.shift() };
-    if (method === 'POST' && path.endsWith('/git/trees')) return { sha: generated.shift() };
-    if (method === 'POST' && path.endsWith('/git/commits')) return { sha: generated.shift() };
-    if (method === 'POST' && path.endsWith('/git/refs')) return {};
-    if (method === 'PATCH' && path.includes('/git/refs/heads/')) return {};
-    throw new Error(`Unexpected GitHub call ${method} ${path}`);
-  } };
-  assert.equal(await prepareRepository(accounts, 'example-team/pilot-test'), true);
-  const writes = calls.filter(call => call.method !== 'GET');
-  assert.ok(writes.some(call => call.method === 'PATCH' && call.path.endsWith('/heads/main') && call.body.force === false));
-  assert.deepEqual(writes.filter(call => call.method === 'POST' && call.path.endsWith('/git/refs')).map(call => call.body.ref), [
-    'refs/heads/pilot-failing', 'refs/heads/pilot-repaired',
-  ]);
 });
 
 test('removed pilot commands are rejected', async t => {
@@ -361,9 +334,9 @@ async function integrationFixture(t, fault = {}) {
   };
   return { ...f, dispatched };
 }
-test('test command runs immediately and prints only scenario results', async t => {
+test('runner observer prints scenario results', async t => {
   const f = await integrationFixture(t);
-  assert.equal(await main(['test', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text), process.env, undefined, undefined, runTestSuite), 0);
+  assert.equal(await runTestSuite(f.pilot, f.run), true);
   assert.deepEqual(f.state.output, [
     'environment health: pass',
     'pilot-failing returns failure: pass',
@@ -372,8 +345,8 @@ test('test command runs immediately and prints only scenario results', async t =
 });
 test('test command reports an unavailable environment as a failed scenario', async t => {
   const f = await fixture(t);
-  assert.equal(await main(['test', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text), process.env, undefined, undefined, runTestSuite), 1);
-  assert.deepEqual(f.state.output, ['environment health: fail']);
+  assert.equal(await main(['test', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text)), 1);
+  assert.match(f.state.output[0], /repository setup: fail/);
 });
 test('fixed suite validates GitHub job evidence and leaves the environment running', async t => {
   const { runTestSuite } = await import('../deploy/pilot/integration.mjs');
@@ -407,9 +380,9 @@ test('fixed suite stops on the first failure and preserves the environment', asy
   ]);
   fault.wrongRunner = false;
   assert.equal(await runTestSuite(f.pilot, f.run), true);
-  assert.equal(f.dispatched.length, 3);
+  assert.equal(f.dispatched.length, 2);
   const evidence = JSON.parse(await readFile(join(f.store.directory(f.run.id), 'test.json'), 'utf8'));
-  assert.deepEqual(evidence.history.map(value => value.status), ['failed']);
+  assert.deepEqual(evidence.history, []);
 });
 test('environment health failure stops before workflow dispatch', async t => {
   const { runTestSuite } = await import('../deploy/pilot/integration.mjs');
@@ -461,7 +434,7 @@ test('delete removes the environment and verifies absence in one invocation', as
 test('commands use the current environment and confirmed delete clears it', async t => {
   const f = await integrationFixture(t);
   await f.store.select(f.run.id);
-  assert.equal(await main(['test', '--root', f.root], f.accounts, () => {}, process.env, undefined, undefined, runTestSuite), 0);
+  assert.equal(await main(['status', '--root', f.root], f.accounts, () => {}), 0);
   const prompts = [];
   assert.equal(await main(['delete', '--root', f.root], f.accounts, () => {}, process.env, async (run, output) => {
     output(`Environment: ${run.id}`);

@@ -1,37 +1,28 @@
 import { runTestSuite } from './integration.mjs';
 import { runWorkflowTests } from './workflow-tests.mjs';
-import { prepareRepository } from './repository.mjs';
+import { prepareTests } from './test-setup.mjs';
+import { PilotError } from './io.mjs';
 
-const suites = [runTestSuite, runWorkflowTests];
-
-async function prepareTests(pilot, run) {
-  if (run.testSetup?.repository === run.repository) return true;
+export async function runAllTests(pilot, run) {
   try {
-    await prepareRepository(pilot.accounts, run.repository);
-    run.testSetup = { repository: run.repository, completedAt: new Date().toISOString() };
+    await prepareTests(pilot, run);
+    pilot.output('repository setup: pass');
+    const prefix = run.name;
+    for (const suite of [() => runTestSuite(pilot, run, { workflow: 'pilot.yml', failingRef: `${prefix}-failing`, repairedRef: `${prefix}-repaired` }),
+      () => runWorkflowTests(pilot, run)]) {
+      if (!await suite()) {
+        run.test = { ...run.test, status: 'failed', completedAt: new Date().toISOString() };
+        await pilot.store.save(run);
+        return false;
+      }
+    }
+    run.test = { ...run.test, status: 'passed', completedAt: new Date().toISOString() };
     await pilot.store.save(run);
     return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function runAllTests(pilot, run, testSuites = suites, setup = prepareTests) {
-  if (!await setup(pilot, run)) {
-    pilot.output('repository setup: fail');
+  } catch (error) {
+    pilot.output(`repository setup: fail${error instanceof PilotError ? ` - ${error.message}` : ''}`);
     run.test = { ...run.test, status: 'failed', completedAt: new Date().toISOString() };
     await pilot.store.save(run);
     return false;
   }
-  pilot.output('repository setup: pass');
-  for (const runSuite of testSuites) {
-    if (!await runSuite(pilot, run)) {
-      run.test = { ...run.test, status: 'failed', completedAt: new Date().toISOString() };
-      await pilot.store.save(run);
-      return false;
-    }
-  }
-  run.test = { ...run.test, status: 'passed', completedAt: new Date().toISOString() };
-  await pilot.store.save(run);
-  return true;
 }

@@ -204,8 +204,11 @@ say "Local tools and account sessions are available."
 stage "Private repository and daemon files" 7
 open_url "https://github.com/settings/apps"
 step "Use a dedicated private test repository and a GitHub App installed only on that repository."
-step "Prepare a flat mode-0700 directory containing mode-0600 installation.json, providers.json, the App PEM, and any apply policy used by the fixed test."
+step "Prepare a flat mode-0700 directory containing mode-0600 installation.json, providers.json, the App PEM, and a Slack bot token. Pilot generates its repair policy."
 ask REPOSITORY "Private repository (owner/name):"
+ask PILOT_PROFILE "Provider profile name:"
+ask SLACK_WORKSPACE "Slack workspace ID:"
+ask SLACK_CHANNEL "Dedicated Slack channel ID:"
 ask CONFIG_DIRECTORY "Absolute private daemon configuration directory:"
 [[ "$CONFIG_DIRECTORY" = /* && -d "$CONFIG_DIRECTORY" && -f "$CONFIG_DIRECTORY/installation.json" ]] || {
   warn "The configuration directory or installation.json is missing."
@@ -253,6 +256,7 @@ pause "Press Enter after registering the public key."
 OPERATOR_ROOT="$OPERATOR_ROOT" REPOSITORY="$REPOSITORY" REGION="$REGION" SIZE="$SIZE" \
 DIGITALOCEAN_SSH_KEY_FINGERPRINT="$DIGITALOCEAN_SSH_KEY_FINGERPRINT" \
 CONFIG_DIRECTORY="$CONFIG_DIRECTORY" PILOT_CODEX_HOME="$PILOT_CODEX_HOME" \
+PILOT_PROFILE="$PILOT_PROFILE" SLACK_WORKSPACE="$SLACK_WORKSPACE" SLACK_CHANNEL="$SLACK_CHANNEL" \
   vp node --input-type=module -e '
     import { join } from "node:path";
     import { privateDirectory, writePrivate } from "./deploy/pilot/store.mjs";
@@ -262,7 +266,8 @@ CONFIG_DIRECTORY="$CONFIG_DIRECTORY" PILOT_CODEX_HOME="$PILOT_CODEX_HOME" \
       size: process.env.SIZE,
       digitalOceanSshKeyFingerprint: process.env.DIGITALOCEAN_SSH_KEY_FINGERPRINT,
       configDirectory: process.env.CONFIG_DIRECTORY,
-      codexHome: process.env.PILOT_CODEX_HOME
+      codexHome: process.env.PILOT_CODEX_HOME,
+      pilotConfig: { profile: process.env.PILOT_PROFILE, workspaceId: process.env.SLACK_WORKSPACE, channelId: process.env.SLACK_CHANNEL }
     };
     const root = process.env.OPERATOR_ROOT;
     await privateDirectory(root, true);
@@ -279,7 +284,7 @@ else
   warn "Creation failed. The environment may still bill until deletion succeeds."
   exit "$CREATE_STATUS"
 fi
-ENVIRONMENT_ID=$(printf '%s\n' "$CREATE_OUTPUT" | sed -n 's/^Environment ID: \([a-f0-9]\{24\}\)$/\1/p' | tail -n1)
+ENVIRONMENT_ID=$(printf '%s\n' "$CREATE_OUTPUT" | sed -n 's/^done - id: \([a-f0-9]\{24\}\)$/\1/p' | tail -n1)
 [[ -n "$ENVIRONMENT_ID" ]] || { warn "Could not read the environment ID."; exit 1; }
 finish
 say "Environment: $ENVIRONMENT_ID"
