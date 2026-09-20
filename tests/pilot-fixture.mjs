@@ -20,7 +20,7 @@ export async function fixture(t, faults = {}, selectedRoot) {
   await writePrivate(join(run.configDirectory, 'providers.json'), '{}');
   await writePrivate(join(run.configDirectory, 'app.pem'), 'fictional-app-secret');
   await store.save(run);
-  const state = { droplets: [], projects: [], firewalls: [], tags: [], devices: [], runners: [], calls: [], output: [], jobs: [] };
+  const state = { droplets: [], projects: [], firewalls: [], tags: [], devices: [], runners: [], calls: [], commands: [], output: [], jobs: [] };
   function create() {
     state.droplets = [{ id: 101, name: run.name, tags: markers(run) }];
     state.projects = [{ id: 'project-101', name: run.name, description: markers(run).join(' ') }];
@@ -65,6 +65,7 @@ export async function fixture(t, faults = {}, selectedRoot) {
     },
     async command(file, args, options = {}) {
       state.calls.push(`${file} ${args.join(' ')}`);
+      state.commands.push({ file, args, interactive: options.interactive, hasInput: options.input !== undefined, timeout: options.timeout });
       if (file === 'terraform') {
         if (args[0] === 'version') return 'Terraform v1.16.3';
         if (args[0] === 'apply') { create(); if (faults.apply) throw new PilotError('partial apply'); }
@@ -94,6 +95,9 @@ export async function fixture(t, faults = {}, selectedRoot) {
       }
       if (file === 'tailscale') {
         if (args[0] === 'status') return JSON.stringify({ BackendState: 'Running' });
+        throw new Error(`Unexpected fixture command ${file}`);
+      }
+      if (file === 'ssh') {
         if (faults.unreachable) throw new PilotError('unreachable host');
         const script = options.input?.toString() ?? '';
         if (script.includes('RUNNER_INPUT_TOKEN')) {

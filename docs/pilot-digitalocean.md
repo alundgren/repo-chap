@@ -9,8 +9,10 @@ deletion. Finish with `pilot delete` and `pilot verify-clean`.
 
 ## Operator machine
 
-Install Git, GitHub CLI, tar, Terraform 1.x, a connected Tailscale client, and
-the repository-pinned Vite+ tools. Build the selected revision:
+Install Git, GitHub CLI, OpenSSH, tar, Terraform 1.x, a connected Tailscale
+client, and the repository-pinned Vite+ tools. The macOS App Store Tailscale
+variant is supported because the pilot uses the regular `ssh` client after it
+verifies the destination through the Tailscale API. Build the selected revision:
 
 ```sh
 vp install --frozen-lockfile

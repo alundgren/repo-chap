@@ -1,4 +1,4 @@
-import { mkdir, cp } from 'node:fs/promises';
+import { chmod, cp, mkdir, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PilotError } from './io.mjs';
 import { markers, writePrivate } from './store.mjs';
@@ -156,7 +156,17 @@ export class Pilot {
     if (devices.length !== 1 || !devices[0].name || !/^[a-zA-Z0-9.-]+$/.test(devices[0].name)) throw new PilotError('Run has no verified tailnet destination');
     const d = devices[0];
     if (run.deviceId && run.deviceId !== d.id) throw new PilotError('Tailnet device changed');
-    return this.accounts.io.command('tailscale', ['ssh', `pilot-diagnostic@${d.name}`, ...(script ? [script] : [])], { input, timeout, signal: this.signal, interactive: !script });
+    const knownHosts = join(this.store.directory(run.id), 'ssh_known_hosts');
+    const file = await open(knownHosts, 'a', 0o600);
+    await file.close();
+    await chmod(knownHosts, 0o600);
+    return this.accounts.io.command('ssh', [
+      '-o', `UserKnownHostsFile=${knownHosts}`,
+      '-o', 'StrictHostKeyChecking=accept-new',
+      '-o', 'BatchMode=yes',
+      `pilot-diagnostic@${d.name}`,
+      ...(script ? [script] : []),
+    ], { input, timeout, signal: this.signal, interactive: !script });
   }
   async up(run, { retainOnFailure = false } = {}) {
     if (run.stage === 'clean' || run.stage === 'cleanup-pending' || run.stage === 'cleaning') throw new PilotError('This run is being cleaned or is clean; prepare a new run');

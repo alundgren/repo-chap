@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, chmod, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Accounts, command, PilotError } from '../deploy/pilot/io.mjs';
@@ -10,6 +10,31 @@ import { main } from '../deploy/pilot/pilot.mjs';
 import { bootstrap, diagnoseHost, versions } from '../deploy/pilot/remote.mjs';
 
 import { fixture } from './pilot-fixture.mjs';
+
+test('pilot SSH uses OpenSSH with a private environment host-key file', async t => {
+  const f = await fixture(t);
+  f.create();
+  f.run.deviceId = 'device-101';
+  await f.store.save(f.run);
+  await f.pilot.ssh(f.run, 'true', Buffer.from('input'), 1234);
+  const scripted = f.state.commands.at(-1);
+  const knownHosts = join(f.store.directory(f.run.id), 'ssh_known_hosts');
+  assert.equal(scripted.file, 'ssh');
+  assert.deepEqual(scripted.args, [
+    '-o', `UserKnownHostsFile=${knownHosts}`,
+    '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'BatchMode=yes',
+    `pilot-diagnostic@${f.run.name}.example.ts.net`,
+    'true',
+  ]);
+  assert.equal(scripted.interactive, false);
+  assert.equal(scripted.hasInput, true);
+  assert.equal(scripted.timeout, 1234);
+  assert.equal((await stat(knownHosts)).mode & 0o777, 0o600);
+  await f.pilot.ssh(f.run);
+  assert.equal(f.state.commands.at(-1).interactive, true);
+  assert.ok(!f.state.calls.some(call => call.startsWith('tailscale ssh ')));
+});
 
 test('successful lifecycle leaves one persistent runner until explicit cleanup', async t => {
   const f = await fixture(t);
