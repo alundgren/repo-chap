@@ -8,6 +8,7 @@ import { Accounts, PilotError } from './io.mjs';
 import { Store, privateDirectory, privateRead, writePrivate } from './store.mjs';
 import { Pilot } from './lifecycle.mjs';
 import { runTestSuite } from './integration.mjs';
+import { runWorkflowTests } from './workflow-tests.mjs';
 import { validateInputs } from './remote.mjs';
 import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from './digitalocean-key.mjs';
 import { prepareRepository } from './repository.mjs';
@@ -15,6 +16,7 @@ import { prepareRepository } from './repository.mjs';
 const help = `Usage:
   vp run pilot create [--root /absolute/private/directory] [--environment ID]
   vp run pilot prepare-repository [--root /absolute/private/directory]
+  vp run pilot test-workflows [--root /absolute/private/directory] [--environment ID]
   vp run pilot test [--root /absolute/private/directory] [--environment ID]
   vp run pilot delete [--root /absolute/private/directory] [--environment ID]
   vp run pilot <status|ssh|verify-clean> [--root /absolute/private/directory] [--environment ID]
@@ -112,7 +114,7 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   const root = values.root ?? env.REPO_CHAP_PILOT_ROOT;
   if (values.help) { output(help); return 0; }
   if (positionals.length !== 1 || !root || !isAbsolute(root) ||
-      !['create', 'prepare-repository', 'test', 'delete', 'status', 'ssh', 'verify-clean', 'reap'].includes(action) ||
+      !['create', 'prepare-repository', 'test', 'test-workflows', 'delete', 'status', 'ssh', 'verify-clean', 'reap'].includes(action) ||
       values['older-than'] && action !== 'reap' || ['reap', 'prepare-repository'].includes(action) && values.environment) {
     output(help); return 64;
   }
@@ -128,7 +130,7 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   process.on('SIGTERM', interrupt);
   try {
     await privateDirectory(store.root, action === 'create' && !values.environment);
-    const writes = ['create', 'prepare-repository', 'test', 'delete', 'reap'].includes(action);
+    const writes = ['create', 'prepare-repository', 'test', 'test-workflows', 'delete', 'reap'].includes(action);
     if (writes) {
       const path = join(store.root, '.pilot.lock');
       try { lock = await open(path, 'wx', 0o600); await lock.writeFile(String(process.pid)); }
@@ -172,6 +174,7 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       if (created) output(`done - id: ${run.id}`);
       return created ? 0 : 1;
     }
+    if (action === 'test-workflows') return await runWorkflowTests(pilot, run) ? 0 : 1;
     if (action === 'test') {
       return await runTestSuite(pilot, run) ? 0 : 1;
     }

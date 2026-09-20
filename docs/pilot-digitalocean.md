@@ -73,8 +73,9 @@ Create these outside every Git checkout:
   and any apply policy needed by the fixed test.
 
 All paths inside `installation.json` must name files directly under
-`/etc/repo-chap/`, because create copies the flat directory there. Slack is not
-needed. See [daemon configuration](daemon-operations.md#install-and-check-the-account)
+`/etc/repo-chap/`, because create copies the flat directory there. The runner smoke test does not
+need Slack. The [workflow cases](pilot-workflow-cases.md) need a bot token and
+dedicated channel configured before running them. See [daemon configuration](daemon-operations.md#install-and-check-the-account)
 and [conditional push](conditional-push.md) for the file contracts.
 
 `operator.json` contains only non-secret selections:
