@@ -35,8 +35,10 @@ requires a `workflow_dispatch` workflow on the default branch, so preparation
 may add one commit there when the checked-in workflow differs.
 
 Prepare a repository-scoped GitHub App, a dedicated Codex login, and the private
-daemon files described in [disposable host setup](pilot-digitalocean.md). Slack
-is not part of this suite.
+daemon files described in [disposable host setup](pilot-digitalocean.md). The
+runner smoke test does not need Slack. Also prepare the
+[workflow acceptance cases](pilot-workflow-cases.md) for real review, repair,
+conflict resolution and delivery to a dedicated Slack channel.
 
 ## 1. Create
 
@@ -101,6 +103,15 @@ A lost dispatch response is reconciled by correlation before any retry.
 Success and failure both leave the environment running. On failure, follow
 [SSH diagnosis](pilot-ssh-debugging.md), fix the cause with explicit operator
 approval, and rerun the same test command. Billing continues throughout.
+
+Run the separately configured workflow cases before declaring the pilot complete:
+
+```sh
+vp run pilot test-workflows
+```
+
+See [workflow acceptance cases](pilot-workflow-cases.md) for the two PR fixtures,
+private case configuration, Slack setup and expected evidence.
 
 ## 3. Delete
 
