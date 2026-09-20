@@ -169,6 +169,13 @@ test('create verifies configuration and provisions in one invocation', async t =
   assert.equal((await f.store.runs()).length, 2);
   assert.match(f.state.output.join('\n'), /Environment [a-f0-9]{24}: running/);
 });
+test('pilot root can come from the environment and --root takes precedence', async t => {
+  const f = await fixture(t);
+  f.create();
+  assert.equal(await main(['status', '--environment', f.run.id], f.accounts, () => {}, { REPO_CHAP_PILOT_ROOT: f.root }), 1);
+  assert.equal(await main(['status', '--root', f.root, '--environment', f.run.id], f.accounts, () => {}, { REPO_CHAP_PILOT_ROOT: 'relative' }), 1);
+  assert.equal(await main(['status', '--environment', f.run.id], f.accounts, () => {}, { REPO_CHAP_PILOT_ROOT: 'relative' }), 64);
+});
 test('Ctrl-C during create retains resources for diagnosis and explicit deletion', async t => {
   const f = await fixture(t);
   const original = f.accounts.io.command;

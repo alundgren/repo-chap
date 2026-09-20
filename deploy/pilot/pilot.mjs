@@ -11,16 +11,17 @@ import { validateInputs } from './remote.mjs';
 import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from './digitalocean-key.mjs';
 
 const help = `Usage:
-  vp run pilot create --root /absolute/private/directory [--environment ID]
-  vp run pilot test --root /absolute/private/directory --environment ID
-  vp run pilot delete --root /absolute/private/directory --environment ID
-  vp run pilot <status|ssh|verify-clean> --root /absolute/private/directory --environment ID
-  vp run pilot reap --root /absolute/private/directory --older-than 24h [--confirm]
+  vp run pilot create [--root /absolute/private/directory] [--environment ID]
+  vp run pilot test [--root /absolute/private/directory] --environment ID
+  vp run pilot delete [--root /absolute/private/directory] --environment ID
+  vp run pilot <status|ssh|verify-clean> [--root /absolute/private/directory] --environment ID
+  vp run pilot reap [--root /absolute/private/directory] --older-than 24h [--confirm]
 
 create provisions a new environment, or resumes the named environment. test runs
 each scenario once, stops on failure, and leaves the environment available. delete
 removes it and verifies cleanup. verify-clean independently checks that
 DigitalOcean resources, the GitHub runner, and the Tailscale device are absent.
+Set REPO_CHAP_PILOT_ROOT to avoid repeating --root. An explicit --root takes precedence.
 Exit 0: success or clean; 1: operation failed or verification unresolved; 64: invalid command.
 `;
 
@@ -66,7 +67,7 @@ async function prepareEnvironment(store, accounts, output) {
   return run;
 }
 
-export async function main(argv, accounts = new Accounts(), output = console.log) {
+export async function main(argv, accounts = new Accounts(), output = console.log, env = process.env) {
   let parsed;
   try {
     parsed = parseArgs({ args: argv, allowPositionals: true, options: {
@@ -76,15 +77,16 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   } catch { output(help); return 64; }
   const { values, positionals } = parsed;
   const action = positionals[0];
+  const root = values.root ?? env.REPO_CHAP_PILOT_ROOT;
   if (values.help) { output(help); return 0; }
-  if (positionals.length !== 1 || !values.root || !isAbsolute(values.root) ||
+  if (positionals.length !== 1 || !root || !isAbsolute(root) ||
       !['create', 'test', 'delete', 'status', 'ssh', 'verify-clean', 'reap'].includes(action) ||
       values.confirm && action !== 'reap' ||
       values['older-than'] && action !== 'reap' || action === 'reap' && values.environment ||
       !['create', 'reap'].includes(action) && !values.environment) {
     output(help); return 64;
   }
-  const store = new Store(values.root);
+  const store = new Store(root);
   const controller = new AbortController();
   const pilot = new Pilot(store, accounts, { output, signal: controller.signal });
   let lock;

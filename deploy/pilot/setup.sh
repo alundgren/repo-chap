@@ -240,6 +240,7 @@ REGION=${REGION:-ams3}
 ask SIZE "DigitalOcean size [s-2vcpu-4gb]:"
 SIZE=${SIZE:-s-2vcpu-4gb}
 [[ "$OPERATOR_ROOT" = /* ]] || { warn "The operator directory must be absolute."; exit 1; }
+write_env REPO_CHAP_PILOT_ROOT "$OPERATOR_ROOT"
 if ! DIGITALOCEAN_KEY_OUTPUT=$(vp exec node deploy/pilot/digitalocean-key.mjs --root "$OPERATOR_ROOT"); then
   warn "Could not prepare the local DigitalOcean SSH key."
   exit 1
@@ -270,7 +271,7 @@ CONFIG_DIRECTORY="$CONFIG_DIRECTORY" PILOT_CODEX_HOME="$PILOT_CODEX_HOME" \
   '
 if CREATE_OUTPUT=$(DIGITALOCEAN_TOKEN="$DIGITALOCEAN_TOKEN" \
     TAILSCALE_CLIENT_ID="$TAILSCALE_CLIENT_ID" TAILSCALE_CLIENT_SECRET="$TAILSCALE_CLIENT_SECRET" \
-    vp run pilot create --root "$OPERATOR_ROOT"); then
+    REPO_CHAP_PILOT_ROOT="$OPERATOR_ROOT" vp run pilot create); then
   printf '%s\n' "$CREATE_OUTPUT"
 else
   CREATE_STATUS=$?
@@ -285,4 +286,4 @@ say "Environment: $ENVIRONMENT_ID"
 say "Operator directory: $OPERATOR_ROOT"
 warn "This wizard did not save cloud or tailnet credentials."
 say "Load DIGITALOCEAN_TOKEN, TAILSCALE_CLIENT_ID, and TAILSCALE_CLIENT_SECRET from your secret manager before later commands."
-say "Next: vp run pilot test --root '$OPERATOR_ROOT' --environment $ENVIRONMENT_ID"
+say "Next: vp run pilot test --environment $ENVIRONMENT_ID"

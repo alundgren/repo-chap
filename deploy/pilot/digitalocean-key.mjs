@@ -44,8 +44,9 @@ export async function ensureDigitalOceanSshKey(root, io = { command }) {
 
 async function cli() {
   const { values } = parseArgs({ options: { root: { type: 'string' } } });
-  if (!values.root) throw new PilotError('Use --root PATH');
-  const result = await ensureDigitalOceanSshKey(values.root);
+  const root = values.root ?? process.env.REPO_CHAP_PILOT_ROOT;
+  if (!root) throw new PilotError('Use --root PATH or set REPO_CHAP_PILOT_ROOT');
+  const result = await ensureDigitalOceanSshKey(root);
   process.stdout.write(`${result.fingerprint}\n${result.publicKeyFile}\n${result.created ? 'created' : 'existing'}\n`);
 }
 
