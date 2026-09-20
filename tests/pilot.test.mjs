@@ -7,7 +7,7 @@ import { Accounts, command, PilotError } from '../deploy/pilot/io.mjs';
 import { Store, markers, writePrivate } from '../deploy/pilot/store.mjs';
 import { Pilot } from '../deploy/pilot/lifecycle.mjs';
 import { main } from '../deploy/pilot/pilot.mjs';
-import { bootstrap, diagnoseHost, versions } from '../deploy/pilot/remote.mjs';
+import { bootstrap, diagnoseHost, prerequisites, versions } from '../deploy/pilot/remote.mjs';
 
 import { fixture } from './pilot-fixture.mjs';
 
@@ -34,6 +34,12 @@ test('pilot SSH uses OpenSSH with a private environment host-key file', async t 
   await f.pilot.ssh(f.run);
   assert.equal(f.state.commands.at(-1).interactive, true);
   assert.ok(!f.state.calls.some(call => call.startsWith('tailscale ssh ')));
+});
+
+test('host prerequisites invoke npm from the pinned Node runtime', () => {
+  assert.match(prerequisites, /node_bin="\$\(dirname "\$\(vp node -p process\.execPath\)"\)"/);
+  assert.match(prerequisites, /"\$node_bin\/npm" install --global --prefix \/opt\/repo-chap-tools @openai\/codex/);
+  assert.doesNotMatch(prerequisites, /vp exec npm/);
 });
 
 test('successful lifecycle leaves one persistent runner until explicit cleanup', async t => {
