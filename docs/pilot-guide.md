@@ -1,7 +1,7 @@
 # Disposable environment test
 
-The live test has three phases: create one private environment, run the fixed
-suite against its environment ID, then delete it. A failed test leaves the
+The live test has three commands: create one private environment, test it, then
+delete it. A failed test leaves the
 environment running for diagnosis. A powered-off Droplet still bills.
 
 Use a dedicated private repository. The commands never merge or change its
@@ -10,7 +10,7 @@ repository evidence, and logs in the private operator directory outside Git.
 
 ## One-time test repository setup
 
-The fixed suite expects `.github/workflows/pilot.yml` from
+The environment tests expect `.github/workflows/pilot.yml` from
 `deploy/pilot/trusted-workflow.yml` and two stable branches:
 
 - `pilot-failing` contains `pilot-check.sh` that exits 1.
@@ -28,8 +28,7 @@ is not part of this suite.
 ## 1. Create
 
 The setup wizard checks local tools, walks through the private account inputs,
-writes `operator.json` outside Git, previews the exact environment, and asks
-once before provisioning:
+writes `operator.json` outside Git, and creates the environment:
 
 ```sh
 deploy/pilot/setup.sh
@@ -45,12 +44,11 @@ The underlying commands are also available directly:
 
 ```sh
 vp run pilot create --root /absolute/private/repo-chap-pilot
-# Edit operator.json, then repeat create to receive ENVIRONMENT_ID.
-vp run pilot create --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID --dry-run
-vp run pilot create --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID --confirm
 ```
+
+If `operator.json` does not exist, create writes a template and stops. Complete
+the template, then run the same command again. A failed environment can be
+resumed with `create --environment ENVIRONMENT_ID`.
 
 Create provisions one Ubuntu host, a deny-inbound firewall, a Project, ownership
 tags, one Tailscale device, and one repository runner. It transfers the private
@@ -61,17 +59,16 @@ prints the explicit delete command. Billing continues until deletion succeeds.
 
 ## 2. Test
 
-Preview first, then run the checked-in suite using only the environment ID:
+Run the environment tests using its ID:
 
 ```sh
 vp run pilot test --root /absolute/private/repo-chap-pilot \
   --environment ENVIRONMENT_ID
-vp run pilot test --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID --confirm
 ```
 
-The suite runs daemon diagnostics, verifies both services, dispatches the fixed
-failing and repaired heads, and checks native GitHub job records. The two jobs
+Test checks daemon health, then dispatches the failing and repaired heads in
+order. It stops at the first unexpected result and prints one line per completed
+scenario in the form `scenario: pass` or `scenario: fail`. The two jobs
 must use distinct commits and the environment's recorded runner ID, name, and
 unique label. Dispatch intent and results are stored in private `test.json`.
 A lost dispatch response is reconciled by correlation before any retry.
@@ -82,13 +79,11 @@ approval, and rerun the same test command. Billing continues throughout.
 
 ## 3. Delete
 
-Preview recorded resources before confirmation:
+Delete the environment:
 
 ```sh
 vp run pilot delete --root /absolute/private/repo-chap-pilot \
   --environment ENVIRONMENT_ID
-vp run pilot delete --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID --confirm
 vp run pilot verify-clean --root /absolute/private/repo-chap-pilot \
   --environment ENVIRONMENT_ID
 ```

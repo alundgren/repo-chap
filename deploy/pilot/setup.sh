@@ -86,14 +86,6 @@ pause() {
   read -r _ || true
 }
 
-# confirm "question" — y/N gate; returns success on yes.
-confirm() {
-  local reply=""
-  printf '  %s? %s [y/N] ' "$YELLOW" "$1"
-  read -r reply || true
-  [[ "$reply" =~ ^[Yy] ]]
-}
-
 # _existing KEY — current value of KEY in ENV_FILE, if any.
 _existing() {
   [[ -f "$ENV_FILE" ]] || return 1
@@ -241,7 +233,7 @@ ask_secret TAILSCALE_CLIENT_SECRET "Tailscale OAuth client secret:"
 step "Confirm the tailnet policy grants your identity SSH access to tag:repo-chap-pilot as pilot-diagnostic."
 pause "Press Enter after checking the policy."
 
-stage "Prepare, preview, and create" 4
+stage "Create environment" 4
 ask OPERATOR_ROOT "Absolute private operator directory:"
 ask REGION "DigitalOcean region [ams3]:"
 REGION=${REGION:-ams3}
@@ -265,44 +257,21 @@ CONFIG_DIRECTORY="$CONFIG_DIRECTORY" PILOT_CODEX_HOME="$PILOT_CODEX_HOME" \
     await writePrivate(join(root, ".gitignore"), "*\n");
     await writePrivate(join(root, "operator.json"), JSON.stringify(value, null, 2) + "\n");
   '
-if PREPARE_OUTPUT=$(DIGITALOCEAN_TOKEN="$DIGITALOCEAN_TOKEN" \
+if CREATE_OUTPUT=$(DIGITALOCEAN_TOKEN="$DIGITALOCEAN_TOKEN" \
     TAILSCALE_CLIENT_ID="$TAILSCALE_CLIENT_ID" TAILSCALE_CLIENT_SECRET="$TAILSCALE_CLIENT_SECRET" \
     vp run pilot create --root "$OPERATOR_ROOT"); then
-  :
+  printf '%s\n' "$CREATE_OUTPUT"
 else
-  PREPARE_STATUS=$?
-  printf '%s\n' "$PREPARE_OUTPUT"
-  warn "Environment preparation failed; no cloud resources were created."
-  exit "$PREPARE_STATUS"
+  CREATE_STATUS=$?
+  printf '%s\n' "$CREATE_OUTPUT"
+  warn "Creation failed. The environment may still bill until deletion succeeds."
+  exit "$CREATE_STATUS"
 fi
-printf '%s\n' "$PREPARE_OUTPUT"
-ENVIRONMENT_ID=$(printf '%s\n' "$PREPARE_OUTPUT" | sed -n 's/^Prepared environment \([a-f0-9]\{24\}\).*/\1/p' | tail -n1)
-[[ -n "$ENVIRONMENT_ID" ]] || { warn "Could not read the prepared environment ID."; exit 1; }
-vp run pilot create --root "$OPERATOR_ROOT" --environment "$ENVIRONMENT_ID" --dry-run
-warn "A powered-off Droplet still bills until delete succeeds."
-if confirm "Create environment $ENVIRONMENT_ID now?"; then
-  if DIGITALOCEAN_TOKEN="$DIGITALOCEAN_TOKEN" \
-    TAILSCALE_CLIENT_ID="$TAILSCALE_CLIENT_ID" TAILSCALE_CLIENT_SECRET="$TAILSCALE_CLIENT_SECRET" \
-    vp run pilot create --root "$OPERATOR_ROOT" --environment "$ENVIRONMENT_ID" --confirm; then
-    finish
-    say "Environment: $ENVIRONMENT_ID"
-    say "Operator directory: $OPERATOR_ROOT"
-    warn "This wizard did not save cloud or tailnet credentials."
-    say "Load DIGITALOCEAN_TOKEN, TAILSCALE_CLIENT_ID, and TAILSCALE_CLIENT_SECRET from your secret manager before later commands."
-    say "Next: vp run pilot test --root '$OPERATOR_ROOT' --environment $ENVIRONMENT_ID"
-  else
-    CREATE_STATUS=$?
-    warn "Creation failed. The environment may still bill until explicit deletion succeeds."
-    say "With credentials loaded, inspect: vp run pilot status --root '$OPERATOR_ROOT' --environment $ENVIRONMENT_ID"
-    say "With operator permission, follow docs/pilot-ssh-debugging.md."
-    say "Delete: vp run pilot delete --root '$OPERATOR_ROOT' --environment $ENVIRONMENT_ID --confirm"
-    exit "$CREATE_STATUS"
-  fi
-else
-  _clear
-  say "Prepared environment $ENVIRONMENT_ID; nothing was provisioned."
-  say "Operator directory: $OPERATOR_ROOT"
-  warn "This wizard did not save cloud or tailnet credentials."
-  say "Load DIGITALOCEAN_TOKEN, TAILSCALE_CLIENT_ID, and TAILSCALE_CLIENT_SECRET from your secret manager before creating it."
-  say "Create: vp run pilot create --root '$OPERATOR_ROOT' --environment $ENVIRONMENT_ID --confirm"
-fi
+ENVIRONMENT_ID=$(printf '%s\n' "$CREATE_OUTPUT" | sed -n 's/^Environment \([a-f0-9]\{24\}\): running$/\1/p' | tail -n1)
+[[ -n "$ENVIRONMENT_ID" ]] || { warn "Could not read the environment ID."; exit 1; }
+finish
+say "Environment: $ENVIRONMENT_ID"
+say "Operator directory: $OPERATOR_ROOT"
+warn "This wizard did not save cloud or tailnet credentials."
+say "Load DIGITALOCEAN_TOKEN, TAILSCALE_CLIENT_ID, and TAILSCALE_CLIENT_SECRET from your secret manager before later commands."
+say "Next: vp run pilot test --root '$OPERATOR_ROOT' --environment $ENVIRONMENT_ID"

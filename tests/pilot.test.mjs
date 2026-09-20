@@ -110,11 +110,11 @@ test('ownership collisions refuse destructive commands', async t => {
   assert.equal(f.state.droplets.length, 1);
   assert.ok(!f.state.calls.some(c => c.startsWith('terraform destroy') || c.startsWith('DELETE /v2/')));
 });
-test('inaccessible verification never reports absent and read-only commands do not mutate', async t => {
+test('inaccessible status never reports absent or mutates resources', async t => {
   const f = await fixture(t, { inaccessible: true });
   assert.equal((await f.pilot.verify(f.run)).digitalocean.state, 'inaccessible');
   assert.ok(!f.state.calls.some(c => c.startsWith('DELETE') || c.startsWith('terraform')));
-  assert.equal(await main(['create','--root', f.root,'--environment',f.run.id,'--dry-run'], f.accounts, text => f.state.output.push(text)), 0);
+  assert.equal(await main(['status','--root', f.root,'--environment',f.run.id], f.accounts, text => f.state.output.push(text)), 1);
   assert.ok(!f.state.calls.some(c => c.startsWith('terraform')));
 });
 test('diagnostics redact arbitrary messages and cloud-init contains only limited bootstrap credential', async t => {
@@ -131,12 +131,12 @@ test('diagnostics redact arbitrary messages and cloud-init contains only limited
 test('private inputs and corrupt manifests fail without resource writes', async t => {
   const f = await fixture(t);
   await chmod(join(f.run.codexHome, 'auth.json'), 0o644);
-  assert.equal(await main(['create','--root',f.root,'--environment',f.run.id,'--confirm'], f.accounts, () => {}), 1);
+  assert.equal(await main(['create','--root',f.root,'--environment',f.run.id], f.accounts, () => {}), 1);
   await writePrivate(join(f.store.directory(f.run.id), 'manifest.json'), '{');
   await assert.rejects(f.store.load(f.run.id), /manifest/);
   assert.equal(f.state.calls.length, 0);
 });
-test('prepare accepts compatible Terraform and verifies the repository directly', async t => {
+test('create verifies configuration and provisions in one invocation', async t => {
   const f = await fixture(t);
   await writePrivate(join(f.root, 'operator.json'), JSON.stringify({
     repository: f.run.repository,
@@ -148,7 +148,7 @@ test('prepare accepts compatible Terraform and verifies the repository directly'
   assert.equal(await main(['create', '--root', f.root], f.accounts, text => f.state.output.push(text)), 0);
   assert.ok(f.state.calls.includes('terraform version'));
   assert.equal((await f.store.runs()).length, 2);
-  assert.match(f.state.output.join('\n'), /Prepared environment/);
+  assert.match(f.state.output.join('\n'), /Environment [a-f0-9]{24}: running/);
 });
 test('Ctrl-C during create retains resources for diagnosis and explicit deletion', async t => {
   const f = await fixture(t);
@@ -158,7 +158,7 @@ test('Ctrl-C during create retains resources for diagnosis and explicit deletion
     if (file === 'terraform' && args[0] === 'destroy') process.emit('SIGINT');
     return original(file, args, options);
   };
-  assert.equal(await main(['create','--root',f.root,'--environment',f.run.id,'--confirm'], f.accounts, () => {}), 1);
+  assert.equal(await main(['create','--root',f.root,'--environment',f.run.id], f.accounts, () => {}), 1);
   assert.equal(f.state.droplets.length, 1);
   assert.equal((await f.store.load(f.run.id)).stage, 'retained');
   assert.ok(!f.state.calls.some(c => c.startsWith('terraform destroy')));
@@ -221,7 +221,7 @@ test('interruption after token minting resumes with a fresh token and one runner
 });
 
 async function integrationFixture(t, fault = {}) {
-  const f = await fixture(t);
+  const f = await fixture(t, fault);
   f.create();
   f.state.runners = [{ id: 201, name: f.run.name, labels: [{ name: f.run.name }] }];
   Object.assign(f.run, { stage: 'running', runnerId: 201, deviceId: 'device-101' });
@@ -252,6 +252,20 @@ async function integrationFixture(t, fault = {}) {
   };
   return { ...f, dispatched };
 }
+test('test command runs immediately and prints only scenario results', async t => {
+  const f = await integrationFixture(t);
+  assert.equal(await main(['test', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text)), 0);
+  assert.deepEqual(f.state.output, [
+    'environment health: pass',
+    'pilot-failing returns failure: pass',
+    'pilot-repaired returns success: pass',
+  ]);
+});
+test('test command reports an unavailable environment as a failed scenario', async t => {
+  const f = await fixture(t);
+  assert.equal(await main(['test', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text)), 1);
+  assert.deepEqual(f.state.output, ['environment health: fail']);
+});
 test('fixed suite validates GitHub job evidence and leaves the environment running', async t => {
   const { runTestSuite } = await import('../deploy/pilot/integration.mjs');
   const f = await integrationFixture(t);
@@ -264,8 +278,13 @@ test('fixed suite validates GitHub job evidence and leaves the environment runni
   assert.equal((await f.store.load(f.run.id)).test.status, 'passed');
   assert.ok(f.state.calls.some(c => c.includes('systemctl is-active --quiet repo-chap-runner.service')));
   assert.ok(f.state.calls.some(c => c.includes('env CODEX_HOME=/var/lib/repo-chap-home/pilot-codex')));
+  assert.deepEqual(f.state.output, [
+    'environment health: pass',
+    'pilot-failing returns failure: pass',
+    'pilot-repaired returns success: pass',
+  ]);
 });
-test('fixed suite rejects another runner and preserves the environment for diagnosis', async t => {
+test('fixed suite stops on the first failure and preserves the environment', async t => {
   const { runTestSuite } = await import('../deploy/pilot/integration.mjs');
   const fault = { wrongRunner: true };
   const f = await integrationFixture(t, fault);
@@ -273,11 +292,22 @@ test('fixed suite rejects another runner and preserves the environment for diagn
   assert.equal(f.state.droplets.length, 1);
   assert.equal((await f.store.load(f.run.id)).test.status, 'failed');
   assert.equal(f.dispatched.length, 1);
+  assert.deepEqual(f.state.output, [
+    'environment health: pass',
+    'pilot-failing returns failure: fail',
+  ]);
   fault.wrongRunner = false;
   assert.equal(await runTestSuite(f.pilot, f.run), true);
   assert.equal(f.dispatched.length, 3);
   const evidence = JSON.parse(await readFile(join(f.store.directory(f.run.id), 'test.json'), 'utf8'));
   assert.deepEqual(evidence.history.map(value => value.status), ['failed']);
+});
+test('environment health failure stops before workflow dispatch', async t => {
+  const { runTestSuite } = await import('../deploy/pilot/integration.mjs');
+  const f = await integrationFixture(t, { unreachable: true });
+  assert.equal(await runTestSuite(f.pilot, f.run), false);
+  assert.equal(f.dispatched.length, 0);
+  assert.deepEqual(f.state.output, ['environment health: fail']);
 });
 test('interruption between workflow observations preserves the environment', async t => {
   const { runTestSuite } = await import('../deploy/pilot/integration.mjs');
@@ -309,19 +339,9 @@ test('fixed suite reconciles a lost dispatch response without sending the job tw
   assert.equal(f.dispatched.length, 2);
   assert.equal(f.state.droplets.length, 1);
 });
-test('fixed suite CLI defaults to a read-only preview', async t => {
-  const f = await fixture(t);
-  const output = await command('vp', ['exec', 'node', 'deploy/pilot/integration.mjs', '--root', f.root, '--environment', f.run.id]);
-  assert.match(output, /Preview only/);
-  assert.equal(f.state.calls.length, 0);
-});
-
-test('delete preview is read-only and confirmed delete verifies absence', async t => {
+test('delete removes the environment and verifies absence in one invocation', async t => {
   const f = await integrationFixture(t);
   assert.equal(await main(['delete', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text)), 0);
-  assert.equal(f.state.droplets.length, 1);
-  assert.ok(!f.state.calls.some(call => call.startsWith('DELETE') || call.startsWith('terraform destroy')));
-  assert.equal(await main(['delete', '--root', f.root, '--environment', f.run.id, '--confirm'], f.accounts, text => f.state.output.push(text)), 0);
   assert.equal(f.state.droplets.length, 0);
   assert.equal(await main(['verify-clean', '--root', f.root, '--environment', f.run.id], f.accounts, () => {}), 0);
 });
