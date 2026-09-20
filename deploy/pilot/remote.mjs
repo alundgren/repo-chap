@@ -49,7 +49,7 @@ export async function validateInputs(run) {
   return files;
 }
 
-const prerequisites = `set -eu
+export const prerequisites = `set -eu
 export DEBIAN_FRONTEND=noninteractive
 apt-get update >/dev/null
 apt-get install -y curl ca-certificates git sudo tar xz-utils libicu74 >/dev/null
@@ -62,8 +62,9 @@ if [ ! -x /opt/vite-plus/bin/vp ]; then
 fi
 cd /opt
 vp env pin ${versions.node} --target node-version >/dev/null
-ln -sf "$(vp node -p process.execPath)" /usr/local/bin/node
-vp exec npm install --global --prefix /opt/repo-chap-tools @openai/codex >/dev/null
+node_bin="$(dirname "$(vp node -p process.execPath)")"
+ln -sf "$node_bin/node" /usr/local/bin/node
+"$node_bin/npm" install --global --prefix /opt/repo-chap-tools @openai/codex >/dev/null
 ln -sf /opt/repo-chap-tools/bin/codex /usr/local/bin/codex
 `;
 
