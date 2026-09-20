@@ -7,7 +7,7 @@ import { validDigitalOceanSshFingerprint } from './digitalocean-key.mjs';
 
 const moduleDirectory = new URL('./digitalocean/', import.meta.url);
 const statusOf = error => error.status === 'inaccessible' ? 'inaccessible' : 'unknown';
-const summary = (state, ids = []) => ({ state, ids });
+const summary = (state, ids = [], status) => ({ state, ids, ...(status ? { status } : {}) });
 export class Pilot {
   constructor(store, accounts, { output = console.log, pause = ms => new Promise(resolve => setTimeout(resolve, ms)), signal } = {}) {
     this.store = store;
@@ -76,7 +76,13 @@ export class Pilot {
     try {
       const inventory = await this.inventory(run);
       const ids = [...inventory.droplets.map(d => `droplet:${d.id}`), ...inventory.projects.map(p => `project:${p.id}`), ...inventory.firewalls.map(f => `firewall:${f.id}`), ...inventory.tags.map(t => `tag:${t.name}`), ...inventory.unknown];
-      digitalocean = summary(inventory.collisions.length ? 'unknown' : ids.length ? 'unresolved' : 'absent', ids);
+      const state = inventory.collisions.length ? 'unknown' : ids.length ? 'unresolved' : 'absent';
+      const observedDropletStatus = inventory.droplets[0]?.status;
+      const dropletStatus = inventory.collisions.length || inventory.droplets.length > 1
+        ? 'unknown'
+        : observedDropletStatus === 'active' ? 'running'
+        : observedDropletStatus ?? (inventory.droplets.length ? 'present' : 'absent');
+      digitalocean = summary(state, ids, dropletStatus);
     } catch (error) { digitalocean = summary(statusOf(error)); }
     try { const list = await this.runners(run); github = summary(list.length ? 'unresolved' : 'absent', list.map(r => `runner:${r.id}`)); }
     catch (error) { github = summary(statusOf(error)); }
@@ -90,6 +96,13 @@ export class Pilot {
     if (result.digitalocean.state === 'absent') this.output('Billable DigitalOcean resources are gone.');
     else this.warn(run);
     return Object.values(result).filter(v => v?.state).every(v => v.state === 'absent');
+  }
+  status(run, result) {
+    this.output(`id: ${run.id}`);
+    this.output(`droplet: ${result.digitalocean.status ?? result.digitalocean.state}`);
+    this.output(`github: ${result.github.state === 'unresolved' ? 'connected' : result.github.state}`);
+    this.output(`tailscale: ${result.tailscale.state === 'unresolved' ? 'connected' : result.tailscale.state}`);
+    return [result.digitalocean, result.github, result.tailscale].every(value => !['inaccessible', 'unknown'].includes(value.state));
   }
   async terraform(run, action) {
     const cwd = join(this.store.directory(run.id), 'terraform');
@@ -149,7 +162,7 @@ export class Pilot {
     run.verification = result;
     const clean = [result.digitalocean, result.github, result.tailscale].every(v => v.state === 'absent');
     await attempt('checkpoint', () => this.checkpoint(run, clean ? 'clean' : 'cleanup-pending'));
-    this.report(run, result);
+    if (!clean) this.report(run, result);
     return clean && !failures.includes('checkpoint');
   }
   async ssh(run, script, input, timeout = 30000) {
@@ -171,7 +184,7 @@ export class Pilot {
   }
   async up(run, { retainOnFailure = false } = {}) {
     if (run.stage === 'clean' || run.stage === 'cleanup-pending' || run.stage === 'cleaning') throw new PilotError('This run is being cleaned or is clean; prepare a new run');
-    if (run.stage === 'running') { this.warn(run); return true; }
+    if (run.stage === 'running') return true;
     let mayExist = run.stage !== 'prepared';
     run.retained = false;
     try {
@@ -214,8 +227,6 @@ export class Pilot {
       await provisionHost(this, run);
       this.signal?.throwIfAborted();
       await this.checkpoint(run, 'running');
-      this.warn(run);
-      this.output(`Environment left running.\nvp run pilot status --root '${this.store.root}' --environment ${run.id}\nWith operator permission, follow docs/pilot-ssh-debugging.md.`);
       return true;
     } catch (error) {
       this.output(error instanceof PilotError ? error.message : 'Pilot setup failed or was interrupted');

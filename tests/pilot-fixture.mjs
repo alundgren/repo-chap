@@ -23,7 +23,7 @@ export async function fixture(t, faults = {}, selectedRoot) {
   await store.save(run);
   const state = { droplets: [], projects: [], firewalls: [], tags: [], devices: [], runners: [], calls: [], commands: [], output: [], jobs: [] };
   function create(selected = run) {
-    state.droplets = [{ id: 101, name: selected.name, tags: markers(selected) }];
+    state.droplets = [{ id: 101, name: selected.name, status: 'active', tags: markers(selected) }];
     state.projects = [{ id: 'project-101', name: selected.name, description: markers(selected).join(' ') }];
     state.firewalls = [{ id: 'firewall-101', name: selected.name, tags: [selected.name] }];
     state.tags = markers(selected).map(name => ({ name, resources: { count: 1 } }));

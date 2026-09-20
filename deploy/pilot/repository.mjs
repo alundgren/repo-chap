@@ -36,7 +36,7 @@ async function updateBranch(accounts, repository, name, sha, existing) {
   else await accounts.gh(`repos/${repository}/git/refs`, 'POST', { ref: `refs/heads/${name}`, sha });
 }
 
-export async function prepareRepository(accounts, repository, output, confirm) {
+export async function prepareRepository(accounts, repository, output) {
   const info = await accounts.gh(`repos/${repository}`);
   if (!info.private || !info.permissions?.admin || !/^[A-Za-z0-9_.-]+$/.test(info.default_branch))
     throw new PilotError('Repository preparation requires admin access to one private repository');
@@ -53,9 +53,6 @@ export async function prepareRepository(accounts, repository, output, confirm) {
   const heads = Object.fromEntries(refs
     .filter(ref => [failingBranch, repairedBranch].includes(ref.ref?.replace('refs/heads/', '')))
     .map(ref => [ref.ref.replace('refs/heads/', ''), ref.object?.sha]));
-  const plan = { repository, defaultBranch, defaultHead, failingHead: heads[failingBranch] ?? null, repairedHead: heads[repairedBranch] ?? null };
-  if (!await confirm(plan, output)) { output('Repository preparation cancelled.'); return false; }
-
   const workflow = await readFile(join(moduleDirectory, 'trusted-workflow.yml'), 'utf8');
   const failingCheck = '#!/usr/bin/env bash\nexit 1\n';
   const repairedCheck = '#!/usr/bin/env bash\nexit 0\n';
@@ -77,9 +74,7 @@ export async function prepareRepository(accounts, repository, output, confirm) {
   const repairedCommit = await commit(accounts, repository, 'Create the repaired pilot fixture', repairedTree, failingCommit.sha);
   await updateBranch(accounts, repository, failingBranch, failingCommit.sha, Boolean(heads[failingBranch]));
   await updateBranch(accounts, repository, repairedBranch, repairedCommit.sha, Boolean(heads[repairedBranch]));
-  output(`Prepared ${repository}:`);
-  output(`  ${failingBranch} ${failingCommit.sha}`);
-  output(`  ${repairedBranch} ${repairedCommit.sha}`);
+  output('done');
   return true;
 }
 
