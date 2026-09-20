@@ -1,4 +1,4 @@
-import { freeze } from './common.js';
+import { freeze } from './immutable.js';
 import type { Capability } from './types.js';
 
 type ActionInput = 'candidate' | 'checks' | 'push' | 'classification' | 'review';

@@ -1,7 +1,7 @@
 import type { Diagnostic, ReplayComparison, ReplayFixture, ReplayResult, Workflow } from '@repo-chap/workflow';
 import type { ReplayHandoffPreview } from '@repo-chap/slack';
 
-export type CompanionView = 'overview' | 'simulation';
+export type CompanionView = 'overview' | 'available' | 'simulation';
 export type InputMode = 'tests' | 'pr';
 export interface WorkflowEntry { path: string; id: string | null }
 export interface SimulationInput {
@@ -93,7 +93,7 @@ export function parseCompanionRequest(value: unknown): CompanionRequest {
   for (const [kind, keys] of Object.entries({ open: ['repositoryRoot'], select: ['workflowPath'], input: ['path', 'mode'], packets: ['path'], highlight: ['target'] })) {
     if (command.kind === kind) for (const key of keys) string(command[key], key);
   }
-  if (command.view !== undefined && !['overview', 'simulation'].includes(String(command.view))) throw new Error('Choose overview or simulation.');
+  if (command.view !== undefined && !['overview', 'available', 'simulation'].includes(String(command.view))) throw new Error('Choose overview, available, or simulation.');
   if (command.mode !== undefined && !['tests', 'pr'].includes(String(command.mode))) throw new Error('Choose tests or pr.');
   if (command.path !== undefined && command.kind === 'simulate' && command.mode === undefined) throw new Error('Choose tests or pr when supplying simulation input.');
   if (command.style !== undefined && !['highlight', 'arrow'].includes(String(command.style))) throw new Error('Choose highlight or arrow.');

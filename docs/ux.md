@@ -1,9 +1,9 @@
 # UX notes for Repo Chap
 
 The desktop helps someone understand and test a workflow while their normal
-agent edits the repository. Overview and Simulate are the two main views.
-Workflow editing, provider setup, and conversation happen in the user's agent.
-The original presentation remains an earlier editor concept.
+agent edits the repository. Map, Available, and Test are its three focused
+views. Workflow editing, provider setup, and conversation happen in the user's
+agent. The original presentation remains an earlier editor concept.
 
 ## Desktop companion
 
@@ -18,21 +18,46 @@ text is 16px, secondary text 13.5px, section titles 22px, and the workflow title
 28px to 36px. Regular and semibold are the only weights. Primary text is #604939
 on #F2EADE; selected controls use #E0D2BD, fields #F9F6F0, and focus #3D5D71.
 
-The header shows the repository name and a separate worktree label for linked
-worktrees. The picker says Open repository before selection and Change repository
-afterward. Repository identity remains visible at narrow widths. The native
-Window menu provides macOS window management. The workflow picker shows names and relative
-paths, including multiple files with the same workflow ID. A native select is
-intentional for long labels and keyboard operation. New workflows appear as the
-agent saves them. An empty repository explains that the agent creates the file.
+One 54px bar holds the mascot and repository context on the left, Map,
+Available, and Test navigation on the right, and the workflow picker at the far
+right. Repository identity remains visible at narrow widths. The native Window
+menu provides macOS window management. The workflow picker shows names and
+relative paths, including multiple files with the same workflow ID. A native
+select is intentional for long labels and keyboard operation. New workflows
+appear as the agent saves them.
 
-Overview gives rule order the most room. Each rule shows its condition and action.
-Action details expand to show continuations and referenced prompts. Timing,
-limits, and files stay in disclosures. Recent changed paths and validation status
-provide feedback without a second editor or save operation. Invalid files replace
-the workflow view with diagnostics and recover on the next successful read.
+The small plus beside the workflow picker opens a read-only handoff. It gives
+the person a plain text request to copy into their normal repository agent.
+Electron does not create or edit the workflow and does not start an agent.
+The saved file appears through normal workflow discovery and refresh. The empty
+repository view offers the same handoff.
 
-Simulate separates Test fixtures and Real PRs. Each retains its own selected input
+Map answers how the selected configured workflow will behave. It gives ordered
+decisions most of the window and states that the first matching condition runs;
+a false or unknown answer continues to the next decision. Nested all, any, and
+not conditions retain their grouping. Every action and its success and failure
+continuations come from the loaded workflow. Shared paths and cycles appear
+once with references, so a large workflow remains readable. Short wait and
+finish paths stay on one row. More involved paths use one action area containing
+a title and flow diagram. Diagram steps are labels, never controls. Small
+explain disclosures show exact condition fields, action IDs, prompt and context
+references, and required capabilities without turning the main view into a
+contract browser.
+
+Timing, limits, and files stay in disclosures at the end of Map. Recent changed
+paths provide temporary refresh feedback. There is no permanent valid-file
+status. Invalid files replace the map with diagnostics and recover on the next
+successful read.
+
+Available answers what conditions and tools Repo Chap supports. It starts with
+tools grouped by the job they do, followed by conditions in terms familiar to
+someone who uses GitHub and Slack. Disclosures show raw contract names,
+requirements, and outcomes. It always reflects the shared action and condition
+registries, including GitHub review publication and labels. It does not mark
+which entries the selected workflow uses and does not imply that catalogue
+items can be run from Electron.
+
+Test separates Test fixtures and Real PRs. Each retains its own selected input
 and latest result. The main controls choose input and run simulation. Raw fixture
 JSON and optional Slack packets live in Input details. Results lead with their
 stop reason or expectation comparison, followed by the chosen path and proposed
@@ -50,7 +75,7 @@ scrolls the target into view, and expires after a bounded interval. Escape or th
 close control dismisses it. Text is plain text, never rendered HTML. Only one
 annotation is visible at a time; it does not become a permanent panel.
 
-At narrow widths the action details move below the rule list. Long paths and
+At narrow widths each action flow moves below its decision. Long paths and
 conditions wrap, keyboard focus stays visible, and only bounded JSON blocks
 scroll. The last repository and workflow return after restart; simulations are
 rerun explicitly against files on disk. Screenshots and browser evidence remain
