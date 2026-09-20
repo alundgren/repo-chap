@@ -8,7 +8,7 @@ const help = `Steer the running Repo Chap desktop app from your agent.
   repo-chap desktop open [--repo-root <directory>] [--workflow <repository-relative-path>]
   repo-chap desktop status [--json]
   repo-chap desktop select --workflow <repository-relative-path>
-  repo-chap desktop show [--view overview|simulation] [--mode tests|pr] [--target <target>]
+  repo-chap desktop show [--view overview|available|simulation] [--mode tests|pr] [--target <target>]
   repo-chap desktop input <--fixture <file> | --capture <directory>>
   repo-chap desktop simulate [--fixture <file> | --capture <directory>] [--packets <file>]
   repo-chap desktop highlight --target <target> [--text <explanation>] [--style highlight|arrow] [--seconds 15]
@@ -74,7 +74,7 @@ export async function desktopCommand(args: string[]): Promise<void> {
       if (!inputPath || !mode) throw new Error('Input requires --fixture or --capture.');
       command = { kind, mode, path: resolve(inputPath) };
     } else if (kind === 'simulate') command = { kind, ...(mode ? { mode, path: resolve(inputPath!) } : {}), ...(options['--packets'] ? { packetsPath: resolve(options['--packets']) } : {}) };
-    else if (kind === 'show') command = { kind, ...(options['--view'] ? { view: options['--view'] as 'overview' | 'simulation' } : {}), ...(options['--mode'] ? { mode: options['--mode'] as InputMode } : {}), ...(options['--target'] ? { target: options['--target'] } : {}) };
+    else if (kind === 'show') command = { kind, ...(options['--view'] ? { view: options['--view'] as 'overview' | 'available' | 'simulation' } : {}), ...(options['--mode'] ? { mode: options['--mode'] as InputMode } : {}), ...(options['--target'] ? { target: options['--target'] } : {}) };
     else if (kind === 'highlight') {
       if (!options['--target']) throw new Error('Highlight requires --target.');
       command = { kind, target: options['--target'], ...(options['--text'] ? { text: options['--text'] } : {}), ...(options['--style'] ? { style: options['--style'] as 'highlight' | 'arrow' } : {}), ...(options['--seconds'] ? { seconds: Number(options['--seconds']) } : {}) };

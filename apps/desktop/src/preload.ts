@@ -8,6 +8,7 @@ const bridge: CompanionBridge = {
   chooseRepository: () => ipcRenderer.invoke('companion:choose-repository'),
   chooseInput: mode => ipcRenderer.invoke('companion:choose-input', mode),
   choosePackets: () => ipcRenderer.invoke('companion:choose-packets'),
+  copyText: (text: string) => ipcRenderer.invoke('companion:copy-text', text),
   onChange: callback => {
     const listener = (_event: Electron.IpcRendererEvent, state: CompanionState): void => callback(state);
     ipcRenderer.on('companion:changed', listener);

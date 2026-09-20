@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, session } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session } from 'electron';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -63,6 +63,10 @@ register('choose-packets', async () => {
   const choice = await dialog.showOpenDialog(window, { title: 'Choose Slack decision packets', properties: ['openFile'], filters: [{ name: 'Decision packets', extensions: ['json'] }] });
   if (companion.snapshot().mode !== before.mode) return { schemaVersion: 1, ok: false, error: 'Simulation data changed. Choose packets for the current selection.' };
   return choice.canceled || !choice.filePaths[0] ? null : run({ schemaVersion: 1, repositoryRoot: before.repositoryRoot ?? undefined, workflowPath: before.workflowPath ?? undefined, command: { kind: 'packets', path: choice.filePaths[0] } });
+});
+register('copy-text', (text: unknown) => {
+  if (typeof text !== 'string' || !text.trim() || text.length > 16_384) throw new Error('The agent request is not valid text.');
+  clipboard.writeText(text);
 });
 
 async function createWindow(): Promise<void> {

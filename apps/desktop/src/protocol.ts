@@ -6,5 +6,6 @@ export interface CompanionBridge {
   chooseRepository(): Promise<CompanionResponse | null>;
   chooseInput(mode: InputMode): Promise<CompanionResponse | null>;
   choosePackets(): Promise<CompanionResponse | null>;
+  copyText(text: string): Promise<void>;
   onChange(callback: (state: CompanionState) => void): () => void;
 }

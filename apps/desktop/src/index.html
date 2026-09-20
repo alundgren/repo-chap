@@ -11,58 +11,59 @@
 <body>
   <a class="skip" href="#main">Skip to workflow</a>
   <header class="app-header">
-    <span class="brand"><img src="assets/mascot.png" width="44" height="44" alt="Repo Chap"></span>
-    <div class="repository-identity"><span id="repository-name"></span><span id="worktree-name" class="secondary" hidden></span></div>
-    <button id="open-repository">Open repository</button>
+    <button id="open-repository" class="repository-button" aria-label="Open repository">
+      <img src="assets/mascot.png" width="30" height="30" alt="">
+      <span class="repository-identity"><span id="repository-name">Open repository</span><span id="worktree-name" class="secondary" hidden></span></span>
+    </button>
+    <nav id="view-navigation" aria-label="Workflow views" hidden>
+      <button id="overview-tab" aria-current="page">Map</button>
+      <button id="available-tab">Available</button>
+      <button id="simulation-tab">Test</button>
+    </nav>
+    <div id="header-workflow" class="workflow-picker" hidden>
+      <label class="visually-hidden" for="workflow-select">Workflow</label>
+      <select id="workflow-select" aria-label="Workflow"></select>
+      <button id="add-workflow" class="add-workflow" aria-label="Add workflow" title="Add workflow">+</button>
+    </div>
   </header>
   <main id="main" tabindex="-1">
     <p id="error" class="notice danger" role="alert" hidden></p>
-    <section id="welcome" class="welcome">
-      <p class="eyebrow">Your workflow, in view</p>
-      <h1>Edit with your agent.<br>See what happens here.</h1>
-      <p>Open a repository, then use <code>$repo-chap-workflows</code> in your usual agent.</p>
+    <section id="welcome" class="empty-state">
+      <h1>Open a repository</h1>
+      <p>See how its Repo Chap workflows decide what to do, or ask your agent to create one.</p>
+      <button id="welcome-open" class="primary">Open repository</button>
     </section>
-    <section id="empty" class="welcome" hidden>
-      <p class="eyebrow">Repository open</p>
+    <section id="empty" class="empty-state" hidden>
       <h1>No workflows yet</h1>
-      <p>Ask your agent to create a Repo Chap workflow in this repository. It will appear here when saved.</p>
+      <p>Repo Chap reads workflow files while your agent edits them.</p>
+      <button id="empty-add" class="primary">Ask your agent to add one</button>
     </section>
     <section id="workspace" hidden>
-      <div class="workspace-heading" data-target="workflow">
-        <div><p id="workflow-path" class="eyebrow path"></p><h1 id="workflow-title"></h1></div>
-        <label class="workflow-picker">Workflow<select id="workflow-select" aria-label="Workflow"></select></label>
-      </div>
-      <div class="view-bar">
-        <nav aria-label="Workflow views">
-          <button id="overview-tab" aria-current="page">Overview</button>
-          <button id="simulation-tab">Simulate</button>
-        </nav>
-        <span id="validation-status" class="secondary"></span>
-      </div>
       <p id="discovery-warning" class="notice" hidden></p>
       <div id="diagnostics" role="status" hidden></div>
-      <section id="overview">
-        <p id="recent-changes" class="secondary" hidden></p>
-        <div id="workflow-content" class="workflow-layout">
-          <section data-target="rules">
-            <div class="section-heading"><h2>When a PR changes</h2><span class="secondary">First matching rule runs</span></div>
-            <ol id="rules" class="rules"></ol>
-            <p id="otherwise" class="fallback"></p>
-          </section>
-          <aside><h2>Actions</h2><div id="actions" class="actions"></div>
+      <section id="overview" class="map-view">
+        <p id="recent-changes" class="change-note" hidden></p>
+        <div id="workflow-content">
+          <ol id="decision-map" class="decision-map" data-target="rules"></ol>
+          <p class="map-note" data-target="workflow"><span aria-hidden="true">↓ </span>Continue when the answer is no or not known.</p>
+          <div class="map-details">
             <details id="workflow-settings"><summary>Timing and limits</summary><div id="settings"></div></details>
             <details id="workflow-files" data-target="files"><summary>Workflow files</summary><ul id="files"></ul></details>
-          </aside>
+          </div>
         </div>
       </section>
-      <section id="simulation" data-target="simulation" hidden>
+      <section id="available" class="available-view" hidden>
+        <div id="action-catalogue" class="catalogue"></div>
+        <div id="condition-catalogue" class="catalogue condition-catalogue"></div>
+      </section>
+      <section id="simulation" class="testing-view" data-target="simulation" hidden>
         <div class="simulation-controls" data-target="inputs">
-          <div class="mode-picker" role="group" aria-label="Simulation data">
+          <div class="mode-picker" role="group" aria-label="Test data">
             <button id="tests-mode" aria-pressed="true">Test fixtures</button>
             <button id="pr-mode" aria-pressed="false">Real PRs</button>
           </div>
           <button id="choose-input">Choose fixture</button>
-          <button id="simulate" class="primary" disabled>Simulate</button>
+          <button id="simulate" class="primary" disabled>Run test</button>
         </div>
         <p id="input-summary" class="input-summary"></p>
         <p id="input-note" class="secondary"></p>
@@ -72,9 +73,19 @@
         </details>
         <div id="result" data-target="result" hidden></div>
       </section>
-      <footer>Files refresh as your agent edits. Simulation runs locally and sends nothing.</footer>
     </section>
   </main>
+  <dialog id="add-workflow-dialog">
+    <form method="dialog"><button class="dialog-close" value="cancel" aria-label="Close">×</button></form>
+    <h2>Add a workflow with your agent</h2>
+    <p>Repo Chap stays read-only. Copy this request into the agent you already use for this repository. The workflow will appear here after the agent saves it.</p>
+    <pre id="agent-request" class="agent-request"></pre>
+    <div class="dialog-actions">
+      <form method="dialog"><button value="cancel">Cancel</button></form>
+      <button id="copy-agent-request" class="primary">Copy request</button>
+    </div>
+    <p id="copy-status" class="secondary" role="status"></p>
+  </dialog>
   <aside id="guidance" role="status" hidden><span id="guidance-text"></span><button id="dismiss-guidance" aria-label="Dismiss guidance">×</button></aside>
   <svg id="guidance-arrow" aria-hidden="true" hidden><defs><marker id="arrow-tip" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z"></path></marker></defs><path id="arrow-line" marker-end="url(#arrow-tip)"></path></svg>
 </body>

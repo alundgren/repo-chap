@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Diagnostic } from './types.js';
+import { freeze } from './immutable.js';
+export { freeze } from './immutable.js';
 
 export class WorkflowError extends Error {
   constructor(public readonly diagnostics: Diagnostic[]) {
@@ -18,13 +20,6 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 export const digest = (text: string): string => `sha256:${createHash('sha256').update(text).digest('hex')}`;
-export function freeze<T>(value: T): T {
-  if (value && typeof value === 'object') {
-    Object.freeze(value);
-    for (const child of Object.values(value)) freeze(child);
-  }
-  return value;
-}
 export function parseJson(text: string, path: string): unknown {
   let value: unknown;
   try { value = JSON.parse(text); } catch { return fail('invalid_json', path, 'Invalid JSON. Check commas, quotes, and braces.'); }

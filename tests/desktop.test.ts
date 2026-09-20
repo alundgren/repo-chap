@@ -18,6 +18,9 @@ test('companion discovers and switches workflows, observes file edits and clears
   const session = new CompanionSession();
   let state = await execute(session, { kind: 'open', repositoryRoot: f.repository });
   assert.equal(state.workflowPath, f.pkg.workflowPath); assert.equal(state.workflow?.id, 'team-pr'); assert.equal(state.workflows.length, 1);
+  state = await execute(session, { kind: 'show', view: 'available' });
+  assert.equal(state.view, 'available'); assert.equal(state.workflow?.id, 'team-pr');
+  state = await execute(session, { kind: 'show', view: 'overview' });
   const nextPath = join(f.repository, 'alternate.workflow.json');
   await writeFile(nextPath, await readFile('skills/repo-chap-workflows/assets/workflow.json', 'utf8'));
   state = successful(await session.refresh()); assert.equal(state.workflows.length, 2);
