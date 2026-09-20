@@ -3,6 +3,7 @@ import { join, resolve, isAbsolute } from 'node:path';
 import { open, rm } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { createInterface } from 'node:readline/promises';
 import { Accounts, PilotError } from './io.mjs';
 import { Store, privateDirectory, privateRead, writePrivate } from './store.mjs';
 import { Pilot } from './lifecycle.mjs';
@@ -12,9 +13,9 @@ import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from './dig
 
 const help = `Usage:
   vp run pilot create [--root /absolute/private/directory] [--environment ID]
-  vp run pilot test [--root /absolute/private/directory] --environment ID
-  vp run pilot delete [--root /absolute/private/directory] --environment ID
-  vp run pilot <status|ssh|verify-clean> [--root /absolute/private/directory] --environment ID
+  vp run pilot test [--root /absolute/private/directory] [--environment ID]
+  vp run pilot delete [--root /absolute/private/directory] [--environment ID]
+  vp run pilot <status|ssh|verify-clean> [--root /absolute/private/directory] [--environment ID]
   vp run pilot reap [--root /absolute/private/directory] --older-than 24h [--confirm]
 
 create provisions a new environment, or resumes the named environment. test runs
@@ -22,8 +23,30 @@ each scenario once, stops on failure, and leaves the environment available. dele
 removes it and verifies cleanup. verify-clean independently checks that
 DigitalOcean resources, the GitHub runner, and the Tailscale device are absent.
 Set REPO_CHAP_PILOT_ROOT to avoid repeating --root. An explicit --root takes precedence.
+Commands use the current environment saved by create when --environment is omitted.
 Exit 0: success or clean; 1: operation failed or verification unresolved; 64: invalid command.
 `;
+
+export function createdLabel(created, now = new Date()) {
+  const date = new Date(created * 1000);
+  if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate()) {
+    const minutes = Math.max(0, Math.floor((now.getTime() - date.getTime()) / 60000));
+    return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  }
+  const year = String(date.getFullYear()).padStart(4, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+async function confirmDeletion(run, output) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return null;
+  output(`Environment: ${run.id}`);
+  output(`Created: ${createdLabel(run.created)}`);
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try { return /^y(?:es)?$/i.test((await prompt.question('Delete this environment? [y/N] ')).trim()); }
+  finally { prompt.close(); }
+}
 
 async function prepareEnvironment(store, accounts, output) {
   const configPath = join(store.root, 'operator.json');
@@ -67,7 +90,7 @@ async function prepareEnvironment(store, accounts, output) {
   return run;
 }
 
-export async function main(argv, accounts = new Accounts(), output = console.log, env = process.env) {
+export async function main(argv, accounts = new Accounts(), output = console.log, env = process.env, askDelete = confirmDeletion) {
   let parsed;
   try {
     parsed = parseArgs({ args: argv, allowPositionals: true, options: {
@@ -82,8 +105,7 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   if (positionals.length !== 1 || !root || !isAbsolute(root) ||
       !['create', 'test', 'delete', 'status', 'ssh', 'verify-clean', 'reap'].includes(action) ||
       values.confirm && action !== 'reap' ||
-      values['older-than'] && action !== 'reap' || action === 'reap' && values.environment ||
-      !['create', 'reap'].includes(action) && !values.environment) {
+      values['older-than'] && action !== 'reap' || action === 'reap' && values.environment) {
     output(help); return 64;
   }
   const store = new Store(root);
@@ -116,15 +138,21 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       for (const run of runs) {
         const inventory = await pilot.inventory(run);
         if (inventory.collisions.length || inventory.unknown.length) { output(`Refused environment ${run.id}: incomplete ownership markers or unknown resources.`); ok = false; continue; }
-        if (!await pilot.cleanup(run)) ok = false;
+        if (await pilot.cleanup(run)) await store.clearCurrent(run.id);
+        else ok = false;
       }
       return ok ? 0 : 1;
     }
+    const selectedEnvironment = values.environment ?? (!['create', 'reap'].includes(action) ? await store.current() : null);
+    if (!['create', 'reap'].includes(action) && !selectedEnvironment)
+      throw new PilotError('No current environment. Run create or use --environment ID.');
     const run = action === 'create' && !values.environment
       ? await prepareEnvironment(store, accounts, output)
-      : await store.load(values.environment);
+      : await store.load(values.environment ?? selectedEnvironment);
     if (!run) return 0;
     if (action === 'create') {
+      await store.select(run.id);
+      output(`Environment ID: ${run.id}`);
       const created = await pilot.up(run, { retainOnFailure: true });
       if (created) output(`Environment ${run.id}: running`);
       return created ? 0 : 1;
@@ -133,8 +161,14 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       return await runTestSuite(pilot, run) ? 0 : 1;
     }
     if (action === 'delete') {
+      const confirmed = await askDelete(run, output);
+      if (confirmed === null && !values.environment)
+        throw new PilotError('Non-interactive delete requires --environment ID.');
+      if (confirmed === false) { output('Deletion cancelled.'); return 1; }
       pilot.signal = undefined;
-      return await pilot.cleanup(run) ? 0 : 1;
+      const cleaned = await pilot.cleanup(run);
+      if (cleaned) await store.clearCurrent(run.id);
+      return cleaned ? 0 : 1;
     }
     if (action === 'status' || action === 'verify-clean') return pilot.report(run, await pilot.verify(run)) ? 0 : 1;
     if (action === 'ssh') { output(await pilot.ssh(run, undefined, undefined, 3600000)); return 0; }

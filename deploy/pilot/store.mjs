@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { mkdir, lstat, realpath, open, rename, readdir } from 'node:fs/promises';
+import { mkdir, lstat, realpath, open, rename, readdir, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { PilotError } from './io.mjs';
@@ -49,6 +49,24 @@ export function validateRun(run) {
 }
 export class Store {
   constructor(root) { this.root = resolve(root); }
+  currentPath() { return join(this.root, '.current-environment'); }
+  async current() {
+    try {
+      const id = String(await privateRead(this.currentPath())).trim();
+      this.directory(id);
+      return id;
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+  async select(id) {
+    this.directory(id);
+    await writePrivate(this.currentPath(), `${id}\n`);
+  }
+  async clearCurrent(id) {
+    if (await this.current() === id) await rm(this.currentPath());
+  }
   directory(id) {
     if (!/^[a-f0-9]{24}$/.test(id)) throw new PilotError('Use the complete run ID');
     return join(this.root, id);

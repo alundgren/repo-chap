@@ -66,10 +66,14 @@ prints the explicit delete command. Billing continues until deletion succeeds.
 
 ## 2. Test
 
-Run the environment tests using its ID:
+Create prints the environment ID and saves it in the private operator directory
+as the current environment. Later commands use that ID unless you supply an
+explicit `--environment`.
+
+Run the environment tests:
 
 ```sh
-vp run pilot test --environment ENVIRONMENT_ID
+vp run pilot test
 ```
 
 Test checks daemon health, then dispatches the failing and repaired heads in
@@ -88,9 +92,13 @@ approval, and rerun the same test command. Billing continues throughout.
 Delete the environment:
 
 ```sh
-vp run pilot delete --environment ENVIRONMENT_ID
+vp run pilot delete
 vp run pilot verify-clean --environment ENVIRONMENT_ID
 ```
+
+Delete shows the selected environment ID and its age, then asks for `y` or
+`yes`. Any other answer cancels deletion. Successful deletion clears the saved
+current environment. A non-interactive delete must include `--environment ID`.
 
 Delete stops services, removes the runner and Tailscale registration, runs
 Terraform destroy, and falls back to independently identified DigitalOcean API

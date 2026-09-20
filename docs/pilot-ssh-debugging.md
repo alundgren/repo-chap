@@ -13,7 +13,7 @@ or infrastructure changes.
 Start with the read-only inventory from the operator Mac:
 
 ```sh
-vp run pilot status --environment ENVIRONMENT_ID
+vp run pilot status
 ```
 
 A running environment returns nonzero because resources are present. Check that
@@ -27,7 +27,7 @@ test checkpoint at:
 Connect only through the pilot command:
 
 ```sh
-vp run pilot ssh --environment ENVIRONMENT_ID
+vp run pilot ssh
 ```
 
 The command resolves the environment manifest and requires exactly one
@@ -85,12 +85,12 @@ After an approved correction, leave the SSH session and rerun the environment te
 from the Mac:
 
 ```sh
-vp run pilot test --environment ENVIRONMENT_ID
+vp run pilot test
 ```
 
 Finish by deleting the environment and independently verifying absence:
 
 ```sh
-vp run pilot delete --environment ENVIRONMENT_ID
+vp run pilot delete
 vp run pilot verify-clean --environment ENVIRONMENT_ID
 ```
