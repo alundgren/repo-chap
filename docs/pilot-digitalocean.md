@@ -5,7 +5,7 @@ no inbound rules, four ownership tags, one ephemeral Tailscale device, and one
 repository Actions runner. It has no public service endpoint or public SSH.
 
 A powered-off Droplet still bills. Creating an environment never schedules its
-deletion. Finish with `pilot delete` and `pilot verify-clean`.
+deletion. Finish with `pilot delete`, which verifies cleanup itself.
 
 ## Operator machine
 
@@ -70,12 +70,11 @@ Create these outside every Git checkout:
 - A dedicated mode-0700 `CODEX_HOME` containing its own mode-0600 `auth.json`.
 - A flat mode-0700 configuration directory with mode-0600 files.
 - `installation.json`, provider profiles, the repository-scoped GitHub App PEM,
-  and any apply policy needed by the fixed test.
+  and the Slack bot token. The program generates the pilot apply policy.
 
 All paths inside `installation.json` must name files directly under
-`/etc/repo-chap/`, because create copies the flat directory there. The runner smoke test does not
-need Slack. The [workflow cases](pilot-workflow-cases.md) need a bot token and
-dedicated channel configured before running them. See [daemon configuration](daemon-operations.md#install-and-check-the-account)
+`/etc/repo-chap/`, because create copies the flat directory there. The [workflow cases](pilot-workflow-cases.md) need a bot token and
+dedicated channel selected before creation. See [daemon configuration](daemon-operations.md#install-and-check-the-account)
 and [conditional push](conditional-push.md) for the file contracts.
 
 `operator.json` contains only non-secret selections:
@@ -87,7 +86,8 @@ and [conditional push](conditional-push.md) for the file contracts.
   "size": "s-2vcpu-4gb",
   "digitalOceanSshKeyFingerprint": "00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff",
   "configDirectory": "/absolute/private/pilot-config",
-  "codexHome": "/absolute/private/pilot-codex"
+  "codexHome": "/absolute/private/pilot-codex",
+  "pilotConfig": { "profile": "pilot", "workspaceId": "TFOREST", "channelId": "CPAPERBOAT" }
 }
 ```
 
@@ -117,8 +117,8 @@ vp run pilot delete
 The setup wizard writes `REPO_CHAP_PILOT_ROOT` to the repository's ignored
 `.env` file. Set it in your shell when running outside this checkout. `--root`
 remains available and overrides the environment variable.
-Create saves its environment ID as the current environment. Test prepares the
-repository fixtures and records that setup with the environment. Test and delete
+Create saves its environment ID as the current environment. Test generates the
+repository fixtures, daemon registration and private case records. Test and delete
 use the current selection when `--environment` is omitted. Delete asks for
 confirmation and clears the selection after successful cleanup.
 
@@ -150,7 +150,7 @@ directory until verification succeeds.
 | `retained` | Diagnose over approved Tailscale SSH, resume create, or delete. |
 | `running` | Run or rerun test, inspect through approved SSH, or delete. |
 | `cleaning` or `cleanup-pending` | Restore account access and repeat delete. |
-| `clean` | Run `verify-clean` and retain its result privately. |
+| `clean` | Cleanup is complete; retain the private record. |
 | Missing or corrupt Terraform state | Run delete; the verified API fallback handles recorded ownership. |
 | Corrupt manifest | Restore `manifest.backup.json` after checking its environment ID. |
 | Stale `.pilot.lock` | Confirm its recorded process has exited before removing it. |

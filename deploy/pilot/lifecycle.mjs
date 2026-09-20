@@ -1,3 +1,4 @@
+import { cleanupRepository } from './repository.mjs';
 import { chmod, cp, mkdir, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PilotError } from './io.mjs';
@@ -152,6 +153,8 @@ export class Pilot {
         });
       }
     }
+    let repositoryClean = false;
+    await attempt('repository artifacts', async () => { repositoryClean = await cleanupRepository(this, run); });
     let result;
     for (let n = 0; n < 3; n++) {
       result = await this.verify(run);
@@ -160,7 +163,7 @@ export class Pilot {
     }
     run.cleanupFailures = failures;
     run.verification = result;
-    const clean = [result.digitalocean, result.github, result.tailscale].every(v => v.state === 'absent');
+    const clean = repositoryClean && [result.digitalocean, result.github, result.tailscale].every(v => v.state === 'absent');
     await attempt('checkpoint', () => this.checkpoint(run, clean ? 'clean' : 'cleanup-pending'));
     if (!clean) this.report(run, result);
     return clean && !failures.includes('checkpoint');

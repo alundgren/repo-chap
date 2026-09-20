@@ -7,7 +7,7 @@ const names = ['review', 'conflict'];
 
 export function validateCases(config) {
   if (config?.version !== 1 || !/^T[A-Z0-9]+$/.test(config.workspaceId ?? '') || !/^[CG][A-Z0-9]+$/.test(config.channelId ?? ''))
-    throw new PilotError('Configure the dedicated Slack workspace and channel in workflow-cases.json');
+    throw new PilotError('Generated pilot state has an invalid Slack destination');
   for (const name of names) {
     const item = config[name];
     if (!item || !Number.isSafeInteger(item.pr) || item.pr < 1 || !/^[a-zA-Z0-9_-]{1,128}$/.test(item.runId ?? '') ||
@@ -70,7 +70,7 @@ export async function runWorkflowTests(pilot, run) {
   const path = join(pilot.store.directory(run.id), 'workflow-test.json');
   try {
     if (run.stage !== 'running') throw new PilotError('The environment must be running');
-    const config = validateCases(JSON.parse(await privateRead(join(pilot.store.root, 'workflow-cases.json'))));
+    const config = validateCases(run.fixtures?.cases);
     try { record = JSON.parse(await privateRead(path)); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (record && (record.environment !== run.id || record.repository !== run.repository || JSON.stringify(record.config) !== JSON.stringify(config)))
@@ -87,7 +87,6 @@ export async function runWorkflowTests(pilot, run) {
       await save();
     }
     pilot.output(`${scenario}: pass`);
-    await pilot.ssh(run, `sudo -u repo-chap -H /opt/repo-chap/current/repo-chap daemon resume --repo ${run.repository} --state-dir /var/lib/repo-chap --json`);
     const inspect = async item => {
       const response = JSON.parse(await pilot.ssh(run,
         `sudo -u repo-chap -H /opt/repo-chap/current/repo-chap daemon inspect ${item.runId} --state-dir /var/lib/repo-chap --json`));
@@ -105,7 +104,12 @@ export async function runWorkflowTests(pilot, run) {
         record.results[name] = { observedAt: new Date().toISOString(), details, pr };
         const repair = verifyRepair(name, item, details, pr, run.repository);
         await save();
-        if (repair) { passed = true; break; }
+        if (repair) {
+          const branch = run.fixtures.branches[run.fixtures.pulls[name].head];
+          branch.repairedSha = repair.head;
+          await pilot.store.save(run);
+          passed = true; break;
+        }
         await pilot.pause(10000);
       }
       if (!passed) throw new PilotError('Timed out waiting for tested repair and confirmed push');
@@ -131,11 +135,20 @@ export async function runWorkflowTests(pilot, run) {
     if (receipts.some(receipt => !receipt) || receipts[0].timestamp === receipts[1].timestamp)
       throw new PilotError('Expected distinct current Slack messages for both repaired PRs');
     record.receipts = receipts;
+    if (!record.rendering?.confirmed) {
+      await save();
+      const links = receipts.map(receipt => `https://app.slack.com/client/${receipt.workspaceId}/${receipt.channelId}/thread/${receipt.channelId}-${receipt.timestamp}`);
+      const confirmed = await pilot.confirm(`Open both Slack handoffs:\n${links.join('\n')}\nConfirm that the PR links, commit IDs, findings, repair summary and check evidence are readable.`, pilot.output);
+      record.rendering = { confirmed, observedAt: new Date().toISOString() };
+      await save();
+      if (!confirmed) throw new PilotError('Slack client rendering confirmation is still required');
+    }
     record.status = 'passed';
     delete record.failedScenario;
     delete record.reason;
     await save();
     pilot.output(`${scenario}: pass`);
+    pilot.output('Slack client rendering: pass');
     return true;
   } catch (error) {
     if (record) {

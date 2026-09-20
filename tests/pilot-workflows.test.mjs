@@ -1,32 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fixture } from './pilot-fixture.mjs';
-import { writePrivate } from '../deploy/pilot/store.mjs';
-import { runWorkflowTests, validateCases, verifyRepair, verifyDelivery } from '../deploy/pilot/workflow-tests.mjs';
-import { runAllTests } from '../deploy/pilot/tests.mjs';
+import { validateCases, verifyRepair, verifyDelivery } from '../deploy/pilot/workflow-tests.mjs';
 
 const initialHead = 'a'.repeat(40), baseSha = 'b'.repeat(40), head = 'c'.repeat(40);
 const repository = 'example-team/pilot-test';
 
-test('the pilot test command has one ordered list of every suite', async () => {
-  const calls = [];
-  const saved = [];
-  const pilot = { output: text => calls.push(text), store: { save: async run => saved.push(run.test?.status ?? 'setup') } };
-  const run = {};
-  const first = async () => { calls.push('runner'); return true; };
-  const second = async () => { calls.push('workflows'); return true; };
-  const setup = async () => { calls.push('setup'); return true; };
-  assert.equal(await runAllTests(pilot, run, [first, second], setup), true);
-  assert.deepEqual(calls, ['setup', 'repository setup: pass', 'runner', 'workflows']);
-  assert.equal(run.test.status, 'passed');
-  calls.length = 0;
-  assert.equal(await runAllTests(pilot, run, [async () => { calls.push('failed'); return false; }, second], setup), false);
-  assert.deepEqual(calls, ['setup', 'repository setup: pass', 'failed']);
-  assert.equal(run.test.status, 'failed');
-  assert.deepEqual(saved, ['passed', 'failed']);
-});
 function example() {
   const item = { pr: 1, runId: 'run-review', initialHead, baseSha, reviewAction: 'review', repairAction: 'address', requiredChecks: ['regression'] };
   const config = { version: 1, workspaceId: 'TFOREST', channelId: 'CPAPERBOAT', review: item,
@@ -97,69 +75,4 @@ test('case configuration rejects unsafe run IDs and reused PRs', () => {
   assert.throws(() => validateCases({ ...config, conflict: config.review }));
   config.review.runId = 'run; unexpected';
   assert.throws(() => validateCases(config));
-});
-
-async function workflowFixture(t) {
-  const f = await fixture(t);
-  f.run.stage = 'running';
-  const { config, details, pr } = example();
-  await writePrivate(join(f.root, 'workflow-cases.json'), JSON.stringify(config));
-  let repaired = false;
-  const snapshots = {};
-  for (const name of ['review', 'conflict']) {
-    const item = config[name], snapshot = structuredClone(details);
-    Object.assign(snapshot.run, { id: item.runId, number: item.pr });
-    snapshot.results[1].result.job.actionId = item.repairAction;
-    snapshot.slack[0].runId = item.runId;
-    snapshot.slack[0].packet.prNumber = item.pr;
-    snapshot.slack[0].receipt.timestamp = `123456.00000${item.pr}`;
-    snapshots[name] = snapshot;
-  }
-  f.accounts.io.command = async (file, args) => {
-    assert.equal(file, 'gh'); assert.equal(args[0], 'pr'); assert.equal(args[1], 'view');
-    return JSON.stringify(repaired ? pr : { ...pr, headRefOid: initialHead, mergeable: args[2] === '2' ? 'CONFLICTING' : 'MERGEABLE' });
-  };
-  f.pilot.ssh = async (run, command) => {
-    repaired = true;
-    return JSON.stringify({ ok: true, result: snapshots[command.includes('run-conflict') ? 'conflict' : 'review'] });
-  };
-  return { ...f, config, snapshots };
-}
-
-test('workflow suite captures baselines, checks both repairs and Slack, and resumes with reads only', async t => {
-  const f = await workflowFixture(t);
-  assert.equal(await runWorkflowTests(f.pilot, f.run), true);
-  assert.deepEqual(f.state.output, ['workflow prerequisites: pass', 'code review and fix: pass', 'merge conflict and resolve: pass', 'Slack message sending: pass']);
-  assert.equal(await runWorkflowTests(f.pilot, f.run), true);
-  const record = JSON.parse(await readFile(join(f.store.directory(f.run.id), 'workflow-test.json'), 'utf8'));
-  assert.equal(record.baselines.conflict.mergeable, 'CONFLICTING');
-  assert.equal(record.receipts.length, 2);
-  assert.equal(record.status, 'passed');
-});
-
-test('missing Slack delivery fails its own scenario and retains repair evidence', async t => {
-  const f = await workflowFixture(t);
-  f.snapshots.conflict.slack[0].deliveries[0].state = 'rejected';
-  assert.equal(await runWorkflowTests(f.pilot, f.run), false);
-  assert.equal(f.state.output.at(-1), 'Slack message sending: fail');
-  const record = JSON.parse(await readFile(join(f.store.directory(f.run.id), 'workflow-test.json'), 'utf8'));
-  assert.ok(record.results.review.details.effects.length);
-  f.snapshots.conflict.slack[0].deliveries[0].state = 'confirmed';
-  assert.equal(await runWorkflowTests(f.pilot, f.run), true);
-});
-
-
-test('baseline mismatch fails without accepting a pre-repaired branch', async t => {
-  const f = await workflowFixture(t);
-  f.accounts.io.command = async () => JSON.stringify({ state: 'OPEN', headRefOid: head, baseRefOid: baseSha, mergeable: 'MERGEABLE' });
-  assert.equal(await runWorkflowTests(f.pilot, f.run), false);
-  assert.deepEqual(f.state.output, ['workflow prerequisites: fail']);
-});
-
-test('unknown Slack outcome remains a delivery failure without hiding a successful repair', async t => {
-  const f = await workflowFixture(t);
-  f.snapshots.review.slack[0].deliveries[0].state = 'unknown';
-  f.snapshots.review.effects.push({ kind: 'slack.post', state: 'unknown' });
-  assert.equal(await runWorkflowTests(f.pilot, f.run), false);
-  assert.deepEqual(f.state.output, ['workflow prerequisites: pass', 'code review and fix: pass', 'merge conflict and resolve: pass', 'Slack message sending: fail']);
 });

@@ -1,12 +1,8 @@
-import { parseArgs } from 'node:util';
-import { join, resolve, isAbsolute } from 'node:path';
-import { open, rm } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { Accounts, PilotError } from './io.mjs';
-import { Store, privateRead, writePrivate } from './store.mjs';
-import { Pilot } from './lifecycle.mjs';
+import { join } from 'node:path';
+import { PilotError } from './io.mjs';
+import { privateRead, writePrivate } from './store.mjs';
 
-async function findDispatch(pilot, run, workflow, job) {
+export async function findDispatch(pilot, run, workflow, job) {
   const matches = [];
   for (let page = 1; page <= 100; page++) {
     const data = await pilot.accounts.gh(`repos/${run.repository}/actions/workflows/${workflow}/runs?event=workflow_dispatch&branch=${encodeURIComponent(job.ref)}&per_page=100&page=${page}`);
@@ -35,13 +31,6 @@ export async function runTestSuite(pilot, run, selection = suite) {
   if (evidence.runId !== run.id || !Array.isArray(evidence.jobs)) throw new PilotError('Test checkpoint belongs to another environment');
   evidence.history ??= [];
   evidence.attempt ??= 1;
-  if (evidence.complete || evidence.failed) {
-    evidence.history.push({ attempt: evidence.attempt, status: evidence.complete ? 'passed' : 'failed', jobs: evidence.jobs });
-    evidence.attempt += 1;
-    evidence.jobs = [];
-    delete evidence.complete;
-    delete evidence.failed;
-  }
   const save = () => writePrivate(path, JSON.stringify(evidence, null, 2) + '\n');
   let successful = false;
   let scenario = 'environment health';
@@ -121,31 +110,4 @@ export async function runTestSuite(pilot, run, selection = suite) {
     pilot.output(`${scenario}: fail`);
   }
   return successful;
-}
-
-async function cli() {
-  const { values } = parseArgs({ options: {
-    root: { type: 'string' }, environment: { type: 'string' },
-  } });
-  if (!values.root || !isAbsolute(values.root) || !values.environment) throw new PilotError('Use --root PATH --environment ID');
-  const store = new Store(values.root);
-  const run = await store.load(values.environment);
-  const lockPath = join(store.root, '.pilot.lock');
-  const lock = await open(lockPath, 'wx', 0o600).catch(() => { throw new PilotError('Operator directory is locked; inspect .pilot.lock'); });
-  await lock.writeFile(String(process.pid));
-  const controller = new AbortController();
-  const pilot = new Pilot(store, new Accounts(), { signal: controller.signal });
-  const interrupt = () => { if (!pilot.cleaning) controller.abort(); else console.log('Bounded cleanup continues.'); };
-  process.on('SIGINT', interrupt); process.on('SIGTERM', interrupt);
-  try {
-    return await runTestSuite(pilot, run) ? 0 : 1;
-  } finally {
-    process.off('SIGINT', interrupt); process.off('SIGTERM', interrupt);
-    await lock.close(); await rm(lockPath, { force: true });
-  }
-}
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.umask(0o077);
-  try { process.exitCode = await cli(); }
-  catch { console.error('environment health: fail'); process.exitCode = 1; }
 }
