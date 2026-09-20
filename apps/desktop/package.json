@@ -10,11 +10,14 @@
     "package": "vp exec node package.mjs"
   },
   "devDependencies": {
+    "@electron/packager": "20.3.0",
     "@repo-chap/companion": "workspace:*",
     "@repo-chap/github": "workspace:*",
     "@repo-chap/slack": "workspace:*",
     "@repo-chap/workflow": "workspace:*",
-    "electron": "44.4.1",
-    "@electron/packager": "20.3.0"
+    "electron": "44.4.1"
+  },
+  "dependencies": {
+    "elkjs": "^0.12.0"
   }
 }

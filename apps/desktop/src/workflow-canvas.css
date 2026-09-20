@@ -1,0 +1,20 @@
+/* Keep the workflow in one navigable canvas. */
+body:has(#overview:not([hidden])) main{max-width:none;padding:0}
+.canvas-shell{height:calc(100vh - 102px);min-height:420px;display:flex;flex-direction:column}
+.canvas-toolbar{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 24px 12px}
+.canvas-toolbar>div:first-child{display:flex;gap:12px;align-items:baseline}.canvas-toolbar strong{font-size:22px;font-weight:600}
+.canvas-controls{display:flex;align-items:center;gap:7px}.canvas-controls button{font-size:13.5px;min-height:34px;padding:5px 10px}.canvas-zoom{min-width:43px;font-size:13.5px;text-align:center;font-variant-numeric:tabular-nums}
+.canvas-workspace{position:relative;display:flex;min-height:0;flex:1}
+.canvas-viewport{position:relative;flex:1;min-width:0;overflow:hidden;touch-action:none;cursor:grab;background:radial-gradient(var(--line) .7px,transparent .7px);background-size:24px 24px}
+.canvas-viewport:active{cursor:grabbing}.canvas-world{position:absolute;transform-origin:0 0}
+.canvas-connections{position:absolute;inset:0;overflow:visible;pointer-events:none}
+.canvas-edge{fill:none;stroke:var(--muted);stroke-width:1.6}.canvas-edge.failed{stroke:var(--danger);stroke-dasharray:6 5;opacity:.7}.canvas-edge.connected{stroke-width:3;opacity:1;stroke:var(--link)}
+.canvas-edge-label{font:400 13.5px var(--sans);fill:var(--muted);paint-order:stroke;stroke:var(--bg);stroke-width:6px;stroke-linejoin:round}.canvas-edge-label.failed{fill:var(--danger)}
+.canvas-node{position:absolute;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;text-align:left;padding:15px 18px;background:var(--bg);border:1.5px solid var(--line);border-radius:12px;line-height:1.35;gap:6px;max-width:none;overflow:hidden}
+.canvas-node strong{font-size:17px;font-weight:600}.canvas-node-description{font-size:13.5px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.canvas-node-count{font-size:13.5px;color:var(--link)}
+.canvas-node.group{background:var(--surface);border-color:var(--line)}.canvas-node.entry{background:var(--raised)}.canvas-node.ending{border-radius:26px;background:var(--field)}.canvas-node.selected{outline:3px solid var(--link);outline-offset:3px}.canvas-node:hover{border-color:var(--text);background:var(--raised)}
+.canvas-inspector{flex:0 0 320px;padding:22px;overflow-y:auto;background:var(--field);border-left:1px solid var(--line);scrollbar-width:thin;position:relative}.canvas-inspector h2{font-size:22px;line-height:1.25;margin:0 25px 14px 0}.canvas-inspector p{margin:10px 0}.canvas-inspector button:not(.canvas-inspector-close){display:block;margin:10px 0;text-align:left;width:100%;font-size:13.5px}.canvas-inspector-close{position:absolute;top:12px;right:12px;border:0;background:transparent;font-size:22px;padding:0 8px}.canvas-action-detail{border-top:1px solid var(--line);margin-top:18px;padding-top:16px}.canvas-action-detail h3{font-size:17px}.canvas-inspector summary{font-size:13.5px}.canvas-inspector dl{font-size:13.5px}.canvas-inspector dt{color:var(--muted);margin-top:8px}.canvas-inspector dd{overflow-wrap:anywhere}.canvas-footer{display:flex;justify-content:space-between;gap:20px;padding:8px 24px;font-size:13.5px;color:var(--muted)}
+#overview .map-details{padding:0 24px;justify-content:flex-start;gap:24px}#overview .map-details details{width:auto;min-width:150px;font-size:13.5px}#overview .map-details details[open]{width:min(420px,50%)}
+@media(max-width:800px){.canvas-toolbar{padding:10px 14px;flex-wrap:wrap;gap:6px}.canvas-toolbar>div:first-child{gap:8px}.canvas-toolbar strong{font-size:17px}.canvas-toolbar .secondary{font-size:12px}.canvas-controls{flex-wrap:wrap}.canvas-inspector{flex-basis:280px}.canvas-footer{padding:6px 14px;font-size:12px}.canvas-footer span:last-child{display:none}}
+@media(max-width:550px){.canvas-inspector{position:absolute;right:0;top:0;bottom:0;width:min(300px,85%);z-index:2}.canvas-shell{height:calc(100vh - 108px)}}
+.canvas-viewport{user-select:none;-webkit-user-select:none}

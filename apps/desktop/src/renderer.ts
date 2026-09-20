@@ -1,5 +1,6 @@
+import { mountWorkflowCanvas, type WorkflowCanvas } from './workflow-canvas.js';
 import { actionRegistry, factTypes, memoryFields } from '@repo-chap/workflow/catalogue';
-import type { Action, Condition, ConditionTrace, Workflow } from '@repo-chap/workflow';
+import type { Condition, ConditionTrace } from '@repo-chap/workflow';
 import type { CompanionCommand, CompanionResponse, CompanionState } from '@repo-chap/companion';
 import type { CompanionBridge } from './protocol.js';
 
@@ -13,7 +14,8 @@ let state: CompanionState | null = null;
 let busy = false, workflowKey = '', resultKey = '', guidanceId = '';
 let dismissedGuidanceId = '';
 let activeGuidance: CompanionState['guidance'] = null;
-const graphObservers = new Set<ResizeObserver>();
+let canvas: WorkflowCanvas | undefined;
+let guidanceRequest = 0;
 
 const fieldLabels: Record<string, { yes: string; no: string; name: string; explanation: string }> = {
   'facts.lifecycle': { yes: 'PR status matches', no: 'PR status does not match', name: 'PR status', explanation: 'Whether the pull request is open, closed, or merged.' },
@@ -80,20 +82,8 @@ const conditionExamples: Record<string, string> = {
 const continuationLabels: Record<string, string> = {
   '$observe': 'Reinspect PR', '$wait': 'Reinspect PR', '$closed': 'Finished', '$blocked': 'Stop with a problem',
 };
-const flowContinuationLabels: Record<string, string> = { ...continuationLabels, '$wait': 'Wait for an update' };
 const humanize = (value: string): string => value.split('.').at(-1)!.replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase());
 const actionLabel = (uses: string): string => actionLabels[uses] ?? humanize(uses);
-function configuredActionLabel(id: string, workflow: Workflow): string {
-  const action = workflow.actions[id]!;
-  const repeated = Object.values(workflow.actions).filter(candidate => candidate.uses === action.uses).length > 1;
-  return actionLabel(action.uses) + (repeated ? ' · ' + id : '');
-}
-function configuredActionName(id: string, workflow: Workflow, className = ''): HTMLElement {
-  const action = workflow.actions[id]!, result = node('span', '', className);
-  result.append(node('span', actionLabel(action.uses)));
-  return result;
-}
-
 function leafConditionText(condition: Extract<Condition, { field: string }>): string {
   const definition = fieldLabels[condition.field];
   if (condition.field === 'facts.lifecycle') return 'PR is ' + (condition.op === 'eq' ? '' : 'not ') + condition.value + '?';
@@ -128,21 +118,6 @@ function conditionTree(condition: Condition): HTMLElement {
     group.append(list);
   }
   return group;
-}
-function conditionHelp(condition: Condition): HTMLElement {
-  const detail = node('details', '', 'condition-help'), summary = node('summary', '?');
-  summary.setAttribute('aria-label', 'Explain this decision');
-  const explanation = node('div', '', 'condition-explanation'), fields = new Set<string>();
-  const collect = (item: Condition): void => {
-    if ('field' in item) fields.add(item.field);
-    else if ('not' in item) collect(item.not);
-    else ('all' in item ? item.all : item.any).forEach(collect);
-  };
-  collect(condition);
-  for (const field of fields) explanation.append(node('p', fieldLabels[field]?.explanation ?? 'This workflow reads ' + field + '.'));
-  explanation.append(conditionTree(condition));
-  detail.append(summary, explanation);
-  return detail;
 }
 function detailList(entries: [string, string][]): HTMLElement {
   const list = node('dl');
@@ -239,200 +214,14 @@ function render(next: CompanionState): void {
   if (key !== workflowKey) { workflowKey = key; renderWorkflow(); }
   renderSimulation(); renderControls();
   if (navigated) window.scrollTo({ top: 0, behavior: 'instant' });
-  renderGuidance(state.guidance);
+  void renderGuidance(state.guidance);
 }
 
-function reachableActions(start: string, workflow: Workflow, expanded: Set<string>): string[] {
-  const found: string[] = [], seen = new Set<string>(), pending = [start];
-  while (pending.length) {
-    const id = pending.pop()!;
-    if (seen.has(id) || !workflow.actions[id]) continue;
-    seen.add(id); found.push(id);
-    const action = workflow.actions[id]!;
-    for (const target of [action.onFailure, action.onSuccess]) {
-      if (workflow.actions[target] && !expanded.has(target) && !seen.has(target)) pending.push(target);
-    }
-  }
-  return found;
-}
-function assignActionTarget(item: HTMLElement | SVGElement, id: string, claimed: Set<string>): void {
-  if (!claimed.has(id)) { item.dataset.target = 'action:' + id; claimed.add(id); }
-}
-const svgNamespace = 'http://www.w3.org/2000/svg';
-function svgNode<K extends keyof SVGElementTagNameMap>(tag: K, attributes: Record<string, string> = {}): SVGElementTagNameMap[K] {
-  const result = document.createElementNS(svgNamespace, tag);
-  for (const [name, value] of Object.entries(attributes)) result.setAttribute(name, value);
-  return result;
-}
-function pathHelp(ids: string[], workflow: Workflow): HTMLElement {
-  const detail = node('details', '', 'action-help path-help'), summary = node('summary', '?');
-  summary.setAttribute('aria-label', 'Explain this action path');
-  const content = node('div', '', 'path-help-content');
-  for (const id of ids) {
-    const action = workflow.actions[id]!, section = node('section');
-    section.append(node('strong', actionLabel(action.uses)));
-    const continuation = (target: string): string => (workflow.actions[target] ? actionLabel(workflow.actions[target]!.uses) : continuationLabels[target] ?? target) + ' · ' + target;
-    const entries: [string, string][] = [['Action', id], ['Contract', action.uses], ['Completed', continuation(action.onSuccess)], ['Failed', continuation(action.onFailure)]];
-    if (action.prompt) entries.push(['Instructions', action.prompt]);
-    if (action.contextFiles?.length) entries.push(['Context', action.contextFiles.join(', ')]);
-    if (action.capabilities.length) entries.push(['Access', action.capabilities.join(', ')]);
-    section.append(detailList(entries)); content.append(section);
-  }
-  detail.append(summary, content);
-  return detail;
-}
-function successLabel(action: Action): string {
-  if (action.uses === 'agent.resolve_conflict') return 'Resolved';
-  if (action.uses === 'checks.validate_candidate') return 'Passed';
-  if (action.uses === 'github.push_candidate') return 'Pushed';
-  return 'Completed';
-}
-function wrappedSvgText(text: string, x: number, y: number, className: string, maxCharacters: number): SVGTextElement {
-  const result = svgNode('text', { x: String(x), y: String(y), class: className, 'text-anchor': 'middle' });
-  const words = text.split(' '), lines: string[] = [];
-  for (const word of words) {
-    const last = lines.at(-1);
-    if (!last || last.length + word.length + 1 > maxCharacters) lines.push(word); else lines[lines.length - 1] = last + ' ' + word;
-  }
-  lines.forEach((line, index) => {
-    const part = svgNode('tspan', { x: String(x), dy: index ? '18' : String(-(lines.length - 1) * 9) }); part.textContent = line; result.append(part);
-  });
-  return result;
-}
-function actionFlowchart(ids: string[], workflow: Workflow, claimed: Set<string>, start: string): SVGSVGElement {
-  const chart = svgNode('svg', { class: 'flowchart', role: 'img', 'aria-label': 'Configured continuation flow from ' + configuredActionLabel(start, workflow) });
-  const claimable = new Set(ids.filter(id => !claimed.has(id))); claimable.forEach(id => claimed.add(id));
-  const markerId = 'flow-arrow-' + start.replace(/[^a-zA-Z0-9_-]/g, '-');
-  const draw = (layoutWidth: number): void => {
-    const highlightedTarget = chart.querySelector<SVGElement>('.agent-target')?.dataset.target;
-    const width = Math.max(300, Math.round(layoutWidth)), narrow = width < 560;
-    const centerX = narrow ? width * .34 : width * .35, rightX = narrow ? width * .75 : width * .76;
-    const actionGap = narrow ? 100 : 88, firstY = 38;
-    const primary: string[] = [], primarySet = new Set<string>();
-    let current: string | undefined = start;
-    while (current && ids.includes(current) && !primarySet.has(current)) {
-      primary.push(current); primarySet.add(current);
-      const next: string = workflow.actions[current]!.onSuccess;
-      current = ids.includes(next) ? next : undefined;
-    }
-    const side = ids.filter(id => !primarySet.has(id)), positions = new Map<string, { x: number; y: number }>();
-    primary.forEach((id, index) => positions.set(id, { x: centerX, y: firstY + index * actionGap }));
-    side.forEach((id, index) => positions.set(id, { x: rightX, y: firstY + (primary.length + index) * actionGap }));
-    const external = new Map<string, { x: number; y: number; label: string }>();
-    const terminalTargets: string[] = [];
-    for (const id of ids) {
-      const action = workflow.actions[id]!;
-      for (const target of [action.onSuccess, action.onFailure]) {
-        if (positions.has(target) || external.has(target)) continue;
-        terminalTargets.push(target);
-        external.set(target, { x: 0, y: 0, label: workflow.actions[target] ? actionLabel(workflow.actions[target]!.uses) + ' · shown above' : flowContinuationLabels[target] ?? target });
-      }
-    }
-    const terminalY = firstY + Math.max(1, ids.length) * actionGap + 12, terminalGap = narrow ? 68 : 60;
-    terminalTargets.forEach((target, index) => {
-      const column = target === '$blocked' || workflow.actions[target] ? rightX : centerX;
-      const columnIndex = terminalTargets.slice(0, index).filter(previous => Boolean(previous === '$blocked' || workflow.actions[previous]) === Boolean(target === '$blocked' || workflow.actions[target])).length;
-      Object.assign(external.get(target)!, { x: column, y: terminalY + columnIndex * terminalGap });
-    });
-    const height = Math.max(150, Math.max(terminalY, ...[...external.values()].map(item => item.y)) + 48);
-    chart.replaceChildren(); chart.setAttribute('viewBox', `0 0 ${width} ${height}`); chart.style.height = height + 'px';
-    const defs = svgNode('defs'), marker = svgNode('marker', { id: markerId, class: 'flow-marker', markerWidth: '7', markerHeight: '7', refX: '6', refY: '3', orient: 'auto' });
-    marker.append(svgNode('path', { d: 'M0 0 L6 3 L0 6' })); defs.append(marker); chart.append(defs);
-    const edges = svgNode('g', { class: 'flow-edges' });
-    ids.forEach((id, index) => {
-      const action = workflow.actions[id]!, source = positions.get(id)!;
-      for (const [target, failed] of [[action.onSuccess, false], [action.onFailure, true]] as const) {
-        const destination = positions.get(target) ?? external.get(target)!;
-        const adjacentSuccess = !failed && primarySet.has(id) && primarySet.has(target) && destination.y === source.y + actionGap;
-        const laneX = failed ? width * (.61 + (index % 3) * .025) : width * (.16 - (index % 3) * .018);
-        const path = adjacentSuccess
-          ? `M ${source.x} ${source.y + 14} V ${destination.y - 24}`
-          : `M ${source.x} ${source.y + 14} V ${source.y + 35} H ${laneX} V ${destination.y - 30} H ${destination.x} V ${destination.y - 20}`;
-        const loops = !!positions.get(target) && destination.y <= source.y;
-        const edge = svgNode('path', { d: path, class: failed ? 'failure-edge' : 'success-edge', 'marker-end': `url(#${markerId})`, 'data-edge-target': target, 'data-edge-loop': String(loops) });
-        const edgeTitle = svgNode('title'); edgeTitle.textContent = (failed ? 'Failed' : successLabel(action)) + (loops ? ' loops' : '') + ' to ' + (workflow.actions[target] ? actionLabel(workflow.actions[target]!.uses) : continuationLabels[target] ?? target);
-        edge.append(edgeTitle); edges.append(edge);
-        const label = svgNode('text', { x: String(adjacentSuccess ? source.x - 12 : (failed ? source.x + width * .07 : source.x - width * .07)), y: String(source.y + 31), class: failed ? 'failure-label' : 'success-label', 'text-anchor': failed ? 'start' : 'end' });
-        label.textContent = failed ? 'Failed' : successLabel(action); edges.append(label);
-      }
-    });
-    chart.append(edges);
-    for (const id of ids) {
-      const position = positions.get(id)!, group = svgNode('g', { class: 'flow-step', tabindex: '-1' });
-      group.setAttribute('transform', `translate(0 ${position.y})`); if (claimable.has(id)) group.dataset.target = 'action:' + id;
-      const action = workflow.actions[id]!;
-      const destination = (target: string): string => (workflow.actions[target] ? actionLabel(workflow.actions[target]!.uses) : continuationLabels[target] ?? target) + ' (' + target + ')';
-      const title = svgNode('title'); title.textContent = 'Configured action ' + id + '. Completed to ' + destination(action.onSuccess) + '. Failed to ' + destination(action.onFailure) + '.';
-      group.append(title, wrappedSvgText(actionLabel(workflow.actions[id]!.uses), position.x, 0, '', narrow ? 23 : 36)); chart.append(group);
-    }
-    for (const [target, { x, y, label }] of external) {
-      const group = svgNode('g', { class: 'flow-end', 'data-flow-terminal': target }); group.append(wrappedSvgText(label, x, y, '', narrow ? 16 : 27)); chart.append(group);
-    }
-    if (highlightedTarget) chart.querySelector<SVGElement>(`[data-target="${CSS.escape(highlightedTarget)}"]`)?.classList.add('agent-target');
-  };
-  draw(900);
-  let renderedWidth = 900;
-  const observer = new ResizeObserver(entries => {
-    const nextWidth = Math.round(entries[0]!.contentRect.width);
-    if (chart.isConnected && nextWidth > 0 && nextWidth !== renderedWidth) { renderedWidth = nextWidth; draw(nextWidth); }
-  });
-  observer.observe(chart); graphObservers.add(observer);
-  return chart;
-}
-function actionPresentation(start: string, workflow: Workflow, expanded: Set<string>, claimed: Set<string>): HTMLElement {
-  const startAction = workflow.actions[start]!;
-  if (expanded.has(start)) {
-    const reference = node('div', '', 'simple-action action-reference');
-    reference.append(configuredActionName(start, workflow, 'simple-action-name'), node('small', 'Shown above', 'flow-reference'));
-    return reference;
-  }
-  const ids = reachableActions(start, workflow, expanded);
-  const complex = ids.some(id => {
-    const action = workflow.actions[id]!;
-    return !!workflow.actions[action.onSuccess] || !!workflow.actions[action.onFailure];
-  });
-  if (!complex && startAction.uses.startsWith('control.')) {
-    const line = node('div', '', 'simple-action');
-    assignActionTarget(line, start, claimed);
-    const simpleDestination = (target: string): string => (workflow.actions[target] ? actionLabel(workflow.actions[target]!.uses) : continuationLabels[target] ?? target) + ' (' + target + ')';
-    line.title = 'Action ' + start + '; contract ' + startAction.uses + '; completed to ' + simpleDestination(startAction.onSuccess) + '; failed to ' + simpleDestination(startAction.onFailure) + '.';
-    line.append(configuredActionName(start, workflow, 'simple-action-name'));
-    if (startAction.onSuccess !== '$closed') line.append(node('span', '→', 'simple-arrow'), node('span', continuationLabels[startAction.onSuccess] ?? startAction.onSuccess));
-    if (startAction.onFailure !== '$blocked' && startAction.onFailure !== startAction.onSuccess) line.append(node('small', 'Failed → ' + (continuationLabels[startAction.onFailure] ?? startAction.onFailure), 'simple-failure'));
-    expanded.add(start);
-    return line;
-  }
-  const box = node('div', '', 'flow-box');
-  const heading = node('div', '', 'flow-title'), title = node('h2');
-  title.append(configuredActionName(start, workflow)); heading.append(title, pathHelp(ids, workflow)); box.append(heading);
-  const chart = actionFlowchart(ids, workflow, claimed, start);
-  for (const id of ids) expanded.add(id);
-  box.append(chart);
-  return box;
-}
 function renderWorkflow(): void {
+  canvas?.dispose(); canvas = undefined;
   const workflow = state?.workflow;
   if (!workflow) return;
-  graphObservers.forEach(observer => observer.disconnect()); graphObservers.clear();
-  const expanded = new Set<string>(), claimed = new Set<string>();
-  const decisions = workflow.rules.map((rule, index) => {
-    const item = node('li', '', 'decision-row'); item.dataset.target = 'rule:' + rule.id;
-    const question = node('div', '', 'decision-question');
-    question.append(node('span', String(index + 1), 'decision-order'), node('span', conditionText(rule.when), 'decision-text'), conditionHelp(rule.when));
-    item.append(question, node('div', 'Yes →', 'decision-arrow'), actionPresentation(rule.action, workflow, expanded, claimed));
-    return item;
-  });
-  const fallback = node('li', '', 'decision-row fallback-row');
-  fallback.append(node('div', 'No earlier decision matched', 'decision-question'), node('div', 'Then →', 'decision-arrow'), actionPresentation(workflow.otherwise, workflow, expanded, claimed));
-  decisions.push(fallback);
-  const map = element('decision-map'); map.replaceChildren(...decisions);
-  const unreferenced = Object.keys(workflow.actions).filter(id => !expanded.has(id));
-  if (unreferenced.length) {
-    const area = node('li', '', 'unreferenced-actions');
-    area.append(node('h2', 'Other configured actions'), node('p', 'No decision currently leads to these actions.', 'secondary'));
-    for (const id of unreferenced) area.append(actionPresentation(id, workflow, expanded, claimed));
-    map.append(area);
-  }
+  canvas = mountWorkflowCanvas(element('workflow-canvas'), workflow, { action: actionLabel, condition: conditionText, conditionTree });
   element('settings').replaceChildren(detailList([
     ['New PR delay', workflow.settings.newPrDelaySeconds + 's'], ['Commit settling time', workflow.settings.headDebounceSeconds + 's'],
     ['Reviewer recheck', workflow.settings.reviewWaitSeconds + 's'], ['Reviewer deadline', workflow.settings.reviewDeadlineSeconds + 's'],
@@ -569,23 +358,25 @@ function clearGuidance(): void {
   document.querySelectorAll('.agent-target').forEach(item => item.classList.remove('agent-target'));
   element('guidance').hidden = true; document.getElementById('guidance-arrow')!.setAttribute('hidden', ''); activeGuidance = null;
 }
-function renderGuidance(guidance: CompanionState['guidance']): void {
+async function renderGuidance(guidance: CompanionState['guidance']): Promise<void> {
+  const request = ++guidanceRequest;
   const fresh = guidance?.id !== guidanceId;
   clearGuidance();
   if (!guidance || guidance.expiresAt <= Date.now() || guidance.id === dismissedGuidanceId) { guidanceId = ''; return; }
+  if (canvas && (fresh || !targetElement(guidance.target))) {
+    try { await canvas.reveal(guidance.target); } catch { return; }
+  }
+  if (request !== guidanceRequest || guidance.expiresAt <= Date.now() || guidance.id === dismissedGuidanceId) return;
   const target = targetElement(guidance.target);
   if (!target) return;
   activeGuidance = guidance; guidanceId = guidance.id;
   if (target instanceof HTMLDetailsElement) target.open = true;
-  else {
-    const actionDetail = target.querySelector<HTMLDetailsElement>('.action-help') ?? target.closest('.flow-box')?.querySelector<HTMLDetailsElement>('.action-help');
-    if (actionDetail) actionDetail.open = true;
-  }
   for (let parent = target.parentElement; parent; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true;
   target.classList.add('agent-target');
   if (fresh) {
     const anchor = guidanceAnchor(target); anchor.setAttribute('tabindex', '-1');
-    anchor.scrollIntoView({ block: 'center', behavior: 'instant' }); (anchor as HTMLElement | SVGElement).focus({ preventScroll: true });
+    if (!anchor.closest('.canvas-world')) anchor.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+    (anchor as HTMLElement | SVGElement).focus({ preventScroll: true });
   }
   if (guidance.text) { element('guidance-text').textContent = guidance.text; element('guidance').hidden = false; }
   positionGuidance();
@@ -607,6 +398,7 @@ function positionGuidance(): void {
     document.getElementById('arrow-line')!.setAttribute('d', 'M ' + (left + Math.min(bubble.offsetWidth / 2, 100)) + ' ' + (below ? top : top + bubble.offsetHeight) + ' L ' + x + ' ' + (below ? rect.bottom + 10 : rect.top - 10));
   }
 }
+window.addEventListener('workflow-canvas-moved', positionGuidance);
 window.addEventListener('resize', positionGuidance); window.addEventListener('scroll', positionGuidance, true);
 setInterval(() => { if (activeGuidance && activeGuidance.expiresAt <= Date.now()) clearGuidance(); }, 250);
 void bridge.current().then(render).catch(error => { element('error').textContent = error instanceof Error ? error.message : 'The desktop could not start.'; element('error').hidden = false; });

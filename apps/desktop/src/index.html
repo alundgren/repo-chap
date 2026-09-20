@@ -6,6 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Repo Chap</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="workflow-canvas.css">
   <script src="renderer.js" defer></script>
 </head>
 <body>
@@ -44,8 +45,7 @@
       <section id="overview" class="map-view">
         <p id="recent-changes" class="change-note" hidden></p>
         <div id="workflow-content">
-          <ol id="decision-map" class="decision-map" data-target="rules"></ol>
-          <p class="map-note" data-target="workflow"><span aria-hidden="true">↓ </span>Continue when the answer is no or not known.</p>
+          <div id="workflow-canvas" data-target="workflow"></div>
           <div class="map-details">
             <details id="workflow-settings"><summary>Timing and limits</summary><div id="settings"></div></details>
             <details id="workflow-files" data-target="files"><summary>Workflow files</summary><ul id="files"></ul></details>
