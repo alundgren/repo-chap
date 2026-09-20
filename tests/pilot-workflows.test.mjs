@@ -5,9 +5,28 @@ import { join } from 'node:path';
 import { fixture } from './pilot-fixture.mjs';
 import { writePrivate } from '../deploy/pilot/store.mjs';
 import { runWorkflowTests, validateCases, verifyRepair, verifyDelivery } from '../deploy/pilot/workflow-tests.mjs';
+import { runAllTests } from '../deploy/pilot/tests.mjs';
 
 const initialHead = 'a'.repeat(40), baseSha = 'b'.repeat(40), head = 'c'.repeat(40);
 const repository = 'example-team/pilot-test';
+
+test('the pilot test command has one ordered list of every suite', async () => {
+  const calls = [];
+  const saved = [];
+  const pilot = { output: text => calls.push(text), store: { save: async run => saved.push(run.test?.status ?? 'setup') } };
+  const run = {};
+  const first = async () => { calls.push('runner'); return true; };
+  const second = async () => { calls.push('workflows'); return true; };
+  const setup = async () => { calls.push('setup'); return true; };
+  assert.equal(await runAllTests(pilot, run, [first, second], setup), true);
+  assert.deepEqual(calls, ['setup', 'repository setup: pass', 'runner', 'workflows']);
+  assert.equal(run.test.status, 'passed');
+  calls.length = 0;
+  assert.equal(await runAllTests(pilot, run, [async () => { calls.push('failed'); return false; }, second], setup), false);
+  assert.deepEqual(calls, ['setup', 'repository setup: pass', 'failed']);
+  assert.equal(run.test.status, 'failed');
+  assert.deepEqual(saved, ['passed', 'failed']);
+});
 function example() {
   const item = { pr: 1, runId: 'run-review', initialHead, baseSha, reviewAction: 'review', repairAction: 'address', requiredChecks: ['regression'] };
   const config = { version: 1, workspaceId: 'TFOREST', channelId: 'CPAPERBOAT', review: item,

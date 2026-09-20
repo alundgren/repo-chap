@@ -87,6 +87,7 @@ export async function runWorkflowTests(pilot, run) {
       await save();
     }
     pilot.output(`${scenario}: pass`);
+    await pilot.ssh(run, `sudo -u repo-chap -H /opt/repo-chap/current/repo-chap daemon resume --repo ${run.repository} --state-dir /var/lib/repo-chap --json`);
     const inspect = async item => {
       const response = JSON.parse(await pilot.ssh(run,
         `sudo -u repo-chap -H /opt/repo-chap/current/repo-chap daemon inspect ${item.runId} --state-dir /var/lib/repo-chap --json`));

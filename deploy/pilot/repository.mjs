@@ -36,7 +36,7 @@ async function updateBranch(accounts, repository, name, sha, existing) {
   else await accounts.gh(`repos/${repository}/git/refs`, 'POST', { ref: `refs/heads/${name}`, sha });
 }
 
-export async function prepareRepository(accounts, repository, output) {
+export async function prepareRepository(accounts, repository) {
   const info = await accounts.gh(`repos/${repository}`);
   if (!info.private || !info.permissions?.admin || !/^[A-Za-z0-9_.-]+$/.test(info.default_branch))
     throw new PilotError('Repository preparation requires admin access to one private repository');
@@ -74,7 +74,6 @@ export async function prepareRepository(accounts, repository, output) {
   const repairedCommit = await commit(accounts, repository, 'Create the repaired pilot fixture', repairedTree, failingCommit.sha);
   await updateBranch(accounts, repository, failingBranch, failingCommit.sha, Boolean(heads[failingBranch]));
   await updateBranch(accounts, repository, repairedBranch, repairedCommit.sha, Boolean(heads[repairedBranch]));
-  output('done');
   return true;
 }
 

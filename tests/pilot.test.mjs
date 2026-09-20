@@ -10,6 +10,7 @@ import { createdLabel, main } from '../deploy/pilot/pilot.mjs';
 import { bootstrap, diagnoseHost, prerequisites, versions } from '../deploy/pilot/remote.mjs';
 import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from '../deploy/pilot/digitalocean-key.mjs';
 import { prepareRepository } from '../deploy/pilot/repository.mjs';
+import { runTestSuite } from '../deploy/pilot/integration.mjs';
 
 import { fixture } from './pilot-fixture.mjs';
 
@@ -28,7 +29,7 @@ test('DigitalOcean SSH key setup generates and reuses a private local keypair', 
   assert.equal(existing.fingerprint, created.fingerprint);
 });
 
-test('repository preparation creates canonical fixture branches and prints one success line', async () => {
+test('repository preparation creates canonical fixture branches', async () => {
   const base = 'a'.repeat(40), baseTree = 'b'.repeat(40);
   const generated = ['c','d','e','f','1','2','3','4','5'].map(value => value.repeat(40));
   const calls = [];
@@ -46,14 +47,19 @@ test('repository preparation creates canonical fixture branches and prints one s
     if (method === 'PATCH' && path.includes('/git/refs/heads/')) return {};
     throw new Error(`Unexpected GitHub call ${method} ${path}`);
   } };
-  const output = [];
-  assert.equal(await prepareRepository(accounts, 'example-team/pilot-test', text => output.push(text)), true);
+  assert.equal(await prepareRepository(accounts, 'example-team/pilot-test'), true);
   const writes = calls.filter(call => call.method !== 'GET');
   assert.ok(writes.some(call => call.method === 'PATCH' && call.path.endsWith('/heads/main') && call.body.force === false));
   assert.deepEqual(writes.filter(call => call.method === 'POST' && call.path.endsWith('/git/refs')).map(call => call.body.ref), [
     'refs/heads/pilot-failing', 'refs/heads/pilot-repaired',
   ]);
-  assert.deepEqual(output, ['done']);
+});
+
+test('removed pilot commands are rejected', async t => {
+  const f = await fixture(t);
+  assert.equal(await main(['prepare-repository', '--root', f.root], f.accounts, () => {}), 64);
+  assert.equal(await main(['test-workflows', '--root', f.root], f.accounts, () => {}), 64);
+  assert.equal(f.state.calls.length, 0);
 });
 
 test('pilot SSH uses OpenSSH with a private environment host-key file', async t => {
@@ -357,7 +363,7 @@ async function integrationFixture(t, fault = {}) {
 }
 test('test command runs immediately and prints only scenario results', async t => {
   const f = await integrationFixture(t);
-  assert.equal(await main(['test', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text)), 0);
+  assert.equal(await main(['test', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text), process.env, undefined, undefined, runTestSuite), 0);
   assert.deepEqual(f.state.output, [
     'environment health: pass',
     'pilot-failing returns failure: pass',
@@ -366,7 +372,7 @@ test('test command runs immediately and prints only scenario results', async t =
 });
 test('test command reports an unavailable environment as a failed scenario', async t => {
   const f = await fixture(t);
-  assert.equal(await main(['test', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text)), 1);
+  assert.equal(await main(['test', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text), process.env, undefined, undefined, runTestSuite), 1);
   assert.deepEqual(f.state.output, ['environment health: fail']);
 });
 test('fixed suite validates GitHub job evidence and leaves the environment running', async t => {
@@ -455,7 +461,7 @@ test('delete removes the environment and verifies absence in one invocation', as
 test('commands use the current environment and confirmed delete clears it', async t => {
   const f = await integrationFixture(t);
   await f.store.select(f.run.id);
-  assert.equal(await main(['test', '--root', f.root], f.accounts, () => {}), 0);
+  assert.equal(await main(['test', '--root', f.root], f.accounts, () => {}, process.env, undefined, undefined, runTestSuite), 0);
   const prompts = [];
   assert.equal(await main(['delete', '--root', f.root], f.accounts, () => {}, process.env, async (run, output) => {
     output(`Environment: ${run.id}`);

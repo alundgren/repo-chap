@@ -1,8 +1,8 @@
 # Workflow acceptance cases
 
-`vp run pilot test-workflows` checks code review and repair, conflict resolution,
-and real Slack delivery on the existing private pilot host. `pilot test` remains
-the runner smoke test. Run both before calling the pilot complete.
+`vp run pilot test` checks the runner, code review and repair, conflict
+resolution, and real Slack delivery on the existing private pilot host. One
+command runs every pilot test.
 
 The workflow cases observe two dedicated PRs as the daemon processes them. They
 do not create PRs, edit workflow permissions, send extra messages, retry effects,
@@ -137,10 +137,9 @@ PRs, daemon run IDs, exact 40-character Git commit IDs and Slack destination:
 }
 ```
 
-Run `vp run pilot test-workflows`. After `workflow prerequisites: pass`, resume
-the repository from a second terminal with `repo-chap daemon resume OWNER/REPO
---state-dir /var/lib/repo-chap`. The suite has now saved both original PR states
-before the daemon can repair either. Keep the PRs open until all cases pass.
+Run `vp run pilot test`. After `workflow prerequisites: pass`, the command
+resumes the repository itself. At that point it has saved both original PR
+states before the daemon can repair either. Keep the PRs open until all cases pass.
 A changed base, closed PR or unrelated daemon run fails the test.
 
 The command prints:
@@ -178,4 +177,4 @@ actual receipt or an explicitly authorized resend. Never resend just to make the
 test green. A host restart must preserve the same receipts and repair counts;
 rerun the suite after an operator-authorized restart and compare the retained
 attempt records. These fault exercises and client rendering remain operator
-checks; `test-workflows` does not interrupt the daemon or change Slack membership.
+checks; the test does not interrupt the daemon or change Slack membership.

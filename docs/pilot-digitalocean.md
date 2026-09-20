@@ -109,19 +109,18 @@ Codex cache are rejected.
 Follow [the three-phase guide](pilot-guide.md):
 
 ```sh
-vp run pilot prepare-repository
 vp run pilot create
 vp run pilot test
 vp run pilot delete
-vp run pilot verify-clean --environment ENVIRONMENT_ID
 ```
 
 The setup wizard writes `REPO_CHAP_PILOT_ROOT` to the repository's ignored
 `.env` file. Set it in your shell when running outside this checkout. `--root`
 remains available and overrides the environment variable.
-Create saves its environment ID as the current environment. Test and delete use
-that selection when `--environment` is omitted. Delete asks for confirmation
-and clears the selection after successful cleanup.
+Create saves its environment ID as the current environment. Test prepares the
+repository fixtures and records that setup with the environment. Test and delete
+use the current selection when `--environment` is omitted. Delete asks for
+confirmation and clears the selection after successful cleanup.
 
 Create installs the repository's Node and Vite+ versions, the current Tailscale
 and Codex releases available from their normal package sources, and Actions
