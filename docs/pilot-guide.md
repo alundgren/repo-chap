@@ -30,7 +30,8 @@ is not part of this suite.
 The setup wizard checks local tools and creates a dedicated SSH keypair in the
 private operator directory if needed. It shows the public-key path and waits
 for you to register it with DigitalOcean. It then writes `operator.json` outside
-Git and creates the environment:
+Git, saves `REPO_CHAP_PILOT_ROOT` in the ignored repository `.env`, and creates
+the environment:
 
 ```sh
 deploy/pilot/setup.sh
@@ -45,8 +46,12 @@ the repository or operator directory.
 The underlying commands are also available directly:
 
 ```sh
-vp run pilot create --root /absolute/private/repo-chap-pilot
+printf '%s\n' 'REPO_CHAP_PILOT_ROOT=/absolute/private/repo-chap-pilot' >> .env
+vp run pilot create
 ```
+
+Vite+ loads the ignored `.env` file for later pilot commands. An explicit
+`--root` still overrides `REPO_CHAP_PILOT_ROOT`.
 
 If `operator.json` does not exist, create writes a template and stops. Complete
 the template, then run the same command again. A failed environment can be
@@ -64,8 +69,7 @@ prints the explicit delete command. Billing continues until deletion succeeds.
 Run the environment tests using its ID:
 
 ```sh
-vp run pilot test --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID
+vp run pilot test --environment ENVIRONMENT_ID
 ```
 
 Test checks daemon health, then dispatches the failing and repaired heads in
@@ -84,10 +88,8 @@ approval, and rerun the same test command. Billing continues throughout.
 Delete the environment:
 
 ```sh
-vp run pilot delete --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID
-vp run pilot verify-clean --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID
+vp run pilot delete --environment ENVIRONMENT_ID
+vp run pilot verify-clean --environment ENVIRONMENT_ID
 ```
 
 Delete stops services, removes the runner and Tailscale registration, runs

@@ -108,14 +108,15 @@ Codex cache are rejected.
 Follow [the three-phase guide](pilot-guide.md):
 
 ```sh
-vp run pilot create --root /absolute/private/repo-chap-pilot
-vp run pilot test --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID
-vp run pilot delete --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID
-vp run pilot verify-clean --root /absolute/private/repo-chap-pilot \
-  --environment ENVIRONMENT_ID
+vp run pilot create
+vp run pilot test --environment ENVIRONMENT_ID
+vp run pilot delete --environment ENVIRONMENT_ID
+vp run pilot verify-clean --environment ENVIRONMENT_ID
 ```
+
+The setup wizard writes `REPO_CHAP_PILOT_ROOT` to the repository's ignored
+`.env` file. Set it in your shell when running outside this checkout. `--root`
+remains available and overrides the environment variable.
 
 Create installs the repository's Node and Vite+ versions, the current Tailscale
 and Codex releases available from their normal package sources, and Actions
