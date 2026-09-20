@@ -9,15 +9,9 @@ but the commands never merge pull requests. Keep credentials, Terraform state,
 provider login data, raw repository evidence, and logs in the private operator
 directory outside Git.
 
-## Prepare the test repository
+## Repository fixtures
 
-Prepare the dedicated private repository before creating an environment:
-
-```sh
-vp run pilot prepare-repository
-```
-
-The command reads the repository from `operator.json`. It preserves other
+`vp run pilot test` reads the repository from `operator.json`. It preserves other
 default-branch files, installs the trusted workflow at
 `.github/workflows/pilot.yml`, and creates or resets two stable branches:
 
@@ -29,10 +23,11 @@ workflow accepts the environment's unique runner label and has one job named
 `check`. The suite refuses changed heads, multiple matching dispatches, another
 runner, or an unexpected conclusion.
 
-Run preparation again after a fixture branch changes or disappears. It restores
-the expected branch contents without touching other branch names. GitHub
-requires a `workflow_dispatch` workflow on the default branch, so preparation
-may add one commit there when the checked-in workflow differs.
+Test records completed repository setup with the environment and reuses it on a
+rerun, so saved test evidence keeps the same fixture commits. Use a new
+environment to recreate changed or missing fixture branches. GitHub requires a
+`workflow_dispatch` workflow on the default branch, so setup may add one commit
+there when the checked-in workflow differs.
 
 Prepare a repository-scoped GitHub App, a dedicated Codex login, and the private
 daemon files described in [disposable host setup](pilot-digitalocean.md). The
@@ -58,7 +53,7 @@ verification commands, load `DIGITALOCEAN_TOKEN`, `TAILSCALE_CLIENT_ID`, and
 `TAILSCALE_CLIENT_SECRET` again from your secret manager. Do not save them in
 the repository or operator directory.
 
-The underlying commands are also available directly:
+The underlying command is also available directly:
 
 ```sh
 printf '%s\n' 'REPO_CHAP_PILOT_ROOT=/absolute/private/repo-chap-pilot' >> .env
@@ -73,13 +68,14 @@ the template, then run the same command again. A failed environment can be
 resumed with `create --environment ENVIRONMENT_ID`.
 
 Create provisions one Ubuntu host, a deny-inbound firewall, a Project, ownership
-tags, one Tailscale device, and one repository runner. It transfers the private
-daemon configuration and dedicated Codex authentication, installs the pinned
-tools, runs account diagnostics, and starts Repo Chap. If creation fails after
-cloud resources may exist, it retains the environment for SSH diagnosis and
-prints the explicit delete command. Billing continues until deletion succeeds.
-Successful preparation, deletion, and cleanup verification print `done`. Create
-prints `creating...` while it works, then `done - id: ENVIRONMENT_ID`.
+tags, one Tailscale device, and one
+repository runner. It transfers the private daemon configuration and dedicated
+Codex authentication, installs the pinned tools, runs account diagnostics, and
+starts Repo Chap. If creation fails after cloud resources may exist, it retains
+the environment for SSH diagnosis and prints the explicit delete command.
+Billing continues until deletion succeeds. Successful deletion and cleanup
+verification print `done`. Create prints its current phase, then
+`done - id: ENVIRONMENT_ID`.
 
 ## 2. Test
 
@@ -93,8 +89,10 @@ Run the environment tests:
 vp run pilot test
 ```
 
-Test checks daemon health, then dispatches the failing and repaired heads in
-order. It stops at the first unexpected result and prints one line per completed
+Test prepares and records the repository fixtures, checks daemon health,
+dispatches the failing and repaired heads in order, then runs the configured
+workflow acceptance cases. It stops at the first unexpected result and prints
+one line per completed
 scenario in the form `scenario: pass` or `scenario: fail`. The two jobs
 must use distinct commits and the environment's recorded runner ID, name, and
 unique label. Dispatch intent and results are stored in private `test.json`.
@@ -104,14 +102,9 @@ Success and failure both leave the environment running. On failure, follow
 [SSH diagnosis](pilot-ssh-debugging.md), fix the cause with explicit operator
 approval, and rerun the same test command. Billing continues throughout.
 
-Run the separately configured workflow cases before declaring the pilot complete:
-
-```sh
-vp run pilot test-workflows
-```
-
 See [workflow acceptance cases](pilot-workflow-cases.md) for the two PR fixtures,
-private case configuration, Slack setup and expected evidence.
+private case configuration, Slack setup and expected evidence included in the
+same test command.
 
 ## 3. Delete
 

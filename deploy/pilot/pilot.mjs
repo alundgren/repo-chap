@@ -7,25 +7,24 @@ import { createInterface } from 'node:readline/promises';
 import { Accounts, PilotError } from './io.mjs';
 import { Store, privateDirectory, privateRead, writePrivate } from './store.mjs';
 import { Pilot } from './lifecycle.mjs';
-import { runTestSuite } from './integration.mjs';
-import { runWorkflowTests } from './workflow-tests.mjs';
+import { runAllTests } from './tests.mjs';
 import { validateInputs } from './remote.mjs';
 import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from './digitalocean-key.mjs';
-import { prepareRepository } from './repository.mjs';
 
 const help = `Usage:
   vp run pilot create [--root /absolute/private/directory] [--environment ID]
-  vp run pilot prepare-repository [--root /absolute/private/directory]
-  vp run pilot test-workflows [--root /absolute/private/directory] [--environment ID]
   vp run pilot test [--root /absolute/private/directory] [--environment ID]
   vp run pilot delete [--root /absolute/private/directory] [--environment ID]
+
+Recovery and diagnostics:
   vp run pilot <status|ssh|verify-clean> [--root /absolute/private/directory] [--environment ID]
   vp run pilot reap [--root /absolute/private/directory] --older-than 24h
 
-create provisions a new environment, or resumes the named environment. test runs
-each scenario once, stops on failure, and leaves the environment available. delete
-removes it and verifies cleanup. verify-clean independently checks that
-DigitalOcean resources, the GitHub runner, and the Tailscale device are absent.
+create provisions a new environment, or resumes the named environment. test
+prepares its fixtures, runs every suite in order, stops on failure, and leaves
+the environment available. delete removes it and verifies cleanup. verify-clean
+independently checks that DigitalOcean resources, the GitHub runner, and the
+Tailscale device are absent.
 Set REPO_CHAP_PILOT_ROOT to avoid repeating --root. An explicit --root takes precedence.
 Commands use the current environment saved by create when --environment is omitted.
 Exit 0: success or clean; 1: operation failed or verification unresolved; 64: invalid command.
@@ -101,7 +100,7 @@ async function prepareEnvironment(store, accounts, output) {
   return run;
 }
 
-export async function main(argv, accounts = new Accounts(), output = console.log, env = process.env, askDelete = confirmDeletion, askReap = confirmReap) {
+export async function main(argv, accounts = new Accounts(), output = console.log, env = process.env, askDelete = confirmDeletion, askReap = confirmReap, testRunner = runAllTests) {
   let parsed;
   try {
     parsed = parseArgs({ args: argv, allowPositionals: true, options: {
@@ -114,8 +113,8 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   const root = values.root ?? env.REPO_CHAP_PILOT_ROOT;
   if (values.help) { output(help); return 0; }
   if (positionals.length !== 1 || !root || !isAbsolute(root) ||
-      !['create', 'prepare-repository', 'test', 'test-workflows', 'delete', 'status', 'ssh', 'verify-clean', 'reap'].includes(action) ||
-      values['older-than'] && action !== 'reap' || ['reap', 'prepare-repository'].includes(action) && values.environment) {
+      !['create', 'test', 'delete', 'status', 'ssh', 'verify-clean', 'reap'].includes(action) ||
+      values['older-than'] && action !== 'reap' || action === 'reap' && values.environment) {
     output(help); return 64;
   }
   const store = new Store(root);
@@ -130,7 +129,7 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   process.on('SIGTERM', interrupt);
   try {
     await privateDirectory(store.root, action === 'create' && !values.environment);
-    const writes = ['create', 'prepare-repository', 'test', 'test-workflows', 'delete', 'reap'].includes(action);
+    const writes = ['create', 'test', 'delete', 'reap'].includes(action);
     if (writes) {
       const path = join(store.root, '.pilot.lock');
       try { lock = await open(path, 'wx', 0o600); await lock.writeFile(String(process.pid)); }
@@ -155,13 +154,8 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       if (ok) output('done');
       return ok ? 0 : 1;
     }
-    if (action === 'prepare-repository') {
-      const config = JSON.parse(await privateRead(join(store.root, 'operator.json')));
-      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.repository)) throw new PilotError('Select one private repository in operator.json');
-      return await prepareRepository(accounts, config.repository, output) ? 0 : 1;
-    }
-    const selectedEnvironment = values.environment ?? (!['create', 'reap', 'prepare-repository'].includes(action) ? await store.current() : null);
-    if (!['create', 'reap', 'prepare-repository'].includes(action) && !selectedEnvironment)
+    const selectedEnvironment = values.environment ?? (!['create', 'reap'].includes(action) ? await store.current() : null);
+    if (!['create', 'reap'].includes(action) && !selectedEnvironment)
       throw new PilotError('No current environment. Run create or use --environment ID.');
     const run = action === 'create' && !values.environment
       ? await prepareEnvironment(store, accounts, output)
@@ -174,9 +168,8 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       if (created) output(`done - id: ${run.id}`);
       return created ? 0 : 1;
     }
-    if (action === 'test-workflows') return await runWorkflowTests(pilot, run) ? 0 : 1;
     if (action === 'test') {
-      return await runTestSuite(pilot, run) ? 0 : 1;
+      return await testRunner(pilot, run) ? 0 : 1;
     }
     if (action === 'delete') {
       const confirmed = await askDelete(run, output);
