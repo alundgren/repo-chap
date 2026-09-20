@@ -137,15 +137,16 @@ DigitalOcean resources. If Terraform state is missing or corrupt, deletion uses
 the API ownership markers. Unexpected project resources or ambiguous ownership
 stop deletion rather than selecting by a familiar name alone.
 
-`verify-clean` is read-only. It reports each category as `absent`, `unresolved`,
-`inaccessible`, or `unknown`. Only three `absent` results mean the environment
-is gone. Preserve the private operator directory until then.
+`verify-clean` is read-only. It prints `done` only after DigitalOcean, GitHub,
+and Tailscale all report that the environment is absent. Otherwise it prints
+the resource states and recovery details. Preserve the private operator
+directory until verification succeeds.
 
 ## Recovery
 
 | Saved stage | Next action |
 | --- | --- |
-| `prepared` | Preview and confirm create. |
+| `prepared` | Run create. |
 | `retained` | Diagnose over approved Tailscale SSH, resume create, or delete. |
 | `running` | Run or rerun test, inspect through approved SSH, or delete. |
 | `cleaning` or `cleanup-pending` | Restore account access and repeat delete. |

@@ -4,9 +4,10 @@ The live test has three commands: create one private environment, test it, then
 delete it. A failed test leaves the
 environment running for diagnosis. A powered-off Droplet still bills.
 
-Use a dedicated private repository. The commands never merge or change its
-default branch. Keep credentials, Terraform state, provider login data, raw
-repository evidence, and logs in the private operator directory outside Git.
+Use a dedicated private repository. Preparation may update its pilot workflow,
+but the commands never merge pull requests. Keep credentials, Terraform state,
+provider login data, raw repository evidence, and logs in the private operator
+directory outside Git.
 
 ## Prepare the test repository
 
@@ -16,9 +17,8 @@ Prepare the dedicated private repository before creating an environment:
 vp run pilot prepare-repository
 ```
 
-The command reads the repository from `operator.json` and shows the repository,
-default branch, and two fixture branches before asking for confirmation. It
-preserves other default-branch files, installs the trusted workflow at
+The command reads the repository from `operator.json`. It preserves other
+default-branch files, installs the trusted workflow at
 `.github/workflows/pilot.yml`, and creates or resets two stable branches:
 
 - `pilot-failing` contains `pilot-check.sh` that exits 1.
@@ -76,6 +76,8 @@ daemon configuration and dedicated Codex authentication, installs the pinned
 tools, runs account diagnostics, and starts Repo Chap. If creation fails after
 cloud resources may exist, it retains the environment for SSH diagnosis and
 prints the explicit delete command. Billing continues until deletion succeeds.
+Successful preparation, deletion, and cleanup verification print `done`. Create
+prints `creating...` while it works, then `done - id: ENVIRONMENT_ID`.
 
 ## 2. Test
 
@@ -119,5 +121,6 @@ deletion when Terraform state is missing. Ownership collisions and unexpected
 tagged resources stop destructive work. Repeat delete and `verify-clean` until
 DigitalOcean, GitHub, and Tailscale all report `absent`.
 
-`pilot reap --older-than 24h` previews recorded abandoned environments. Add
-`--confirm` only after checking every selected environment ID.
+`pilot reap --older-than 24h` lists recorded abandoned environments and asks for
+confirmation before deleting them. Check every selected environment ID before
+answering yes.

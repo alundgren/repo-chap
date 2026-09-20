@@ -28,7 +28,7 @@ test('DigitalOcean SSH key setup generates and reuses a private local keypair', 
   assert.equal(existing.fingerprint, created.fingerprint);
 });
 
-test('repository preparation confirms before writes and creates canonical fixture branches', async () => {
+test('repository preparation creates canonical fixture branches and prints one success line', async () => {
   const base = 'a'.repeat(40), baseTree = 'b'.repeat(40);
   const generated = ['c','d','e','f','1','2','3','4','5'].map(value => value.repeat(40));
   const calls = [];
@@ -47,32 +47,13 @@ test('repository preparation confirms before writes and creates canonical fixtur
     throw new Error(`Unexpected GitHub call ${method} ${path}`);
   } };
   const output = [];
-  assert.equal(await prepareRepository(accounts, 'example-team/pilot-test', text => output.push(text), async plan => {
-    assert.deepEqual(plan, { repository: 'example-team/pilot-test', defaultBranch: 'main', defaultHead: base, failingHead: null, repairedHead: null });
-    return true;
-  }), true);
+  assert.equal(await prepareRepository(accounts, 'example-team/pilot-test', text => output.push(text)), true);
   const writes = calls.filter(call => call.method !== 'GET');
   assert.ok(writes.some(call => call.method === 'PATCH' && call.path.endsWith('/heads/main') && call.body.force === false));
   assert.deepEqual(writes.filter(call => call.method === 'POST' && call.path.endsWith('/git/refs')).map(call => call.body.ref), [
     'refs/heads/pilot-failing', 'refs/heads/pilot-repaired',
   ]);
-  assert.match(output.join('\n'), /pilot-failing [a-f0-9]{40}/);
-  assert.match(output.join('\n'), /pilot-repaired [a-f0-9]{40}/);
-});
-
-test('repository preparation cancellation makes no GitHub writes', async () => {
-  const accounts = { gh: async (path, method = 'GET') => {
-    assert.equal(method, 'GET');
-    if (path === 'repos/example-team/pilot-test') return { private: true, permissions: { admin: true }, default_branch: 'main' };
-    if (path.endsWith('/git/ref/heads/main')) return { object: { sha: 'a'.repeat(40) } };
-    if (path.includes('/git/commits/')) return { tree: { sha: 'b'.repeat(40) } };
-    if (path.includes('?recursive=1')) return { tree: [], truncated: false };
-    if (path.endsWith('/git/matching-refs/heads/pilot-')) return [];
-    throw new Error(`Unexpected GitHub call ${path}`);
-  } };
-  const output = [];
-  assert.equal(await prepareRepository(accounts, 'example-team/pilot-test', text => output.push(text), async () => false), false);
-  assert.deepEqual(output, ['Repository preparation cancelled.']);
+  assert.deepEqual(output, ['done']);
 });
 
 test('pilot SSH uses OpenSSH with a private environment host-key file', async t => {
@@ -181,7 +162,26 @@ test('inaccessible status never reports absent or mutates resources', async t =>
   assert.equal((await f.pilot.verify(f.run)).digitalocean.state, 'inaccessible');
   assert.ok(!f.state.calls.some(c => c.startsWith('DELETE') || c.startsWith('terraform')));
   assert.equal(await main(['status','--root', f.root,'--environment',f.run.id], f.accounts, text => f.state.output.push(text)), 1);
+  assert.deepEqual(f.state.output, [
+    `id: ${f.run.id}`,
+    'droplet: inaccessible',
+    'github: absent',
+    'tailscale: absent',
+  ]);
   assert.ok(!f.state.calls.some(c => c.startsWith('terraform')));
+});
+test('running status prints a compact resource summary', async t => {
+  const f = await fixture(t); f.create();
+  f.run.stage = 'running';
+  f.state.runners = [{ id: 201, name: f.run.name, labels: [{ name: f.run.name }] }];
+  await f.store.save(f.run);
+  assert.equal(await main(['status','--root',f.root,'--environment',f.run.id], f.accounts, text => f.state.output.push(text)), 0);
+  assert.deepEqual(f.state.output, [
+    `id: ${f.run.id}`,
+    'droplet: running',
+    'github: connected',
+    'tailscale: connected',
+  ]);
 });
 test('diagnostics redact arbitrary messages and cloud-init contains only limited bootstrap credential', async t => {
   const f = await fixture(t); f.create();
@@ -215,13 +215,13 @@ test('create verifies configuration and provisions in one invocation', async t =
   assert.equal(await main(['create', '--root', f.root], f.accounts, text => f.state.output.push(text)), 0);
   assert.ok(f.state.calls.includes('terraform version'));
   assert.equal((await f.store.runs()).length, 2);
-  assert.match(f.state.output.join('\n'), /Environment [a-f0-9]{24}: running/);
+  assert.match(f.state.output.join('\n'), /creating\.\.\.\ndone - id: [a-f0-9]{24}/);
 });
 test('pilot root can come from the environment and --root takes precedence', async t => {
   const f = await fixture(t);
   f.create();
-  assert.equal(await main(['status', '--environment', f.run.id], f.accounts, () => {}, { REPO_CHAP_PILOT_ROOT: f.root }), 1);
-  assert.equal(await main(['status', '--root', f.root, '--environment', f.run.id], f.accounts, () => {}, { REPO_CHAP_PILOT_ROOT: 'relative' }), 1);
+  assert.equal(await main(['status', '--environment', f.run.id], f.accounts, () => {}, { REPO_CHAP_PILOT_ROOT: f.root }), 0);
+  assert.equal(await main(['status', '--root', f.root, '--environment', f.run.id], f.accounts, () => {}, { REPO_CHAP_PILOT_ROOT: 'relative' }), 0);
   assert.equal(await main(['status', '--environment', f.run.id], f.accounts, () => {}, { REPO_CHAP_PILOT_ROOT: 'relative' }), 64);
 });
 test('create saves the current environment and prints its ID', async t => {
@@ -237,7 +237,7 @@ test('create saves the current environment and prints its ID', async t => {
   assert.equal(await main(['create', '--root', f.root], f.accounts, text => f.state.output.push(text)), 0);
   const id = await f.store.current();
   assert.match(id, /^[a-f0-9]{24}$/);
-  assert.ok(f.state.output.includes(`Environment ID: ${id}`));
+  assert.deepEqual(f.state.output.slice(-2), ['creating...', `done - id: ${id}`]);
 });
 test('created label uses minutes today and a local date otherwise', () => {
   const now = new Date(2026, 8, 20, 12, 0);
@@ -257,14 +257,23 @@ test('Ctrl-C during create retains resources for diagnosis and explicit deletion
   assert.equal((await f.store.load(f.run.id)).stage, 'retained');
   assert.ok(!f.state.calls.some(c => c.startsWith('terraform destroy')));
 });
-test('reaper previews, then refuses incomplete ownership markers', async t => {
+test('reaper confirms deletion, then refuses incomplete ownership markers', async t => {
   const f = await fixture(t); f.create();
   const args = ['reap','--root',f.root,'--older-than','24h'];
-  assert.equal(await main(args, f.accounts, () => {}), 0);
+  const cancelled = [];
+  assert.equal(await main(args, f.accounts, text => cancelled.push(text), process.env, undefined, async () => false), 1);
+  assert.deepEqual(cancelled, [`Selected environments: ${f.run.id}`, 'Deletion cancelled.']);
   assert.equal(f.state.droplets.length, 1);
   f.state.droplets[0].tags = [f.run.name];
-  assert.equal(await main([...args,'--confirm'], f.accounts, () => {}), 1);
+  assert.equal(await main(args, f.accounts, () => {}, process.env, undefined, async () => true), 1);
   assert.equal(f.state.droplets.length, 1);
+});
+
+test('reaper prints done after confirmed deletion', async t => {
+  const f = await fixture(t); f.create();
+  const output = [];
+  assert.equal(await main(['reap','--root',f.root,'--older-than','24h'], f.accounts, text => output.push(text), process.env, undefined, async () => true), 0);
+  assert.deepEqual(output, [`Selected environments: ${f.run.id}`, 'done']);
 });
 test('command deadlines kill hung children and suppress secret output', async () => {
   await assert.rejects(command(process.execPath, ['-e', 'console.error("fictional-secret");setInterval(()=>{},1000)'], { timeout: 30 }), error => !error.message.includes('fictional-secret') && /timed out/.test(error.message));
@@ -435,9 +444,13 @@ test('fixed suite reconciles a lost dispatch response without sending the job tw
 });
 test('delete removes the environment and verifies absence in one invocation', async t => {
   const f = await integrationFixture(t);
-  assert.equal(await main(['delete', '--root', f.root, '--environment', f.run.id], f.accounts, text => f.state.output.push(text)), 0);
+  const output = [];
+  assert.equal(await main(['delete', '--root', f.root, '--environment', f.run.id], f.accounts, text => output.push(text)), 0);
+  assert.deepEqual(output, ['done']);
   assert.equal(f.state.droplets.length, 0);
-  assert.equal(await main(['verify-clean', '--root', f.root, '--environment', f.run.id], f.accounts, () => {}), 0);
+  output.length = 0;
+  assert.equal(await main(['verify-clean', '--root', f.root, '--environment', f.run.id], f.accounts, text => output.push(text)), 0);
+  assert.deepEqual(output, ['done']);
 });
 test('commands use the current environment and confirmed delete clears it', async t => {
   const f = await integrationFixture(t);

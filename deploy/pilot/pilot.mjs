@@ -18,7 +18,7 @@ const help = `Usage:
   vp run pilot test [--root /absolute/private/directory] [--environment ID]
   vp run pilot delete [--root /absolute/private/directory] [--environment ID]
   vp run pilot <status|ssh|verify-clean> [--root /absolute/private/directory] [--environment ID]
-  vp run pilot reap [--root /absolute/private/directory] --older-than 24h [--confirm]
+  vp run pilot reap [--root /absolute/private/directory] --older-than 24h
 
 create provisions a new environment, or resumes the named environment. test runs
 each scenario once, stops on failure, and leaves the environment available. delete
@@ -50,14 +50,10 @@ async function confirmDeletion(run, output) {
   finally { prompt.close(); }
 }
 
-async function confirmRepository(plan, output) {
+async function confirmReap(runs, output) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
-  output(`Repository: ${plan.repository}`);
-  output(`Default branch: ${plan.defaultBranch}`);
-  output(`Fixture branches: pilot-failing, pilot-repaired`);
-  output('The workflow file on the default branch will be added or refreshed if needed.');
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
-  try { return /^y(?:es)?$/i.test((await prompt.question('Prepare these branches? [y/N] ')).trim()); }
+  try { return /^y(?:es)?$/i.test((await prompt.question('Delete? [y/N] ')).trim()); }
   finally { prompt.close(); }
 }
 
@@ -103,12 +99,12 @@ async function prepareEnvironment(store, accounts, output) {
   return run;
 }
 
-export async function main(argv, accounts = new Accounts(), output = console.log, env = process.env, askDelete = confirmDeletion, askPrepare = confirmRepository) {
+export async function main(argv, accounts = new Accounts(), output = console.log, env = process.env, askDelete = confirmDeletion, askReap = confirmReap) {
   let parsed;
   try {
     parsed = parseArgs({ args: argv, allowPositionals: true, options: {
       root: { type: 'string' }, environment: { type: 'string' },
-      'older-than': { type: 'string' }, confirm: { type: 'boolean' }, help: { type: 'boolean' },
+      'older-than': { type: 'string' }, help: { type: 'boolean' },
     } });
   } catch { output(help); return 64; }
   const { values, positionals } = parsed;
@@ -117,7 +113,6 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   if (values.help) { output(help); return 0; }
   if (positionals.length !== 1 || !root || !isAbsolute(root) ||
       !['create', 'prepare-repository', 'test', 'delete', 'status', 'ssh', 'verify-clean', 'reap'].includes(action) ||
-      values.confirm && action !== 'reap' ||
       values['older-than'] && action !== 'reap' || ['reap', 'prepare-repository'].includes(action) && values.environment) {
     output(help); return 64;
   }
@@ -133,7 +128,7 @@ export async function main(argv, accounts = new Accounts(), output = console.log
   process.on('SIGTERM', interrupt);
   try {
     await privateDirectory(store.root, action === 'create' && !values.environment);
-    const writes = ['create', 'prepare-repository', 'test', 'delete'].includes(action) || action === 'reap' && values.confirm;
+    const writes = ['create', 'prepare-repository', 'test', 'delete', 'reap'].includes(action);
     if (writes) {
       const path = join(store.root, '.pilot.lock');
       try { lock = await open(path, 'wx', 0o600); await lock.writeFile(String(process.pid)); }
@@ -145,7 +140,8 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       const cutoff = Math.floor(Date.now() / 1000) - +match[1] * 3600;
       const runs = (await store.runs()).filter(run => run.created <= cutoff && run.stage !== 'clean');
       output(`Selected environments: ${runs.map(run => run.id).join(', ') || 'none'}`);
-      if (!values.confirm) { output('Preview only. Add --confirm to delete these environments.'); return 0; }
+      if (!runs.length) { output('done'); return 0; }
+      if (!await askReap(runs, output)) { output('Deletion cancelled.'); return 1; }
       pilot.signal = undefined;
       let ok = true;
       for (const run of runs) {
@@ -154,12 +150,13 @@ export async function main(argv, accounts = new Accounts(), output = console.log
         if (await pilot.cleanup(run)) await store.clearCurrent(run.id);
         else ok = false;
       }
+      if (ok) output('done');
       return ok ? 0 : 1;
     }
     if (action === 'prepare-repository') {
       const config = JSON.parse(await privateRead(join(store.root, 'operator.json')));
       if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.repository)) throw new PilotError('Select one private repository in operator.json');
-      return await prepareRepository(accounts, config.repository, output, askPrepare) ? 0 : 1;
+      return await prepareRepository(accounts, config.repository, output) ? 0 : 1;
     }
     const selectedEnvironment = values.environment ?? (!['create', 'reap', 'prepare-repository'].includes(action) ? await store.current() : null);
     if (!['create', 'reap', 'prepare-repository'].includes(action) && !selectedEnvironment)
@@ -170,9 +167,9 @@ export async function main(argv, accounts = new Accounts(), output = console.log
     if (!run) return 0;
     if (action === 'create') {
       await store.select(run.id);
-      output(`Environment ID: ${run.id}`);
+      output('creating...');
       const created = await pilot.up(run, { retainOnFailure: true });
-      if (created) output(`Environment ${run.id}: running`);
+      if (created) output(`done - id: ${run.id}`);
       return created ? 0 : 1;
     }
     if (action === 'test') {
@@ -186,9 +183,17 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       pilot.signal = undefined;
       const cleaned = await pilot.cleanup(run);
       if (cleaned) await store.clearCurrent(run.id);
+      if (cleaned) output('done');
       return cleaned ? 0 : 1;
     }
-    if (action === 'status' || action === 'verify-clean') return pilot.report(run, await pilot.verify(run)) ? 0 : 1;
+    if (action === 'status') return pilot.status(run, await pilot.verify(run)) ? 0 : 1;
+    if (action === 'verify-clean') {
+      const result = await pilot.verify(run);
+      const clean = [result.digitalocean, result.github, result.tailscale].every(value => value.state === 'absent');
+      if (clean) output('done');
+      else pilot.report(run, result);
+      return clean ? 0 : 1;
+    }
     if (action === 'ssh') { output(await pilot.ssh(run, undefined, undefined, 3600000)); return 0; }
   } catch (error) {
     output(action === 'test'
