@@ -3,4 +3,4 @@ export { readExecutionPolicy, validatePolicy, permittedPath, ExecutionError } fr
 export { putArtifact, readArtifact, readRepairResult } from './artifacts.js';
 export { validateTestedCandidate } from './receipts.js';
 export { captureRepairSource, restoreRepairSource } from './source.js';
-export type { RepairJob, RepairResult, ExecutionPolicy, CheckCommand, CheckReceipt, Candidate, RepairStop, ThreadDecision, ArtifactRef } from './types.js';
+export type { ReviewEvidence, RepairJob, RepairResult, ExecutionPolicy, CheckCommand, CheckReceipt, Candidate, RepairStop, ThreadDecision, ArtifactRef } from './types.js';

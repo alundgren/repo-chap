@@ -6,10 +6,14 @@ export interface CheckCommand { id: string; executable: string; args: string[]; 
 export interface ExecutionPolicy {
   schemaVersion: 1; allowedPaths: string[]; excludedPaths: string[]; requiredChecks: CheckCommand[];
 }
+export interface ReviewEvidence {
+  actionId: string; packageDigest: string; evidenceDigest: string; headSha: string; baseSha: string; payload: unknown;
+}
 export interface RepairJob {
   schemaVersion: 1; runId: string; attemptId: string; ownershipToken: string; deadline: string;
   repositoryId: string; pullRequestId: string; headSha: string; baseSha: string;
   package: WorkflowPackage; inspection: Inspection; actionId: string;
+  review?: ReviewEvidence;
   profile: string; profileDigest: string; policy: ExecutionPolicy; policyDigest: string;
 }
 export interface ArtifactRef { id: string; digest: string; bytes: number; kind: 'job' | 'result' | 'source' | 'bundle' | 'patch' | 'log' }

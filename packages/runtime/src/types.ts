@@ -75,6 +75,7 @@ export interface AnalysisResult {
   schemaVersion: 1; job: AnalysisJob; provider: ProviderResult;
 }
 export interface RepairAttemptJob extends Omit<AnalysisJob, 'sources'> {
+  review?: ArtifactRef;
   kind: 'repair'; sources: ExecutionArtifact; policy: ExecutionPolicy; policyDigest: string; applyPolicyDigest: string;
 }
 export interface RepairAttemptResult { schemaVersion: 1; job: RepairAttemptJob; repair: RepairResult; reference: ExecutionArtifact }

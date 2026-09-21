@@ -22,7 +22,8 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/repo-chap /var/lib/repo-chap-home
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Codex bubblewrap needs netlink to configure its isolated loopback interface.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 LimitNOFILE=4096
 
 [Install]

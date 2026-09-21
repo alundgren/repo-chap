@@ -2,6 +2,13 @@ import { join } from 'node:path';
 import { privateRead, writePrivate } from './store.mjs';
 import { PilotError } from './io.mjs';
 
+export function validateSelection(config) {
+  if (!config || !/^T[A-Z0-9]+$/.test(config.workspaceId ?? '') || !/^[CG][A-Z0-9]+$/.test(config.channelId ?? '') ||
+      config.workspaceId === 'TSELECT' || config.channelId === 'CSELECT' || !/^[A-Za-z0-9_-]+$/.test(config.profile ?? ''))
+    throw new PilotError('Complete pilotConfig.workspaceId, pilotConfig.channelId and pilotConfig.profile in operator.json before create. Use the Slack workspace, destination channel and an installed provider profile.');
+  return config;
+}
+
 export const pilotCapabilities = ['workspace.read', 'workspace.write', 'checks.run', 'pr.push', 'notify.send'];
 
 // Build the transferred configuration from account inputs. The operator does

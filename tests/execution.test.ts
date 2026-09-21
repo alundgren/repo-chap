@@ -249,3 +249,24 @@ for (const mode of ['blocked', 'no_change', 'keep_head']) test(`CI repair handle
     assert.equal(result.candidate, undefined); assert.equal(result.requiredChecksPassed, false);
   } finally { await s.cleanup(); }
 });
+
+
+for (const stale of [false, true]) test(`review findings without GitHub threads ${stale ? 'reject stale evidence' : 'produce a tested repair'}`, async () => {
+  const s = await setup();
+  try {
+    s.inspection.evidence.threads.items = [];
+    s.inspection.evidenceDigest = digest(canonicalJson(s.inspection.evidence));
+    s.inspection.fixture.observations[0]!.evidenceDigest = s.inspection.evidenceDigest;
+    const review = { actionId: 'review', packageDigest: s.pkg.digest, evidenceDigest: s.inspection.evidenceDigest, headSha: stale ? 'f'.repeat(40) : s.head, baseSha: s.base,
+      payload: { schemaVersion: 1, headSha: s.head, baseSha: s.base, summary: 'Value must be three.', coverage: 'complete', verdict: 'blocking', missingEvidence: [],
+        findings: [{ id: 'value', kind: 'bug', confidence: 1, severity: 'high', title: 'Incorrect value', reason: 'The value must be three.', evidence: [{ path: 'src/value.js', side: 'head', startLine: 1, endLine: 1, explanation: 'The exported value is incorrect.' }] }] } };
+    const create = () => createRepairJob(s.pkg, s.inspection, s.profile, s.policy, 'address', { review });
+    if (stale) { assert.throws(create, /Review evidence/); return; }
+    const { result } = await runRepair(create(), s.options);
+    assert.equal(result.status, 'candidate', result.diagnostic);
+    assert.equal(result.requiredChecksPassed, true);
+    assert.deepEqual(result.payload!.threads, []);
+    const invocation = JSON.parse(await readFile(s.marker, 'utf8'));
+    assert.deepEqual(invocation.input.evidence.review, review);
+  } finally { await s.cleanup(); }
+});

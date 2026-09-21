@@ -160,7 +160,7 @@ test('one repository provider failure does not stop another repository analysis'
     assert.equal(store.runs('R_paperboat')[0]!.status, 'waiting'); assert.equal(store.runs('R_sailboat')[0]!.control.memory?.classificationCurrent, true);
   } finally { await service.stop(); store.close(); await s.cleanup(); }
 });
-test('foreground daemon starts with private App settings and recovers its socket after SIGKILL', async () => {
+test('foreground daemon starts with private App settings and recovers its socket after SIGKILL', { skip: process.platform !== 'linux' }, async () => {
   const s = await setup(), directory = join(s.temporary, 'daemon');
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const keyFile = join(s.temporary, 'app.pem'), config = join(s.temporary, 'installation.json'), preload = join(s.temporary, 'network.mjs');
@@ -171,7 +171,7 @@ test('foreground daemon starts with private App settings and recovers its socket
     const input=JSON.parse(options.body); if(!input.query.startsWith('query '))throw Error('Remote mutation forbidden');return Response.json({data:{repository:{id:'R_paperboat',nameWithOwner:'reef-labs/paperboat',isPrivate:true,pullRequests:{nodes:[],pageInfo:{hasNextPage:false,endCursor:null}}}}});};`, { mode: 0o600 });
   const start = async () => {
     const child = spawn(process.execPath, ['--import', preload, cli, 'daemon', 'start', '--state-dir', directory, '--config', config, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
-    await new Promise<void>((resolve, reject) => { child.stdout.once('data', bytes => { try { assert.equal(JSON.parse(String(bytes)).status, 'started'); resolve(); } catch (e) { reject(e); } }); child.once('exit', code => reject(new Error(`Daemon exited ${code}`))); child.once('error', reject); });
+    await new Promise<void>((resolve, reject) => { child.stdout.once('data', bytes => { try { assert.equal(JSON.parse(String(bytes)).status, 'started', String(bytes)); resolve(); } catch (e) { reject(e); } }); child.once('exit', code => reject(new Error(`Daemon exited ${code}`))); child.once('error', reject); });
     return child;
   };
   let child: ReturnType<typeof spawn> | undefined;

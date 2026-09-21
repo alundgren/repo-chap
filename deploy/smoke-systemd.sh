@@ -37,6 +37,8 @@ chown -R repo-chap:repo-chap /etc/repo-chap /var/lib/repo-chap-home
 mkdir -p /etc/systemd/system/repo-chap.service.d /etc/systemd/system/repo-chap-diagnostics.service.d
 printf '[Service]\nEnvironment=NODE_OPTIONS=--import=/opt/preload.mjs\n' > /etc/systemd/system/repo-chap.service.d/fixture.conf
 cp /etc/systemd/system/repo-chap.service.d/fixture.conf /etc/systemd/system/repo-chap-diagnostics.service.d/fixture.conf
+# Exercise a netlink socket under the daemon's actual service restrictions.
+printf '[Service]\nExecStartPre=/usr/sbin/ip link show lo\n' > /etc/systemd/system/repo-chap.service.d/netlink.conf
 systemctl daemon-reload
 systemctl enable --now repo-chap.service
 cli() { sudo -u repo-chap -H env PATH=/opt/repo-chap/bin:/usr/local/bin:/usr/bin:/bin NODE_OPTIONS=--import=/opt/preload.mjs /opt/repo-chap/current/repo-chap "$@"; }

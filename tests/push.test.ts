@@ -8,7 +8,8 @@ import { generateKeyPairSync } from 'node:crypto';
 import { canonicalJson, digest, buildPackage } from '@repo-chap/workflow';
 import { conditionalPush, localPushTransport, githubPushTransport, reconcilePush, tokenCredentials, installationCredentials, installationPushCredentials, type PushRequest, type PushTarget, type PushTransport } from '@repo-chap/github';
 import { captureRepairSource, runRepair, restoreCandidate, validateTestedCandidate } from '@repo-chap/execution';
-import { RuntimeStore, type ApplyPolicy, type RepairAttemptJob } from '@repo-chap/runtime';
+import { collectSources } from '@repo-chap/providers';
+import { RuntimeStore, type AnalysisJob, type ApplyPolicy, type RepairAttemptJob } from '@repo-chap/runtime';
 import { DaemonService, executeRepair, profileDigest, serveControl } from '@repo-chap/daemon';
 import { repairFixture } from './helpers/repair-fixture.ts';
 import { git } from './helpers/provider-fixture.ts';
@@ -98,17 +99,37 @@ test('temporary credential and final-read failures permit bounded retry of the s
   } finally { await s.cleanup(); }
 });
 
-async function daemonFixture(mode = 'valid', maxRepairs = 2, ci = false) {
+async function daemonFixture(mode = 'valid', maxRepairs = 2, ci = false, localReview = false) {
   const s = await repairFixture('codex', mode, false, ci), remotePath = await bare(s), directory = join(s.temporary, 'state');
   const files = Object.fromEntries(s.pkg.files.map(file => [file.path, file.text])), workflow = JSON.parse(files[s.pkg.workflowPath]!);
   workflow.settings.newPrDelaySeconds = 0; workflow.settings.headDebounceSeconds = 0; workflow.limits.maxRepairsPerLifecycle = maxRepairs;
   workflow.actions.push_candidate.onSuccess = '$observe'; delete workflow.actions.resolve_threads; files[s.pkg.workflowPath] = JSON.stringify(workflow); s.pkg = buildPackage(s.pkg.workflowPath, files);
+  if (localReview) {
+    workflow.actions.classify.onSuccess = 'review';
+    workflow.actions.review.onSuccess = 'address'; workflow.limits.maxAttemptsPerHead = 4;
+    files[s.pkg.workflowPath] = JSON.stringify(workflow); s.pkg = buildPackage(s.pkg.workflowPath, files);
+    s.inspection.evidence.threads.items = [];
+    s.inspection.evidenceDigest = digest(canonicalJson(s.inspection.evidence));
+    s.inspection.fixture.observations[0]!.evidenceDigest = s.inspection.evidenceDigest;
+    s.inspection.fixture.observations[0]!.facts.unaddressedReview = false;
+  }
   s.inspection.packageDigest = s.pkg.digest; s.profile.maxAttempts = 2;
   if (mode === 'increment') s.policy.requiredChecks[0]!.args = ['-e', 'const fs=require("node:fs");if(!/value = [3-9]/.test(fs.readFileSync("src/value.js","utf8")))process.exit(9)'];
   const policy: ApplyPolicy = { schemaVersion: 1, repository: 'reef-labs/paperboat', capabilities: ['workspace.write', 'checks.run', 'pr.push'], maxRepairsPerLifecycle: maxRepairs, maxPushAttempts: 2, execution: s.policy };
   let store = await RuntimeStore.open(directory), enabled = true, sends = 0, response: 'accepted' | 'unknown' | 'old' = 'accepted';
   const fake = remote(s.inspection), jobs: RepairAttemptJob[] = [];
   const dependencies = { directory, credentials: tokenCredentials('fictional-read-token'), profile: async () => s.profile, readOptions: { fetch: fake.fetch },
+    ...(localReview ? {
+      sources: async () => collectSources(s.repository, s.head, s.base),
+      execute: async (job: AnalysisJob) => {
+        const result = completed(job);
+        if (job.actionId === 'review') Object.assign(result.provider.payload as object, { verdict: 'blocking', findings: [
+          { id: 'value', kind: 'bug', severity: 'high', confidence: 1, title: 'Incorrect value', reason: 'Use value three.',
+            evidence: [{ path: 'src/value.js', side: 'head', startLine: 1, endLine: 1, explanation: 'Value is two.' }] },
+        ] });
+        return result;
+      },
+    } : {}),
     applyPolicy: async () => enabled ? policy : null,
     repairSources: async (_repo: string, inspection: typeof s.inspection, signal: AbortSignal) => captureRepairSource(remotePath, inspection.evidence.pullRequest!.headSha, inspection.evidence.pullRequest!.baseSha, join(directory, 'repairs'), signal),
     repair: async (job: RepairAttemptJob, profile: typeof s.profile, signal: AbortSignal, isCurrent: () => boolean) => { jobs.push(job); return executeRepair(job, { artifacts: store.artifacts, profile, artifactDirectory: join(directory, 'repairs'), workerDirectory: join(directory, 'workers'), signal, isCurrent }); },
@@ -433,5 +454,23 @@ test('daemon resumes CI repair after restart and keeps the repair limit across i
     s.store.pollFinished(s.repo.id, 0, null); await s.restart(); await s.tick();
     assert.equal(s.jobs.length, 1); assert.equal(s.store.run(run.id).control.repairsThisLifecycle, 1);
     assert.match(s.store.run(run.id).reason, /repair limit/i);
+  } finally { await s.cleanup(); }
+});
+
+
+test('daemon passes its accepted review into a durable repair without GitHub threads', async () => {
+  const s = await daemonFixture('valid', 2, false, true);
+  try {
+    for (let tick = 0; tick < 5 && !s.jobs.length; tick++) await s.tick();
+    assert.equal(s.jobs.length, 1, s.store.runs()[0]?.reason);
+    assert.ok(s.jobs[0]!.review);
+    const run = s.store.runs()[0]!;
+    assert.ok(run.repair, run.reason);
+    const result = await s.store.readRepair(run.repair!.result);
+    assert.equal(result.status, 'candidate', result.diagnostic);
+    assert.equal(result.requiredChecksPassed, true);
+    assert.deepEqual(result.payload!.threads, []);
+    await s.restart();
+    assert.deepEqual(s.store.run(run.id).repair!.job.review, s.jobs[0]!.review);
   } finally { await s.cleanup(); }
 });
