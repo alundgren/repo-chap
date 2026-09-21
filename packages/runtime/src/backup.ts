@@ -114,6 +114,7 @@ async function validateReferences(root: string, files: SavedFile[], schema: stri
     return path;
   };
   const job = (value: AnalysisJob | RepairAttemptJob): void => {
+    if ('kind' in value && value.kind === 'repair' && value.review) reference(value.review, 'artifacts');
     reference(value.package, 'artifacts'); reference(value.inspection, 'artifacts'); reference(value.sources, 'kind' in value && value.kind === 'repair' ? 'repairs' : 'artifacts');
   };
   const repair = (ref: ExecutionArtifact): void => { repairs.add(reference(ref, 'repairs')); };

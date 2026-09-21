@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { PilotError } from './io.mjs';
 import { privateRead, writePrivate } from './store.mjs';
+import { validateSelection } from './configuration.mjs';
 import { validateInputs } from './remote.mjs';
 import { prepareRepository, prepareWorkflowFixtures, workflowPath } from './repository.mjs';
 
@@ -11,13 +12,6 @@ export async function confirmPilot(message, output) {
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try { return /^y(?:es)?$/i.test((await prompt.question('Confirm? [y/N] ')).trim()); }
   finally { prompt.close(); }
-}
-
-export function validateSelection(config) {
-  if (!config || !/^T[A-Z0-9]+$/.test(config.workspaceId ?? '') || !/^[CG][A-Z0-9]+$/.test(config.channelId ?? '') ||
-      !/^[A-Za-z0-9_-]+$/.test(config.profile ?? ''))
-    throw new PilotError('Select pilotConfig.workspaceId, channelId and provider profile in operator.json before create');
-  return config;
 }
 
 export async function daemon(pilot, run, command) {
@@ -30,7 +24,8 @@ const selectedRepo = (status, run) => status.repositories.find(repo => repo.name
 
 export async function preflight(pilot, run) {
   if (run.stage !== 'running') throw new PilotError('The environment must be running');
-  validateSelection(run.pilotConfig);
+  try { validateSelection(run.pilotConfig); }
+  catch { throw new PilotError('This environment has no valid pilot test settings. Complete pilotConfig in operator.json, then delete this environment and create a new one so the host receives the generated repair policy.'); }
   await validateInputs(run);
   const info = await pilot.accounts.gh(`repos/${run.repository}`);
   if (info.id !== run.repositoryId || !info.private || !info.permissions?.admin) throw new PilotError('Repository access or identity changed');
@@ -43,9 +38,18 @@ export async function preflight(pilot, run) {
   if (!installation.slack?.enabled || installation.slack.workspaceId !== run.pilotConfig.workspaceId) throw new PilotError('Slack installation does not match the selected workspace');
   const token = String(await privateRead(join(run.configDirectory, installation.slack.tokenFile.slice('/etc/repo-chap/'.length)))).trim();
   const auth = await pilot.accounts.io.request('https://slack.com/api/auth.test', { method: 'POST', token });
+  if (!auth.ok) throw new PilotError('Slack authentication failed. Check the configured bot token.');
+  if (auth.team_id !== run.pilotConfig.workspaceId) throw new PilotError('Slack bot token belongs to a different workspace');
   const channel = await pilot.accounts.io.request(`https://slack.com/api/conversations.info?channel=${run.pilotConfig.channelId}`, { token });
-  if (!auth.ok || auth.team_id !== run.pilotConfig.workspaceId || !channel.ok || !channel.channel?.is_member || channel.channel.is_archived)
-    throw new PilotError('Slack bot must belong to the selected workspace and channel');
+  if (!channel.ok) {
+    if (channel.error === 'missing_scope')
+      throw new PilotError('Slack channel lookup failed: missing_scope. Add channels:read for a public channel or groups:read for a private channel under OAuth & Permissions > Bot Token Scopes, then reinstall the app to the workspace.');
+    if (channel.error === 'channel_not_found')
+      throw new PilotError('Slack cannot access the selected channel. Check pilotConfig.channelId and invite the configured bot to that channel.');
+    throw new PilotError('Slack channel lookup failed. Check the bot token and channel access, then retry.');
+  }
+  if (!channel.channel?.is_member) throw new PilotError('Slack bot is not a member of the selected channel. Invite the configured bot to that channel.');
+  if (channel.channel.is_archived) throw new PilotError('The selected Slack channel is archived. Select an active pilot channel.');
   await pilot.ssh(run, 'sudo -u repo-chap -H env CODEX_HOME=/var/lib/repo-chap-home/pilot-codex /opt/repo-chap/current/repo-chap daemon diagnose --state-dir /var/lib/repo-chap --config /etc/repo-chap/installation.json --json >/dev/null');
   const status = await daemon(pilot, run, 'status');
   if (status.mode !== 'apply' || !status.slackEnabled || status.recovery?.paused) throw new PilotError('Daemon must have apply and Slack delivery enabled and recovery released');

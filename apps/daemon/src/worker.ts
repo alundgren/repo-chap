@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { canonicalJson, digest, buildPackage, type WorkflowPackage } from '@repo-chap/workflow';
 import { prepareCaptureDirectory, type CredentialSource, type Inspection } from '@repo-chap/github';
 import { collectSources, runProcess, runProvider, type ProviderProfile, type SourceBundle } from '@repo-chap/providers';
-import { captureRepairSource, restoreRepairSource, createRepairJob, runRepair, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
+import { captureRepairSource, restoreRepairSource, createRepairJob, runRepair, type ReviewEvidence, type ArtifactRef as ExecutionArtifact } from '@repo-chap/execution';
 import { ArtifactStore, RuntimeError, type AnalysisJob, type AnalysisResult, type RepairAttemptJob, type RepairAttemptResult } from '@repo-chap/runtime';
 
 export const profileDigest = (profile: ProviderProfile): string => digest(canonicalJson(profile));
@@ -64,10 +64,20 @@ export async function executeRepair(job: RepairAttemptJob, options: {
   if (pkg.digest !== saved.packageDigest || inspection.packageDigest !== saved.packageDigest || inspection.evidence.repository?.id !== saved.repositoryId ||
     inspection.evidence.pullRequest?.id !== saved.subjectId || inspection.evidence.pullRequest?.headSha !== saved.headSha || inspection.evidence.pullRequest?.baseSha !== saved.baseSha ||
     digest(canonicalJson({ head: saved.headSha, base: saved.baseSha, evidence: inspection.evidenceDigest })) !== saved.evidenceKey) throw new RuntimeError('Repair inputs do not match the durable job.');
+  let review: ReviewEvidence | undefined;
+  if (saved.review) {
+    const accepted = await options.artifacts.get<AnalysisResult>(saved.review);
+    if (accepted.provider.outcome !== 'completed' || accepted.job.runId !== saved.runId || accepted.job.repositoryId !== saved.repositoryId ||
+        accepted.job.subjectId !== saved.subjectId || accepted.job.packageDigest !== saved.packageDigest || accepted.job.evidenceKey !== saved.evidenceKey ||
+        accepted.job.headSha !== saved.headSha || accepted.job.baseSha !== saved.baseSha || pkg.workflow.actions[accepted.job.actionId]?.uses !== 'agent.review')
+      throw new RuntimeError('Accepted review does not match the reserved repair.');
+    review = { actionId: accepted.job.actionId, packageDigest: saved.packageDigest, evidenceDigest: inspection.evidenceDigest,
+      headSha: saved.headSha, baseSha: saved.baseSha, payload: accepted.provider.payload };
+  }
   const root = await prepareCaptureDirectory(options.workerDirectory), source = await mkdtemp(join(root, 'repair-source-'));
   try {
     await restoreRepairSource(options.artifactDirectory, saved.sources, source, options.signal);
-    const execution = createRepairJob(pkg, inspection, options.profile, saved.policy, saved.actionId, { runId: saved.runId, attemptId: saved.attemptId, ownershipToken: String(saved.ownershipToken), deadline: saved.deadline });
+    const execution = createRepairJob(pkg, inspection, options.profile, saved.policy, saved.actionId, { runId: saved.runId, attemptId: saved.attemptId, ownershipToken: String(saved.ownershipToken), deadline: saved.deadline, ...(review ? { review } : {}) });
     if (execution.policyDigest !== saved.policyDigest) throw new RuntimeError('Execution policy changed after reservation.');
     const value = await runRepair(execution, { sourceRepository: source, artifactDirectory: options.artifactDirectory, profile: options.profile, signal: options.signal, isCurrent: options.isCurrent, maximumProviderAttempts: 1 });
     return { schemaVersion: 1, job: saved, repair: value.result, reference: value.reference };

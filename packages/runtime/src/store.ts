@@ -489,16 +489,19 @@ export class RuntimeStore {
   reserve(claim: Claim, input: { actionId: string; sources: ArtifactRef; profile: string; profileDigest: string; package: WorkflowPackage }, now: number): AnalysisJob {
     return this.reserveAttempt(claim, input, now) as AnalysisJob;
   }
-  reserveRepair(claim: Claim, input: { actionId: string; sources: ExecutionArtifact; profile: string; profileDigest: string; package: WorkflowPackage; applyPolicy: ApplyPolicy }, now: number): RepairAttemptJob {
+  reserveRepair(claim: Claim, input: { review?: ArtifactRef; actionId: string; sources: ExecutionArtifact; profile: string; profileDigest: string; package: WorkflowPackage; applyPolicy: ApplyPolicy }, now: number): RepairAttemptJob {
     const policy = requireApplyPolicy(input.applyPolicy, this.repository(this.run(claim.runId).repositoryId).name, ['workspace.write', 'checks.run']);
     if (!policy.execution) throw new RuntimeError('Repair requires a private execution policy with required checks.');
     return this.reserveAttempt(claim, input, now, policy) as RepairAttemptJob;
   }
-  private reserveAttempt(claim: Claim, input: { actionId: string; sources: ArtifactRef; profile: string; profileDigest: string; package: WorkflowPackage }, now: number, apply?: ApplyPolicy): AnalysisJob | RepairAttemptJob {
+  private reserveAttempt(claim: Claim, input: { review?: ArtifactRef; actionId: string; sources: ArtifactRef; profile: string; profileDigest: string; package: WorkflowPackage }, now: number, apply?: ApplyPolicy): AnalysisJob | RepairAttemptJob {
     return this.transaction(() => {
       const run = this.requireCurrent(claim, now), limits = input.package.workflow.limits;
       if (run.packageDigest !== input.package.digest || this.repository(run.repositoryId).paused) throw new RuntimeError('The repository is paused or package is not current.');
       const repair = !!apply, uses = input.package.workflow.actions[input.actionId]?.uses;
+      if (input.review && (!apply || uses !== 'agent.address_review' || !run.control.memory?.reviewCurrent ||
+          !this.db.prepare('SELECT 1 FROM notes WHERE run_id=? AND revision<=? AND artifact=?').get(run.id, run.notesRevision, json(input.review))))
+        throw new RuntimeError('Repair review must be an accepted current result for this run.');
       if (!(repair ? ['agent.resolve_conflict', 'agent.address_review', 'agent.fix_ci'] : ['agent.classify', 'agent.review']).includes(uses ?? '')) throw new RuntimeError('Cannot reserve this action in the selected execution mode.');
       if (repair && this.effects(run.id).some(effect => ['github.push_candidate', 'github.resolve_eligible_threads'].includes(effect.kind) && ['sending', 'unknown'].includes(effect.state))) throw new RuntimeError('Reconcile the pending remote effect before starting another provider attempt.');
       const repairs = Number((this.db.prepare("SELECT COUNT(*) AS count FROM attempts WHERE run_id=? AND json_extract(job,'$.kind')='repair'").get(run.id) as { count: number }).count);
@@ -516,7 +519,7 @@ export class RuntimeStore {
       const job: AnalysisJob | RepairAttemptJob = { schemaVersion: 1, runId: run.id, attemptId: id, ownershipToken: claim.token, deadline: new Date(deadline).toISOString(),
         repositoryId: run.repositoryId, subjectId: run.subjectId, actionId: input.actionId, headSha: run.headSha!, baseSha: run.baseSha!, package: run.package, packageDigest: run.packageDigest,
         inspection: run.inspection, sources: input.sources, evidenceKey: run.evidenceKey, notesRevision: run.notesRevision, profile: input.profile, profileDigest: input.profileDigest, workflowVersionId: run.workflowVersionId,
-        ...(apply ? { kind: 'repair' as const, sources: input.sources as ExecutionArtifact, policy: apply.execution!, policyDigest: digest(canonicalJson(apply.execution!)), applyPolicyDigest: applyPolicyDigest(apply) } : {}) };
+        ...(apply ? { ...(input.review ? { review: input.review } : {}), kind: 'repair' as const, sources: input.sources as ExecutionArtifact, policy: apply.execution!, policyDigest: digest(canonicalJson(apply.execution!)), applyPolicyDigest: applyPolicyDigest(apply) } : {}) };
       this.db.prepare('INSERT INTO attempts VALUES (?,?,?,?,?,?,NULL)').run(id, run.id, job.headSha, claim.token, 'running', json(job));
       this.db.prepare('INSERT INTO reservations VALUES (?,?,?,?,?)').run(id, run.repositoryId, day(now), units, deadline - now);
       run.agents++; run.nextAction = input.actionId; run.control.attemptsThisHead = count.head + 1;

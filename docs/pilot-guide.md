@@ -19,7 +19,9 @@ Install the local tools and supply the account inputs described in
 [host setup](pilot-digitalocean.md). Authenticate GitHub, DigitalOcean, Tailscale
 and a dedicated provider account. Install the repository-scoped GitHub App with
 Contents write and the documented inspection permissions. Install a Slack bot
-with `chat:write` and channel-read access, and invite it to the selected channel.
+with `chat:write` and `channels:read` for a public channel or `groups:read` for a
+private channel, and invite it to the selected channel. After adding scopes,
+reinstall the app to the workspace so its token receives those permissions.
 Choose the repository, cloud region and size, provider profile, Slack workspace
 and channel. Register the generated SSH public key with DigitalOcean.
 
@@ -29,10 +31,19 @@ branches, workflows, prompts, repair policies, PRs or workflow-case files.
 ## Create
 
 `create` writes a private `operator.json` template if it is missing. Fill in the
-account selections and paths, then repeat `create`. It generates the bounded
+account selections and paths, then repeat `create`. Older operator files also
+need `pilotConfig` with `workspaceId`, `channelId` and `profile`. Use the existing
+Slack workspace ID, the destination channel ID, and a profile name from the
+provider configuration. Create checks these selections before provisioning. It generates the bounded
 pilot repair policy and provider permissions for the host, provisions the private
 VM and installs the daemon and runner. It saves the current environment so later
 commands need no ID. Repeating create resumes that environment.
+
+After pulling daemon or host-installation fixes, run `vp run build`, delete the
+old pilot environment, and create a new one. Repeating `test` reuses saved PRs
+and checkpoints; it does not reset the repository, install updated daemon code,
+or restart suppressed repairs. Delete removes unchanged pilot-owned fixtures
+before the next create and test.
 
 Environments created by the earlier manual-case workflow need deletion and a
 new create so the host receives the generated pilot policy. Existing manually

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateCases, verifyRepair, verifyDelivery } from '../deploy/pilot/workflow-tests.mjs';
+import { validateCases, verifyRepair, verifyDelivery, verifyProgress } from '../deploy/pilot/workflow-tests.mjs';
 
 const initialHead = 'a'.repeat(40), baseSha = 'b'.repeat(40), head = 'c'.repeat(40);
 const repository = 'example-team/pilot-test';
@@ -75,4 +75,15 @@ test('case configuration rejects unsafe run IDs and reused PRs', () => {
   assert.throws(() => validateCases({ ...config, conflict: config.review }));
   config.review.runId = 'run; unexpected';
   assert.throws(() => validateCases(config));
+});
+
+
+test('pilot stops on a suppressed repair but keeps waiting for active or stale work', () => {
+  const { item, details } = example();
+  Object.assign(details.run, { headSha: initialHead, status: 'waiting', nextAction: '$wait', owner: null, control: { memory: { repairSuppressed: true } } });
+  assert.throws(() => verifyProgress(details, item), /cannot continue automatically/);
+  for (const change of [{ owner: 'worker' }, { nextAction: 'handoff' }, { headSha: head }, { baseSha: head }, { evidenceAvailable: false }]) {
+    const copy = structuredClone(details); Object.assign(copy.run, change);
+    assert.doesNotThrow(() => verifyProgress(copy, item));
+  }
 });

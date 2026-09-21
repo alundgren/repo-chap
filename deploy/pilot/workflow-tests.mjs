@@ -47,6 +47,14 @@ export function verifyRepair(name, item, details, pr, repository) {
   return { head: candidate, pushId: push.id, checks: checks.map(check => check.id) };
 }
 
+export function verifyProgress(details, item) {
+  const run = details.run;
+  if (run?.id !== item.runId || run.number !== item.pr || run.baseSha !== item.baseSha || !run.evidenceAvailable) return;
+  if (run.owner) return;
+  if (run.status === 'blocked' || run.control?.memory?.repairSuppressed && run.headSha === item.initialHead && (!run.nextAction || run.nextAction === '$wait'))
+    throw new PilotError(`PR #${item.pr} cannot continue automatically. Inspect its retained repair evidence and blocked Slack handoff before retrying.`);
+}
+
 export function verifyDelivery(details, item, head, config, repository) {
   const requests = details.slack ?? [];
   if (requests.some(request => request.deliveries?.some(delivery => ['unknown', 'sending'].includes(delivery.state)))) return null;
@@ -110,6 +118,8 @@ export async function runWorkflowTests(pilot, run) {
           await pilot.store.save(run);
           passed = true; break;
         }
+        verifyProgress(details, item);
+        if (poll % 6 === 0) pilot.output(`${scenario}: waiting for tested repair and confirmed push`);
         await pilot.pause(10000);
       }
       if (!passed) throw new PilotError('Timed out waiting for tested repair and confirmed push');
@@ -157,7 +167,7 @@ export async function runWorkflowTests(pilot, run) {
       record.reason = error instanceof PilotError ? error.message : 'Cannot read workflow evidence';
       await writePrivate(path, JSON.stringify(record, null, 2) + '\n');
     }
-    pilot.output(`${scenario}: fail`);
+    pilot.output(`${scenario}: fail${error instanceof PilotError ? ` - ${error.message}` : ''}`);
     return false;
   }
 }

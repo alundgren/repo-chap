@@ -8,6 +8,7 @@ import { Accounts, PilotError } from './io.mjs';
 import { Store, privateDirectory, privateRead, writePrivate } from './store.mjs';
 import { Pilot } from './lifecycle.mjs';
 import { runAllTests } from './tests.mjs';
+import { validateSelection } from './configuration.mjs';
 import { confirmPilot } from './test-setup.mjs';
 import { validateInputs } from './remote.mjs';
 import { ensureDigitalOceanSshKey, validDigitalOceanSshFingerprint } from './digitalocean-key.mjs';
@@ -79,6 +80,7 @@ async function prepareEnvironment(store, accounts, output) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.repository) || !/^[a-z0-9-]+$/.test(config.region) ||
       !/^[a-z0-9-]+$/.test(config.size) || !validDigitalOceanSshFingerprint(config.digitalOceanSshKeyFingerprint))
     throw new PilotError('Select one private repository, region, size, and DigitalOcean SSH key fingerprint in operator.json');
+  validateSelection(config.pilotConfig);
   await validateInputs(config);
   await accounts.io.command('terraform', ['version']);
   const ts = JSON.parse(await accounts.io.command('tailscale', ['status', '--json']));
@@ -165,6 +167,7 @@ export async function main(argv, accounts = new Accounts(), output = console.log
       : await store.load(values.environment ?? selectedEnvironment);
     if (!run) return 0;
     if (action === 'create') {
+      validateSelection(run.pilotConfig);
       await store.select(run.id);
       output('creating...');
       const created = await pilot.up(run, { retainOnFailure: true });

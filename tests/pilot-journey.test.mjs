@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { writePrivate } from '../deploy/pilot/store.mjs';
 import { journey } from './pilot-journey-fixture.mjs';
 
 async function created(t) {
@@ -168,4 +169,54 @@ test('generated workflow loads through the production validator and check policy
   validateApplyPolicy(policy);
   assert.deepEqual(policy.execution.allowedPaths, ['src']);
   assert.deepEqual(policy.execution.requiredChecks[0].args, ['node', 'tests/pilot-regression.mjs']);
+});
+
+test('create rejects missing, incomplete and placeholder test selections before provisioning', async t => {
+  for (const pilotConfig of [undefined, {}, { profile: 'pilot', workspaceId: 'TSELECT', channelId: 'CSELECT' }]) {
+    const f = await journey(t);
+    const path = join(f.root, 'operator.json');
+    const config = JSON.parse(await readFile(path, 'utf8'));
+    await writePrivate(path, JSON.stringify({ ...config, pilotConfig }));
+    assert.equal(await f.invoke('create'), 1);
+    assert.match(f.state.output.join('\n'), /Complete pilotConfig/);
+    assert.equal((await f.store.runs()).length, 0);
+    assert.equal(f.state.calls.length, 0);
+  }
+});
+
+test('old environments explain recreation and cannot report successful create', async t => {
+  const f = await created(t);
+  const run = await f.store.load(f.id);
+  delete run.pilotConfig;
+  await f.store.save(run);
+  assert.equal(await f.invoke('create'), 1);
+  assert.equal(await f.invoke('test'), 1);
+  assert.match(f.state.output.join('\n'), /delete this environment and create a new one/);
+  assert.equal(f.remote.writes.length, 0);
+});
+
+
+test('Slack preflight explains API failures separately from membership and stops before mutations', async t => {
+  const cases = [
+    { auth: { ok: false, error: 'invalid_auth' }, message: /Slack authentication failed/ },
+    { auth: { ok: true, team_id: 'TOTHER' }, message: /different workspace/ },
+    { channel: { ok: false, error: 'missing_scope' }, message: /missing_scope.*channels:read.*groups:read.*reinstall/ },
+    { channel: { ok: false, error: 'channel_not_found' }, message: /cannot access the selected channel/ },
+    { channel: { ok: false, error: 'fictional-secret' }, message: /Slack channel lookup failed/ },
+    { channel: { ok: true, channel: { is_member: false } }, message: /not a member/ },
+    { channel: { ok: true, channel: { is_member: true, is_archived: true } }, message: /channel is archived/ },
+  ];
+  for (const scenario of cases) {
+    const f = await created(t);
+    const request = f.accounts.io.request;
+    f.accounts.io.request = async (url, options) => {
+      if (url.includes('slack.com/api/auth.test') && scenario.auth) return scenario.auth;
+      if (url.includes('slack.com/api/conversations.info') && scenario.channel) return scenario.channel;
+      return request(url, options);
+    };
+    assert.equal(await f.invoke('test'), 1);
+    assert.match(f.state.output.join('\n'), scenario.message);
+    assert.doesNotMatch(f.state.output.join('\n'), /fictional-secret/);
+    assert.equal(f.remote.writes.length, 0);
+  }
 });

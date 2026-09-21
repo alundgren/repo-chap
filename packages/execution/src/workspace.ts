@@ -7,18 +7,19 @@ import { collectSources, runProcess, runProvider, validateProfile, type Provider
 import { artifactLimit, putArtifact, putJson, readArtifact, readRepairResult } from './artifacts.js';
 import { ExecutionError, permittedPath, validatePolicy } from './policy.js';
 import { ExecutionFailure, git, gitEnvironment, gitProcess, initializeCheckout } from './git.js';
-import type { ArtifactRef, Candidate, CheckReceipt, ExecutionPolicy, RepairJob, RepairResult, RepairStop, ThreadDecision } from './types.js';
+import type { ArtifactRef, Candidate, CheckReceipt, ExecutionPolicy, RepairJob, RepairResult, RepairStop, ReviewEvidence, ThreadDecision } from './types.js';
 
 const idPattern = /^[a-zA-Z0-9_-]{1,128}$/;
 export const profileDigest = (profile: ProviderProfile) => digest(canonicalJson(profile));
 export function createRepairJob(pkg: WorkflowPackage, inspection: Inspection, profile: ProviderProfile, policy: ExecutionPolicy, actionId: string, identity: {
-  runId?: string; attemptId?: string; ownershipToken?: string; deadline?: string;
+  runId?: string; attemptId?: string; ownershipToken?: string; deadline?: string; review?: ReviewEvidence;
 } = {}): RepairJob {
   const pr = inspection.evidence.pullRequest, repository = inspection.evidence.repository;
   if (!pr || !repository) throw new ExecutionError('Repair needs captured PR and repository identities. Inspect again.');
   const job: RepairJob = { schemaVersion: 1, runId: identity.runId ?? randomUUID(), attemptId: identity.attemptId ?? randomUUID(), ownershipToken: identity.ownershipToken ?? randomUUID(),
     deadline: identity.deadline ?? new Date(Date.now() + pkg.workflow.limits.maxAttemptSeconds * 1000).toISOString(),
     repositoryId: repository.id, pullRequestId: pr.id, headSha: pr.headSha, baseSha: pr.baseSha, package: structuredClone(pkg), inspection: structuredClone(inspection), actionId,
+    ...(identity.review ? { review: structuredClone(identity.review) } : {}),
     profile: profile.name, profileDigest: profileDigest(profile), policy: structuredClone(policy), policyDigest: digest(canonicalJson(policy)) };
   validateJob(job, profile); return job;
 }
@@ -35,6 +36,14 @@ function validateJob(job: RepairJob, profile: ProviderProfile): void {
     job.repositoryId !== inspection.evidence.repository?.id || job.pullRequestId !== pr?.id || job.headSha !== pr?.headSha || job.baseSha !== pr?.baseSha ||
     fixture.observations.length !== 1 || observation?.evidenceDigest !== inspection.evidenceDigest || observation.headSha !== job.headSha || observation.baseSha !== job.baseSha)
     throw new ExecutionError('Repair capture identities or digests do not match the job.');
+  if (job.review) {
+    const review = job.review;
+    if (review.packageDigest !== pkg.digest || review.evidenceDigest !== inspection.evidenceDigest || review.headSha !== job.headSha || review.baseSha !== job.baseSha ||
+        pkg.workflow.actions[review.actionId]?.uses !== 'agent.review') throw new ExecutionError('Review evidence does not match the pinned repair inputs.');
+    validateActionPayload(pkg, review.actionId, review.payload);
+    const payload = review.payload as { headSha: string; baseSha: string };
+    if (payload.headSha !== job.headSha || payload.baseSha !== job.baseSha) throw new ExecutionError('Review payload belongs to another revision.');
+  }
   const action = pkg.workflow.actions[job.actionId];
   if (!action || !['agent.resolve_conflict', 'agent.address_review', 'agent.fix_ci'].includes(action.uses) || !action.capabilities.includes('workspace.write') ||
     !pkg.workflow.requestedCapabilities.includes('checks.run') || !profile.maximumCapabilities.includes('checks.run')) throw new ExecutionError('Choose a repair action and permit host-owned checks.run in the workflow and operator profile.');
@@ -44,6 +53,10 @@ interface RepairOptions {
   isCurrent?: (job: RepairJob) => boolean | Promise<boolean>;
   maximumProviderAttempts?: number;
 }
+const actionableReview = (job: RepairJob): boolean => {
+  const review = job.review?.payload as { coverage: string; verdict: string; findings: unknown[] } | undefined;
+  return !!review && review.coverage === 'complete' && ['concerns', 'blocking'].includes(review.verdict) && review.findings.length > 0;
+};
 const unresolvedThreads = (job: RepairJob) => job.inspection.evidence.threads.items.filter(thread => !thread.resolved);
 function verifyThreads(job: RepairJob, payload: Candidate | RepairStop, source: SourceBundle): void {
   const expected = unresolvedThreads(job), seen = new Set<string>();
@@ -97,7 +110,7 @@ export async function runRepair(input: RepairJob, options: RepairOptions): Promi
     const conflict = uses === 'agent.resolve_conflict', ci = uses === 'agent.fix_ci';
     const checks = ciFacts(evidence);
     if (ci && (checks.ciFailed !== true || checks.ciPending !== false)) throw new ExecutionFailure('blocked', 'CI repair requires a confirmed failure on the captured head and no pending or unknown checks.');
-    if (conflict ? pr.mergeability !== 'conflicting' : !ci && !unresolvedThreads(job).length) throw new ExecutionFailure('blocked', 'Select a confirmed conflict or captured unresolved review threads before starting repair.');
+    if (conflict ? pr.mergeability !== 'conflicting' : !ci && !unresolvedThreads(job).length && !actionableReview(job)) throw new ExecutionFailure('blocked', 'Select a confirmed conflict, captured unresolved review threads, or current actionable review findings before starting repair.');
     const repository = await realpath(options.sourceRepository);
     if (!(await lstat(repository)).isDirectory() || !relative(repository, root).startsWith('..')) throw new ExecutionFailure('blocked', 'Keep execution artifacts outside the source repository.');
     const source = await collectSources(repository, job.headSha, job.baseSha, controller.signal); await current();
@@ -113,9 +126,9 @@ export async function runRepair(input: RepairJob, options: RepairOptions): Promi
       if (merge.status !== 'exited' || merge.exitCode !== 1 || !conflicts.length) throw new ExecutionFailure('blocked', 'The pinned commits do not reproduce the captured conflict. Inspect again before repair.');
     }
     const evidenceRefs = [`evidence:${inspection.evidenceDigest}`, `source:${source.digest}`, ...unresolvedThreads(job).map(thread => `thread:${thread.id}`)];
-    const providerEvidence = { ...evidence, workspace: { expectedHeadSha: job.headSha, baseSha: job.baseSha, conflictingPaths: conflicts,
+    const providerEvidence = { ...evidence, ...(job.review ? { review: job.review } : {}), workspace: { expectedHeadSha: job.headSha, baseSha: job.baseSha, conflictingPaths: conflicts,
       allowedPaths: job.policy.allowedPaths, excludedPaths: job.policy.excludedPaths, requiredChecks: job.policy.requiredChecks.map(check => check.id), evidenceRefs,
-      instructions: (ci ? 'Diagnose the captured failed CI checks using the pinned source and local reproduction. Check names, statuses and URLs are supplied; remote failure logs are not. Do not claim to have read unavailable logs. Return blocked when the cause cannot be established locally, or requires credentials, infrastructure changes or a rerun rather than repository edits. Do not weaken checks to make them pass. ' : '') + 'Edit only permitted repository files. Read and follow checked-out repository instructions. Do not commit or change HEAD. The host owns staging, final commit creation and required checks. For a candidate proposal set candidateSha to expectedHeadSha and list the actual paths changed relative to that head, including merged base changes. Account for every supplied unresolved thread using only the evidenceRefs listed here. Unknown product intent must return blocked, with the question in its reason. Suggested checks are advisory only. Keep notes in notesMarkdown, never create runtime files in the checkout. Do not access credentials or perform any remote effect.' } };
+      instructions: (ci ? 'Diagnose the captured failed CI checks using the pinned source and local reproduction. Check names, statuses and URLs are supplied; remote failure logs are not. Do not claim to have read unavailable logs. Return blocked when the cause cannot be established locally, or requires credentials, infrastructure changes or a rerun rather than repository edits. Do not weaken checks to make them pass. ' : '') + 'Address supplied review findings as well as unresolved threads. Review findings are local evidence, not GitHub threads; do not invent thread IDs for them. If tools cannot read or edit the checkout, return blocked with the tool failure instead of claiming a candidate. Edit only permitted repository files. Read and follow checked-out repository instructions. Do not commit or change HEAD. The host owns staging, final commit creation and required checks. For a candidate proposal set candidateSha to expectedHeadSha and list the actual paths changed relative to that head, including merged base changes. Account for every supplied unresolved thread using only the evidenceRefs listed here. Unknown product intent must return blocked, with the question in its reason. Suggested checks are advisory only. Keep notes in notesMarkdown, never create runtime files in the checkout. Do not access credentials or perform any remote effect.' } };
     const providerDirectory = join(worker, 'provider');
     result.provider = await runProvider({ package: job.package, actionId: job.actionId, profile: { ...profile, maxAttempts: Math.min(profile.maxAttempts, options.maximumProviderAttempts ?? profile.maxAttempts), timeoutMs: Math.max(1, Math.min(profile.timeoutMs, deadline - Date.now())) }, mode: 'workspace',
       workingDirectory: checkout, artifactDirectory: providerDirectory, sources: source, evidence: providerEvidence, evidenceDigest: digest(canonicalJson(providerEvidence)), fixtureDigest: result.fixtureDigest,
@@ -128,7 +141,7 @@ export async function runRepair(input: RepairJob, options: RepairOptions): Promi
       verifyThreads(job, proposal, source);
       if (await git(checkout, ['rev-parse', 'HEAD'], deadline, controller.signal) !== job.headSha) throw new ExecutionFailure('invalid_output', 'The provider changed HEAD. The host must create the candidate commit.');
       if (proposal.outcome !== 'candidate') { result.payload = proposal; result.status = proposal.outcome; result.diagnostic = proposal.reason; }
-      else if (proposal.threads.some(thread => thread.disposition === 'blocked') || !conflict && !ci && !proposal.threads.some(thread => thread.disposition === 'addressed')) {
+      else if (proposal.threads.some(thread => thread.disposition === 'blocked') || !conflict && !ci && !actionableReview(job) && !proposal.threads.some(thread => thread.disposition === 'addressed')) {
         result.status = 'blocked'; result.diagnostic = 'Unresolved product intent or declined-only review decisions require a human handoff.';
         const stop: RepairStop = { schemaVersion: 1, outcome: 'blocked', expectedHeadSha: job.headSha, reason: result.diagnostic,
           threads: proposal.threads.map(thread => thread.disposition === 'addressed' ? { ...thread, disposition: 'blocked', response: `Proposed edit was not finalized. ${thread.response}` } : thread), notesMarkdown: proposal.notesMarkdown };

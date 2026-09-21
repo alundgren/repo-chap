@@ -190,7 +190,9 @@ test('create verifies configuration and provisions in one invocation', async t =
     digitalOceanSshKeyFingerprint: f.run.digitalOceanSshKeyFingerprint,
     configDirectory: f.run.configDirectory,
     codexHome: f.run.codexHome,
+    pilotConfig: { profile: 'pilot', workspaceId: 'TFOREST', channelId: 'CPAPERBOAT' },
   }));
+  await writePrivate(join(f.run.configDirectory, 'providers.json'), JSON.stringify({ profiles: { pilot: {} } }));
   assert.equal(await main(['create', '--root', f.root], f.accounts, text => f.state.output.push(text)), 0);
   assert.ok(f.state.calls.includes('terraform version'));
   assert.equal((await f.store.runs()).length, 2);
@@ -212,7 +214,9 @@ test('create saves the current environment and prints its ID', async t => {
     digitalOceanSshKeyFingerprint: f.run.digitalOceanSshKeyFingerprint,
     configDirectory: f.run.configDirectory,
     codexHome: f.run.codexHome,
+    pilotConfig: { profile: 'pilot', workspaceId: 'TFOREST', channelId: 'CPAPERBOAT' },
   }));
+  await writePrivate(join(f.run.configDirectory, 'providers.json'), JSON.stringify({ profiles: { pilot: {} } }));
   assert.equal(await main(['create', '--root', f.root], f.accounts, text => f.state.output.push(text)), 0);
   const id = await f.store.current();
   assert.match(id, /^[a-f0-9]{24}$/);
@@ -225,6 +229,8 @@ test('created label uses minutes today and a local date otherwise', () => {
 });
 test('Ctrl-C during create retains resources for diagnosis and explicit deletion', async t => {
   const f = await fixture(t);
+  f.run.pilotConfig = { profile: 'pilot', workspaceId: 'TFOREST', channelId: 'CPAPERBOAT' };
+  await f.store.save(f.run);
   const original = f.accounts.io.command;
   f.accounts.io.command = async (file, args, options) => {
     if (file === 'terraform' && args[0] === 'apply') { f.create(); process.emit('SIGINT'); throw new PilotError('interrupted'); }

@@ -291,7 +291,9 @@ export class DaemonService {
         const source = await (this.dependencies.repairSources?.(repo.name, inspection, repairSignal) ?? fetchRepairSources(join(this.dependencies.directory, 'git-cache'), repo.name, inspection, this.dependencies.credentials, join(this.dependencies.directory, 'repairs'), repairSignal));
         const currentPolicy = requireApplyPolicy(await this.dependencies.applyPolicy!(repo.name), repo.name, ['workspace.write', 'checks.run']);
         if (applyPolicyDigest(currentPolicy) !== applyPolicyDigest(policy)) throw new RuntimeError('Apply policy changed while repair inputs were prepared.');
-        const job = this.store.reserveRepair(claim, { actionId, sources: source, profile: profile.name, profileDigest: profileDigest(profile), package: pkg, applyPolicy: policy }, this.now());
+        const review = action.uses === 'agent.address_review' && run.control.memory?.reviewCurrent
+          ? (await this.store.currentAnalysis(run.id, 'agent.review')).reference : undefined;
+        const job = this.store.reserveRepair(claim, { ...(review ? { review } : {}), actionId, sources: source, profile: profile.name, profileDigest: profileDigest(profile), package: pkg, applyPolicy: policy }, this.now());
         const isCurrent = () => this.store.isCurrent(claim, this.now());
         try {
           const result = await (this.dependencies.repair?.(job, profile, repairSignal, isCurrent) ?? executeRepair(job, { artifacts: this.store.artifacts, profile, artifactDirectory: join(this.dependencies.directory, 'repairs'), workerDirectory: join(this.dependencies.directory, 'workers'), signal: repairSignal, isCurrent }));
